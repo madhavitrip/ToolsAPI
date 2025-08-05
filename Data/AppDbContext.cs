@@ -11,14 +11,15 @@ namespace ERPToolsAPI.Data
        // public DbSet<ToolRecord> ToolRecords { get; set; }
         public DbSet<UserLoginLog> UserLoginLogs { get; set; }
         public DbSet<ExcelUpload> ExcelUploads { get; set; }
-        public DbSet <BoxCapacity> BoxCapacitys { get; set; }
+        public DbSet <BoxCapacity> BoxCapacity { get; set; }
         public DbSet <EnvelopeType> EnvelopesTypes { get; set; }
         public DbSet <NRData> NRDatas { get; set; }
         public DbSet <Field> Fields { get; set; }
         public DbSet <ProjectConfig> ProjectConfigs { get; set; }
         public DbSet <ToolRecord> ToolRecords { get; set; }
         public DbSet <Module> Modules { get; set; }
-        public DbSet<Tools.Models.BoxCapacity> BoxCapacity { get; set; } = default!;
+        public DbSet <ToolConfig> ToolConfigs { get; set; }
+     
     }
 
     
