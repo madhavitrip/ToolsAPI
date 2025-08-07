@@ -11,7 +11,7 @@ namespace Tools.Models
         public int ProjectId { get; set; }
         public string? CourseName {  get; set; }
         public string? SubjectName { get; set; }
-        public int? CenterCode { get; set; }
+        public string? CenterCode { get; set; }
         public int? Quantity { get; set; }
         public string? CatchNo { get; set; }
         public string? ExamDate { get; set; }

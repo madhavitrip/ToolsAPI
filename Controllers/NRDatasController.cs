@@ -8,6 +8,7 @@ using Microsoft.EntityFrameworkCore;
 using ERPToolsAPI.Data;
 using Tools.Models;
 using System.Text.Json;
+using System.Reflection;
 
 namespace Tools.Controllers
 {
@@ -93,7 +94,7 @@ namespace Tools.Controllers
                 foreach (var prop in item.EnumerateObject())
                 {
                     string key = prop.Name;
-                    string value = prop.Value.GetString();
+                    string value = prop.Value.ToString();
 
                     var propInfo = nRDataType.GetProperty(key.Replace(" ", ""),
                                         System.Reflection.BindingFlags.IgnoreCase |
@@ -102,7 +103,8 @@ namespace Tools.Controllers
 
                     if (propInfo != null)
                     {
-                        object convertedValue = Convert.ChangeType(value, propInfo.PropertyType);
+                        var targetType = Nullable.GetUnderlyingType(propInfo.PropertyType) ?? propInfo.PropertyType;
+                        object convertedValue = string.IsNullOrEmpty(value) ? null : Convert.ChangeType(value, targetType);
                         propInfo.SetValue(nRData, convertedValue);
                     }
                     else
@@ -120,6 +122,79 @@ namespace Tools.Controllers
             await _context.SaveChangesAsync();
             return Ok("Data inserted successfully");
         }
+
+
+        [HttpGet("ErrorReport")]
+        public async Task<ActionResult> GetDuplicateswrtCatch(int ProjectId)
+        {
+            var nrData = await _context.NRDatas
+                .Where(p => p.ProjectId == ProjectId)
+                .ToListAsync();
+
+            if (!nrData.Any())
+                return NotFound("No NRData found for this project.");
+
+            var uniqueFields = await _context.Fields
+                .Where(f => f.IsUnique == true)
+                .Select(f => f.Name.Trim())
+                .ToListAsync();
+
+            if (!uniqueFields.Any())
+                return BadRequest("No unique fields configured.");
+
+            var props = typeof(NRData).GetProperties(BindingFlags.Public | BindingFlags.Instance);
+            var catchProp = props.FirstOrDefault(p => string.Equals(p.Name, "CatchNo", StringComparison.OrdinalIgnoreCase));
+
+            if (catchProp == null)
+                return BadRequest("CatchNo field not found in NRData.");
+
+            var errorReport = new List<object>();
+
+            foreach (var uniqueField in uniqueFields)
+            {
+                var uniqueProp = props.FirstOrDefault(p => string.Equals(p.Name, uniqueField, StringComparison.OrdinalIgnoreCase));
+                if (uniqueProp == null)
+                    continue;
+
+                // Step 1: Group by CatchNo
+                var catchGroups = nrData
+                    .GroupBy(d => catchProp.GetValue(d)?.ToString()?.Trim() ?? "")
+                    .Where(g => !string.IsNullOrEmpty(g.Key));
+
+                foreach (var group in catchGroups)
+                {
+                    var catchNo = group.Key;
+
+                    // Get all distinct values for the current unique field within this CatchNo group
+                    var uniqueValues = group
+                        .Select(r => uniqueProp.GetValue(r)?.ToString()?.Trim() ?? "")
+                        .Distinct()
+                        .Where(val => !string.IsNullOrEmpty(val))
+                        .ToList();
+
+                    if (uniqueValues.Count > 1)
+                    {
+                        // Error: CatchNo maps to multiple values for the unique field
+                        errorReport.Add(new
+                        {
+                            CatchNo = catchNo,
+                            UniqueField = uniqueField,
+                            ConflictingValues = uniqueValues
+                        });
+                    }
+                }
+            }
+
+            if (!errorReport.Any())
+                return Ok("All CatchNo mappings to unique fields are valid.");
+
+            return Ok(new
+            {
+                DuplicatesFound = true,
+                Errors = errorReport
+            });
+        }
+
 
 
         // DELETE: api/NRDatas/5

@@ -20,7 +20,6 @@ namespace Tools.Controllers
         [HttpPost]
         public async Task<IActionResult> MergeFields(int ProjectId, string mergefields, bool consolidate)
         {
-            // Split the merge fields (e.g., "center_code,catch_number")
             var mergeFields = mergefields.Split(',', StringSplitOptions.RemoveEmptyEntries)
                                           .Select(f => f.Trim().ToLower()).ToList();
 
