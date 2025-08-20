@@ -195,7 +195,33 @@ namespace Tools.Controllers
             });
         }
 
+        [HttpPut]
+        public async Task<ActionResult> ResolveConflicts(int ProjectId, [FromBody] ConflictResolutionDto payload)
+        {
+         var NRdata = await _context.NRDatas.Where(a=>a.CatchNo == payload.CatchNo && a.ProjectId == ProjectId).ToListAsync();
+           if (!NRdata.Any())
+                return NotFound("No matching records found");
 
+            // Use reflection to update the dynamic conflicting field
+            foreach (var item in NRdata)
+            {
+                var property = item.GetType().GetProperty(payload.UniqueField);
+                if (property != null && property.CanWrite)
+                {
+                    property.SetValue(item, payload.SelectedValue);
+                }
+            }
+            await _context.SaveChangesAsync();
+
+            return Ok("Conflict resolved successfully");
+        }
+
+        public class ConflictResolutionDto
+        {
+            public string CatchNo { get; set; }
+            public string UniqueField { get; set; }
+            public string SelectedValue { get; set; }
+        }
 
         // DELETE: api/NRDatas/5
         [HttpDelete("{id}")]
