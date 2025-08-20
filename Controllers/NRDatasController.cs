@@ -7,6 +7,8 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using ERPToolsAPI.Data;
 using Tools.Models;
+using System.Text.Json;
+using System.Reflection;
 
 namespace Tools.Controllers
 {
@@ -76,13 +78,124 @@ namespace Tools.Controllers
         // POST: api/NRDatas
         // To protect from overposting attacks, see https://go.microsoft.com/fwlink/?linkid=2123754
         [HttpPost]
-        public async Task<ActionResult<NRData>> PostNRData(NRData nRData)
+        public async Task<ActionResult> PostNRData([FromBody] JsonElement inputData)
         {
-            _context.NRDatas.Add(nRData);
-            await _context.SaveChangesAsync();
+            int projectId = inputData.GetProperty("projectId").GetInt32();
+            var dataArray = inputData.GetProperty("data").EnumerateArray();
 
-            return CreatedAtAction("GetNRData", new { id = nRData.Id }, nRData);
+            foreach (var item in dataArray)
+            {
+                var nRData = new NRData();
+                nRData.ProjectId = projectId;
+
+                var extraData = new Dictionary<string, string>();
+                var nRDataType = typeof(NRData);
+
+                foreach (var prop in item.EnumerateObject())
+                {
+                    string key = prop.Name;
+                    string value = prop.Value.ToString();
+
+                    var propInfo = nRDataType.GetProperty(key.Replace(" ", ""),
+                                        System.Reflection.BindingFlags.IgnoreCase |
+                                        System.Reflection.BindingFlags.Public |
+                                        System.Reflection.BindingFlags.Instance);
+
+                    if (propInfo != null)
+                    {
+                        var targetType = Nullable.GetUnderlyingType(propInfo.PropertyType) ?? propInfo.PropertyType;
+                        object convertedValue = string.IsNullOrEmpty(value) ? null : Convert.ChangeType(value, targetType);
+                        propInfo.SetValue(nRData, convertedValue);
+                    }
+                    else
+                    {
+                        extraData[key] = value;
+                    }
+                }
+
+                if (extraData.Count > 0)
+                    nRData.NRDatas = System.Text.Json.JsonSerializer.Serialize(extraData);
+
+                _context.NRDatas.Add(nRData);
+            }
+
+            await _context.SaveChangesAsync();
+            return Ok("Data inserted successfully");
         }
+
+
+        [HttpGet("ErrorReport")]
+        public async Task<ActionResult> GetDuplicateswrtCatch(int ProjectId)
+        {
+            var nrData = await _context.NRDatas
+                .Where(p => p.ProjectId == ProjectId)
+                .ToListAsync();
+
+            if (!nrData.Any())
+                return NotFound("No NRData found for this project.");
+
+            var uniqueFields = await _context.Fields
+                .Where(f => f.IsUnique == true)
+                .Select(f => f.Name.Trim())
+                .ToListAsync();
+
+            if (!uniqueFields.Any())
+                return BadRequest("No unique fields configured.");
+
+            var props = typeof(NRData).GetProperties(BindingFlags.Public | BindingFlags.Instance);
+            var catchProp = props.FirstOrDefault(p => string.Equals(p.Name, "CatchNo", StringComparison.OrdinalIgnoreCase));
+
+            if (catchProp == null)
+                return BadRequest("CatchNo field not found in NRData.");
+
+            var errorReport = new List<object>();
+
+            foreach (var uniqueField in uniqueFields)
+            {
+                var uniqueProp = props.FirstOrDefault(p => string.Equals(p.Name, uniqueField, StringComparison.OrdinalIgnoreCase));
+                if (uniqueProp == null)
+                    continue;
+
+                // Step 1: Group by CatchNo
+                var catchGroups = nrData
+                    .GroupBy(d => catchProp.GetValue(d)?.ToString()?.Trim() ?? "")
+                    .Where(g => !string.IsNullOrEmpty(g.Key));
+
+                foreach (var group in catchGroups)
+                {
+                    var catchNo = group.Key;
+
+                    // Get all distinct values for the current unique field within this CatchNo group
+                    var uniqueValues = group
+                        .Select(r => uniqueProp.GetValue(r)?.ToString()?.Trim() ?? "")
+                        .Distinct()
+                        .Where(val => !string.IsNullOrEmpty(val))
+                        .ToList();
+
+                    if (uniqueValues.Count > 1)
+                    {
+                        // Error: CatchNo maps to multiple values for the unique field
+                        errorReport.Add(new
+                        {
+                            CatchNo = catchNo,
+                            UniqueField = uniqueField,
+                            ConflictingValues = uniqueValues
+                        });
+                    }
+                }
+            }
+
+            if (!errorReport.Any())
+                return Ok("All CatchNo mappings to unique fields are valid.");
+
+            return Ok(new
+            {
+                DuplicatesFound = true,
+                Errors = errorReport
+            });
+        }
+
+
 
         // DELETE: api/NRDatas/5
         [HttpDelete("{id}")]
