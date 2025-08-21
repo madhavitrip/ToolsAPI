@@ -8,6 +8,7 @@ using OfficeOpenXml.Style;
 using System.Drawing;
 using Tools.Models;
 using System.Text.Json;
+using Humanizer;
 
 namespace Tools.Controllers
 {
@@ -24,10 +25,11 @@ namespace Tools.Controllers
         }
 
         [HttpPost]
-        public async Task<IActionResult> MergeFields(int ProjectId, string mergefields, bool consolidate)
+        public async Task<IActionResult> MergeFields(int ProjectId, string mergefields, bool consolidate,bool enhancement, double Percent)
         {
             var mergeFields = mergefields.Split(',', StringSplitOptions.RemoveEmptyEntries)
                                           .Select(f => f.Trim().ToLower()).ToList();
+
 
             if (mergeFields.Count == 0)
                 return BadRequest("No merge fields provided.");
@@ -69,6 +71,7 @@ namespace Tools.Controllers
                 {
                     keep.Quantity = group.Sum(x => x.Quantity);
                 }
+               
 
                 var duplicates = group.Skip(1).ToList();
                 _context.NRDatas.RemoveRange(duplicates);
@@ -76,9 +79,59 @@ namespace Tools.Controllers
                 mergedCount += duplicates.Count;
                 deletedRows.AddRange(duplicates);
             }
+           
 
+            if (enhancement)
+            {
+             foreach(var d in data)
+                {
+                    if (d.Quantity.HasValue)
+                    {
+                        d.Quantity = (int?)Math.Round(Percent * d.Quantity.Value);
+                    }
+                }
+            }
+            else
+            {
+                var innerEnv = await _context.ProjectConfigs.
+                    Where(s => s.ProjectId == ProjectId).Select(s => s.Envelope)
+                    .FirstOrDefaultAsync();
+                if (!string.IsNullOrEmpty(innerEnv))
+                {
+                    try
+                    {
+                        var envelopeDict = JsonSerializer.Deserialize<Dictionary<string, string>>(innerEnv);
+                        if (envelopeDict != null && envelopeDict.ContainsKey("Inner"))
+                        {
+                            var innerSizes = envelopeDict["Inner"]
+                                .Split(',', StringSplitOptions.RemoveEmptyEntries)
+                                .Select(e => e.Trim().ToUpper().Replace("E", "")) // get number from E10 → 10
+                                .Where(x => int.TryParse(x, out _))
+                                .Select(int.Parse)
+                                .OrderBy(x => x)
+                                .ToList();
+
+                            if (innerSizes.Any())
+                            {
+                                int smallestInner = innerSizes.First();
+
+                                foreach (var d in data)
+                                {
+                                    // Round down to nearest multiple of smallestInner
+                                    d.Quantity = (d.Quantity / smallestInner) * smallestInner;
+                                }
+                            }
+                        }
+                    }
+                    catch
+                    {
+                        // Log or handle invalid JSON
+                    }
+
+                }
+
+            }
             await _context.SaveChangesAsync();
-
             // Excel Report Path
             var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "reports");
             Directory.CreateDirectory(reportPath);
