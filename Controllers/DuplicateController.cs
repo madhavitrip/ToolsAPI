@@ -21,11 +21,10 @@ namespace Tools.Controllers
         public DuplicateController(ERPToolsDbContext context)
         {
             _context = context;
-            // License is now set globally in Program.cs
         }
 
         [HttpPost]
-        public async Task<IActionResult> MergeFields(int ProjectId, string mergefields, bool consolidate,bool enhancement, double Percent)
+        public async Task<IActionResult> MergeFields(int ProjectId, string mergefields, bool consolidate, bool enhancement, double Percent)
         {
             var mergeFields = mergefields.Split(',', StringSplitOptions.RemoveEmptyEntries)
                                           .Select(f => f.Trim().ToLower()).ToList();
@@ -71,7 +70,7 @@ namespace Tools.Controllers
                 {
                     keep.Quantity = group.Sum(x => x.Quantity);
                 }
-               
+
 
                 var duplicates = group.Skip(1).ToList();
                 _context.NRDatas.RemoveRange(duplicates);
@@ -79,11 +78,11 @@ namespace Tools.Controllers
                 mergedCount += duplicates.Count;
                 deletedRows.AddRange(duplicates);
             }
-           
+
 
             if (enhancement)
             {
-             foreach(var d in data)
+                foreach (var d in data)
                 {
                     if (d.Quantity.HasValue)
                     {
@@ -118,7 +117,7 @@ namespace Tools.Controllers
                                 foreach (var d in data)
                                 {
                                     // Round down to nearest multiple of smallestInner
-                                    d.Quantity = (d.Quantity / smallestInner) * smallestInner;
+                                    d.Quantity = ((d.Quantity + smallestInner - 1) / smallestInner) * smallestInner;
                                 }
                             }
                         }
@@ -231,6 +230,57 @@ namespace Tools.Controllers
                 MergedRows = mergedCount,
                 Consolidated = consolidate
             });
+
+        }
+
+
+        [HttpPost("EnvelopeConfiguration")]
+
+        public async Task<IActionResult> EnvelopeConfiguration(int ProjectId)
+        {
+            var Envelope = await _context.ProjectConfigs
+                .Where(s=>s.Id == ProjectId)
+                .Select(s=>s.Envelope).FirstOrDefaultAsync();
+            var NrData = await _context.NRDatas
+                .Where (s=>s.ProjectId == ProjectId)
+               .ToListAsync();
+
+            var envelopeDict = JsonSerializer.Deserialize<Dictionary<string, string>>(Envelope);
+            if (envelopeDict != null && envelopeDict.ContainsKey("Inner"))
+            {
+                var innerSizes = envelopeDict["Inner"]
+                    .Split(',', StringSplitOptions.RemoveEmptyEntries)
+                    .Select(e => e.Trim().ToUpper().Replace("E", "")) // get number from E10 → 10
+                    .Where(x => int.TryParse(x, out _))
+                    .Select(int.Parse)
+                    .OrderByDescending(x => x)
+                    .ToList();
+            
+            foreach (var row in NrData)
+            {
+                int quantity = row.Quantity??0;
+                var packetBreakdown = new Dictionary<int, int>(); // Size => Count
+
+                foreach (var size in innerSizes)
+                {
+                    int count = quantity / size;
+                    if (count > 0)
+                    {
+                        packetBreakdown[size] = count;
+                        quantity -= count * size;
+                    }
+                }
+
+                // You can either:
+                // - save this breakdown to a string property in row (if exists),
+                // - or just prepare to return it in the response.
+
+                row.NRDatas = string.Join(", ", packetBreakdown.Select(kv => $"{kv.Value}xE{kv.Key}")); // Optional
+            
+        }
+
+    }
+            return Ok(Envelope);
         }
 
     }
