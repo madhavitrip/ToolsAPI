@@ -3,6 +3,11 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System.Reflection;
+using OfficeOpenXml;
+using OfficeOpenXml.Style;
+using System.Drawing;
+using Tools.Models;
+using System.Text.Json;
 
 namespace Tools.Controllers
 {
@@ -15,6 +20,7 @@ namespace Tools.Controllers
         public DuplicateController(ERPToolsDbContext context)
         {
             _context = context;
+            // License is now set globally in Program.cs
         }
 
         [HttpPost]
@@ -26,7 +32,7 @@ namespace Tools.Controllers
             if (mergeFields.Count == 0)
                 return BadRequest("No merge fields provided.");
 
-            // Get the data for the project
+            // Get project data
             var data = await _context.NRDatas
                 .Where(p => p.ProjectId == ProjectId)
                 .ToListAsync();
@@ -48,27 +54,124 @@ namespace Tools.Controllers
             });
 
             int mergedCount = 0;
+            var deletedRows = new List<NRData>();
+            var reportRows = new List<NRData>();
 
             foreach (var group in grouped)
             {
+                reportRows.AddRange(group); // Include all rows for reporting
+
                 if (group.Count() <= 1)
                     continue;
 
-                // Consolidate: Sum quantity, keep first row
                 var keep = group.First();
                 if (consolidate)
                 {
                     keep.Quantity = group.Sum(x => x.Quantity);
                 }
 
-                // Remove duplicates (excluding the one we keep)
                 var duplicates = group.Skip(1).ToList();
                 _context.NRDatas.RemoveRange(duplicates);
 
                 mergedCount += duplicates.Count;
+                deletedRows.AddRange(duplicates);
             }
 
             await _context.SaveChangesAsync();
+
+            // Excel Report Path
+            var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "reports");
+            Directory.CreateDirectory(reportPath);
+            var filename = $"DuplicateTool {ProjectId}.xlsx";
+            var filePath = Path.Combine(reportPath, filename);
+
+            // Gather static properties (excluding NRDatas)
+            var baseProperties = typeof(NRData).GetProperties(BindingFlags.Public | BindingFlags.Instance)
+                                               .Where(p => p.Name != "NRDatas")
+                                               .ToList();
+
+            var extraHeaders = new HashSet<string>();
+            var parsedRows = new List<(NRData row, Dictionary<string, string> extras)>();
+
+            foreach (var row in reportRows)
+            {
+                var extras = new Dictionary<string, string>();
+
+                if (!string.IsNullOrEmpty(row.NRDatas))
+                {
+                    try
+                    {
+                        extras = JsonSerializer.Deserialize<Dictionary<string, string>>(row.NRDatas);
+                        if (extras != null)
+                        {
+                            foreach (var key in extras.Keys)
+                                extraHeaders.Add(key);
+                        }
+                    }
+                    catch
+                    {
+                        // Optionally log parsing error
+                    }
+                }
+
+                parsedRows.Add((row, extras));
+            }
+
+            using (var package = new ExcelPackage())
+            {
+                var ws = package.Workbook.Worksheets.Add("Merge Report");
+
+                // Write Headers
+                int col = 1;
+                foreach (var prop in baseProperties)
+                {
+                    ws.Cells[1, col].Value = prop.Name;
+                    ws.Cells[1, col].Style.Font.Bold = true;
+                    col++;
+                }
+
+                var extraHeaderList = extraHeaders.OrderBy(k => k).ToList();
+                foreach (var key in extraHeaderList)
+                {
+                    ws.Cells[1, col].Value = key;
+                    ws.Cells[1, col].Style.Font.Bold = true;
+                    col++;
+                }
+
+                // Write Rows
+                int rowIdx = 2;
+                foreach (var (item, extras) in parsedRows)
+                {
+                    col = 1;
+
+                    foreach (var prop in baseProperties)
+                    {
+                        var value = prop.GetValue(item);
+                        ws.Cells[rowIdx, col++].Value = value?.ToString() ?? "";
+                    }
+
+                    foreach (var key in extraHeaderList)
+                    {
+                        extras.TryGetValue(key, out var val);
+                        ws.Cells[rowIdx, col++].Value = val ?? "";
+                    }
+
+                    // Highlight deleted rows
+                    if (deletedRows.Any(x => x.Id == item.Id))
+                    {
+                        using (var range = ws.Cells[rowIdx, 1, rowIdx, col - 1])
+                        {
+                            range.Style.Fill.PatternType = ExcelFillStyle.Solid;
+                            range.Style.Fill.BackgroundColor.SetColor(Color.Red);
+                        }
+                    }
+
+                    rowIdx++;
+                }
+
+                ws.Cells[ws.Dimension.Address].AutoFitColumns();
+                package.SaveAs(new FileInfo(filePath));
+            }
 
             return Ok(new
             {
