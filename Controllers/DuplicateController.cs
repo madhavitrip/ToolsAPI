@@ -241,9 +241,17 @@ namespace Tools.Controllers
             var Envelopes = await _context.ProjectConfigs
                 .Where(s => s.ProjectId == ProjectId)
                 .Select(s => s.Envelope).FirstOrDefaultAsync();
+            if(Envelopes == null)
+            {
+                return NotFound();
+            }
             var NrData = await _context.NRDatas
                 .Where(s => s.ProjectId == ProjectId)
                .ToListAsync();
+            if (!NrData.Any())
+            {
+                return NotFound();
+            }
 
             var envelopeDict = JsonSerializer.Deserialize<Dictionary<string, string>>(Envelopes);
             if (envelopeDict != null && envelopeDict.ContainsKey("Inner"))
@@ -305,8 +313,6 @@ namespace Tools.Controllers
 
             return Ok("Envelope breakdown successfully saved in NRDatas column.");
         }
-
-      
 
     }
 }

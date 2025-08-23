@@ -19,6 +19,8 @@ namespace ERPToolsAPI.Data
         public DbSet <ToolRecord> ToolRecords { get; set; }
         public DbSet <Module> Modules { get; set; }
         public DbSet <ToolConfig> ToolConfigs { get; set; }
+        public DbSet<ExtrasConfiguration> ExtraConfigurations { get; set; }
+        public DbSet<ExtraEnvelopes> ExtrasEnvelope { get; set; }
      
     }
 
