@@ -21,6 +21,7 @@ namespace ERPToolsAPI.Data
         public DbSet <ToolConfig> ToolConfigs { get; set; }
         public DbSet<ExtrasConfiguration> ExtraConfigurations { get; set; }
         public DbSet<ExtraEnvelopes> ExtrasEnvelope { get; set; }
+        public DbSet<ExtraType> ExtraType { get; set; } = default!;
      
     }
 
