@@ -238,14 +238,14 @@ namespace Tools.Controllers
 
         public async Task<IActionResult> EnvelopeConfiguration(int ProjectId)
         {
-            var Envelope = await _context.ProjectConfigs
-                .Where(s=>s.Id == ProjectId)
-                .Select(s=>s.Envelope).FirstOrDefaultAsync();
+            var Envelopes = await _context.ProjectConfigs
+                .Where(s => s.ProjectId == ProjectId)
+                .Select(s => s.Envelope).FirstOrDefaultAsync();
             var NrData = await _context.NRDatas
-                .Where (s=>s.ProjectId == ProjectId)
+                .Where(s => s.ProjectId == ProjectId)
                .ToListAsync();
 
-            var envelopeDict = JsonSerializer.Deserialize<Dictionary<string, string>>(Envelope);
+            var envelopeDict = JsonSerializer.Deserialize<Dictionary<string, string>>(Envelopes);
             if (envelopeDict != null && envelopeDict.ContainsKey("Inner"))
             {
                 var innerSizes = envelopeDict["Inner"]
@@ -255,33 +255,58 @@ namespace Tools.Controllers
                     .Select(int.Parse)
                     .OrderByDescending(x => x)
                     .ToList();
-            
-            foreach (var row in NrData)
-            {
-                int quantity = row.Quantity??0;
-                var packetBreakdown = new Dictionary<int, int>(); // Size => Count
 
-                foreach (var size in innerSizes)
+                foreach (var row in NrData)
                 {
-                    int count = quantity / size;
-                    if (count > 0)
+                    int quantity = row.Quantity ?? 0;
+                    var packetBreakdown = new Dictionary<string, string>(); // Size => Count
+
+                    foreach (var size in innerSizes)
                     {
-                        packetBreakdown[size] = count;
-                        quantity -= count * size;
+                        int count = quantity / size;
+                        if (count > 0)
+                        {
+                            packetBreakdown[$"E{size}"] = count.ToString();
+                            quantity -= count * size;
+                        }
                     }
+                    Dictionary<string, string> finalJson = new();
+
+                    // Append or overwrite NRDatas column
+                    // You can choose to overwrite or append — here's an example of appending
+                    if (!string.IsNullOrWhiteSpace(row.NRDatas))
+                    {
+                        try
+                        {
+                            var existingData = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(row.NRDatas);
+                            foreach (var kvp in existingData)
+                            {
+                                finalJson[kvp.Key] = kvp.Value.ToString(); // ensure string values
+                            }
+                        }
+                        catch (JsonException)
+                        {
+                            // If existing NRDatas is invalid JSON, we ignore it
+                        }
+                    }
+                    foreach (var kv in packetBreakdown)
+                    {
+                        finalJson[kv.Key] = kv.Value;
+                    }
+
+                    // Serialize final JSON back to string and save
+                    row.NRDatas = JsonSerializer.Serialize(finalJson);
                 }
 
-                // You can either:
-                // - save this breakdown to a string property in row (if exists),
-                // - or just prepare to return it in the response.
+                // Save to database
 
-                row.NRDatas = string.Join(", ", packetBreakdown.Select(kv => $"{kv.Value}xE{kv.Key}")); // Optional
-            
+            }
+            await _context.SaveChangesAsync();
+
+            return Ok("Envelope breakdown successfully saved in NRDatas column.");
         }
 
-    }
-            return Ok(Envelope);
-        }
+      
 
     }
 }
