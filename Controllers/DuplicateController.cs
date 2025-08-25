@@ -235,84 +235,88 @@ namespace Tools.Controllers
 
 
         [HttpPost("EnvelopeConfiguration")]
-
-        public async Task<IActionResult> EnvelopeConfiguration(int ProjectId)
+        public async Task<IActionResult> EnvelopeConfiguration(int ProjectId, EnvelopeBreakage envelopeBreakage)
         {
-            var Envelopes = await _context.ProjectConfigs
+            var envelopesJson = await _context.ProjectConfigs
                 .Where(s => s.ProjectId == ProjectId)
-                .Select(s => s.Envelope).FirstOrDefaultAsync();
-            if(Envelopes == null)
-            {
-                return NotFound();
-            }
-            var NrData = await _context.NRDatas
+                .Select(s => s.Envelope)
+                .FirstOrDefaultAsync();
+
+            if (envelopesJson == null)
+                return NotFound("No envelope config found.");
+
+            var nrDataList = await _context.NRDatas
                 .Where(s => s.ProjectId == ProjectId)
-               .ToListAsync();
-            if (!NrData.Any())
-            {
-                return NotFound();
-            }
+                .ToListAsync();
 
-            var envelopeDict = JsonSerializer.Deserialize<Dictionary<string, string>>(Envelopes);
-            if (envelopeDict != null && envelopeDict.ContainsKey("Inner"))
-            {
-                var innerSizes = envelopeDict["Inner"]
-                    .Split(',', StringSplitOptions.RemoveEmptyEntries)
-                    .Select(e => e.Trim().ToUpper().Replace("E", "")) // get number from E10 → 10
-                    .Where(x => int.TryParse(x, out _))
-                    .Select(int.Parse)
-                    .OrderByDescending(x => x)
-                    .ToList();
+            if (!nrDataList.Any())
+                return NotFound("No NRData found.");
 
-                foreach (var row in NrData)
+            var envelopeDict = JsonSerializer.Deserialize<Dictionary<string, string>>(envelopesJson);
+            if (envelopeDict == null)
+                return BadRequest("Invalid envelope JSON format.");
+
+            var innerSizes = envelopeDict["Inner"]
+                .Split(',', StringSplitOptions.RemoveEmptyEntries)
+                .Select(e => e.Trim().ToUpper().Replace("E", ""))
+                .Where(x => int.TryParse(x, out _))
+                .Select(int.Parse)
+                .OrderByDescending(x => x)
+                .ToList();
+
+            var outerSizes = envelopeDict["Outer"]
+                .Split(',', StringSplitOptions.RemoveEmptyEntries)
+                .Select(e => e.Trim().ToUpper().Replace("E", ""))
+                .Where(x => int.TryParse(x, out _))
+                .Select(int.Parse)
+                .OrderByDescending(x => x)
+                .ToList();
+
+            foreach (var row in nrDataList)
+            {
+                int quantity = row.Quantity ?? 0;
+                int remaining = quantity;
+
+                Dictionary<string, string> innerBreakdown = new();
+                foreach (var size in innerSizes)
                 {
-                    int quantity = row.Quantity ?? 0;
-                    var packetBreakdown = new Dictionary<string, string>(); // Size => Count
-
-                    foreach (var size in innerSizes)
+                    int count = remaining / size;
+                    if (count > 0)
                     {
-                        int count = quantity / size;
-                        if (count > 0)
-                        {
-                            packetBreakdown[$"E{size}"] = count.ToString();
-                            quantity -= count * size;
-                        }
+                        innerBreakdown[$"E{size}"] = count.ToString();
+                        remaining -= count * size;
                     }
-                    Dictionary<string, string> finalJson = new();
-
-                    // Append or overwrite NRDatas column
-                    // You can choose to overwrite or append — here's an example of appending
-                    if (!string.IsNullOrWhiteSpace(row.NRDatas))
-                    {
-                        try
-                        {
-                            var existingData = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(row.NRDatas);
-                            foreach (var kvp in existingData)
-                            {
-                                finalJson[kvp.Key] = kvp.Value.ToString(); // ensure string values
-                            }
-                        }
-                        catch (JsonException)
-                        {
-                            // If existing NRDatas is invalid JSON, we ignore it
-                        }
-                    }
-                    foreach (var kv in packetBreakdown)
-                    {
-                        finalJson[kv.Key] = kv.Value;
-                    }
-
-                    // Serialize final JSON back to string and save
-                    row.NRDatas = JsonSerializer.Serialize(finalJson);
                 }
 
-                // Save to database
+                remaining = quantity; // reset for outer
+                Dictionary<string, string> outerBreakdown = new();
+                foreach (var size in outerSizes)
+                {
+                    int count = remaining / size;
+                    if (count > 0)
+                    {
+                        outerBreakdown[$"E{size}"] = count.ToString();
+                        remaining -= count * size;
+                    }
+                }
 
+                var envelope = new EnvelopeBreakage
+                {
+                    ProjectId = ProjectId,
+                    NrDataId = row.Id,
+                    InnerEnvelope = JsonSerializer.Serialize(innerBreakdown),
+                    OuterEnvelope = JsonSerializer.Serialize(outerBreakdown)
+                };
+
+                // ✅ Add to database
+                _context.EnvelopeBreakages.Add(envelope);
             }
+
             await _context.SaveChangesAsync();
 
-            return Ok("Envelope breakdown successfully saved in NRDatas column.");
+            return Ok("Envelope breakdown successfully saved to EnvelopeBreakage table.");
         }
+
 
     }
 }

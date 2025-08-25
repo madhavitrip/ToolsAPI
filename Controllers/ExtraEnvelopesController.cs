@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using ERPToolsAPI.Data;
 using Tools.Models;
+using System.Text.Json;
 
 namespace Tools.Controllers
 {
@@ -73,16 +74,102 @@ namespace Tools.Controllers
             return NoContent();
         }
 
+        public class EnvelopeType
+        {
+            public string Inner { get; set; }
+            public string Outer { get; set; }
+        }
+
+
         // POST: api/ExtraEnvelopes
         // To protect from overposting attacks, see https://go.microsoft.com/fwlink/?linkid=2123754
         [HttpPost]
-        public async Task<ActionResult<ExtraEnvelopes>> PostExtraEnvelopes(ExtraEnvelopes extraEnvelopes)
+        public async Task<ActionResult> PostExtraEnvelopes(ExtraEnvelopes envelopeInput)
         {
-            _context.ExtrasEnvelope.Add(extraEnvelopes);
+            var nrDataList = await _context.NRDatas
+                .Where(d => d.ProjectId == envelopeInput.ProjectId)
+                .ToListAsync();
+
+            var extraConfig = await _context.ExtraConfigurations
+                .FirstOrDefaultAsync(c => c.ProjectId == envelopeInput.ProjectId);
+
+            if (extraConfig == null)
+                return BadRequest("No ExtraConfiguration found for the project.");
+
+            EnvelopeType envelopeType;
+            try
+            {
+                envelopeType = JsonSerializer.Deserialize<EnvelopeType>(extraConfig.EnvelopeType);
+            }
+            catch
+            {
+                return BadRequest("Invalid EnvelopeType JSON format.");
+            }
+
+            int innerCapacity = GetEnvelopeCapacity(envelopeType.Inner);
+            int outerCapacity = GetEnvelopeCapacity(envelopeType.Outer);
+
+            var envelopesToAdd = new List<ExtraEnvelopes>();
+
+            foreach (var data in nrDataList)
+            {
+                int calculatedQuantity = 0;
+
+                switch (extraConfig.Mode)
+                {
+                    case "Fixed":
+                        calculatedQuantity = int.Parse(extraConfig.Value);
+                        break;
+
+                    case "Percentage":
+                        if (decimal.TryParse(extraConfig.Value, out var percentValue))
+                        {
+                            calculatedQuantity = (int)Math.Ceiling((double)(data.Quantity * percentValue) / 100);
+                        }
+                        break;
+
+                    case "Range":
+                       // calculatedQuantity = HandleRangeLogic(data, extraConfig);
+                        break;
+                }
+
+                int innerCount = (int)Math.Ceiling((double)calculatedQuantity / innerCapacity);
+                int outerCount = (int)Math.Ceiling((double)calculatedQuantity / outerCapacity);
+
+                var envelope = new ExtraEnvelopes
+                {
+                    ProjectId = envelopeInput.ProjectId,
+                    NRDataId = data.Id,
+                    ExtraId = extraConfig.Id,
+                    Quantity = calculatedQuantity,
+                    InnerEnvelope = innerCount.ToString(),
+                    OuterEnvelope = outerCount.ToString(),
+
+                };
+
+                envelopesToAdd.Add(envelope);
+
+                // Log
+                Console.WriteLine($"NRDataId {data.Id} → Quantity: {calculatedQuantity}, Inner: {innerCount} packets, Outer: {outerCount} packets");
+            }
+
+            await _context.ExtrasEnvelope.AddRangeAsync(envelopesToAdd);
             await _context.SaveChangesAsync();
 
-            return CreatedAtAction("GetExtraEnvelopes", new { id = extraEnvelopes.Id }, extraEnvelopes);
+            return Ok(envelopesToAdd);
         }
+
+        private int GetEnvelopeCapacity(string envelopeCode)
+        {
+            if (string.IsNullOrWhiteSpace(envelopeCode))
+                return 1; // default to 1 if null or invalid
+
+            // Expecting format like "E10", "E25", etc.
+            var numberPart = new string(envelopeCode.Where(char.IsDigit).ToArray());
+
+            return int.TryParse(numberPart, out var capacity) ? capacity : 1;
+        }
+
 
         // DELETE: api/ExtraEnvelopes/5
         [HttpDelete("{id}")]
