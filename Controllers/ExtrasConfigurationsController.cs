@@ -78,6 +78,11 @@ namespace Tools.Controllers
         [HttpPost]
         public async Task<ActionResult<ExtrasConfiguration>> PostExtrasConfiguration(ExtrasConfiguration extrasConfiguration)
         {
+            var extra = await _context.ExtraConfigurations.FindAsync(extrasConfiguration.ProjectId);
+            if (extra!= null)
+            {
+                return BadRequest();
+            }
             _context.ExtraConfigurations.Add(extrasConfiguration);
             await _context.SaveChangesAsync();
 

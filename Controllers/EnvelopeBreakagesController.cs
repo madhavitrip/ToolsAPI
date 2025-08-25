@@ -99,7 +99,7 @@ namespace Tools.Controllers
         // POST: api/EnvelopeBreakages
         // To protect from overposting attacks, see https://go.microsoft.com/fwlink/?linkid=2123754
         [HttpPost("EnvelopeConfiguration")]
-        public async Task<IActionResult> EnvelopeConfiguration(int ProjectId, EnvelopeBreakage envelopeBreakage)
+        public async Task<IActionResult> EnvelopeConfiguration(int ProjectId)
         {
             var envelopesJson = await _context.ProjectConfigs
                 .Where(s => s.ProjectId == ProjectId)
