@@ -12,7 +12,6 @@ namespace Tools.Models
         public int ProjectId { get; set; }
         public string Envelope { get; set; }
         public List<int> BoxBreaking { get; set; }
-        public string Extras { get; set; }
 
     }
 }
