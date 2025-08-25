@@ -8,6 +8,10 @@ using Microsoft.EntityFrameworkCore;
 using ERPToolsAPI.Data;
 using Tools.Models;
 using System.Text.Json;
+using OfficeOpenXml.Style;
+using OfficeOpenXml;
+using System.Drawing;
+using System.Reflection;
 
 namespace Tools.Controllers
 {
@@ -24,31 +28,157 @@ namespace Tools.Controllers
 
         // GET: api/EnvelopeBreakages
         [HttpGet]
-        public async Task<ActionResult<IEnumerable<EnvelopeBreakage>>> GetEnvelopeBreakages(int ProjectId)
+        public async Task<ActionResult> GetEnvelopeBreakages(int ProjectId)
         {
-            var NRData = await _context.NRDatas.Where(p=>p.ProjectId == ProjectId).ToListAsync();
-            var Envelope = await _context.EnvelopeBreakages.Where(p => p.ProjectId == ProjectId).ToListAsync();
+            var NRData = await _context.NRDatas
+                .Where(p => p.ProjectId == ProjectId)
+                .ToListAsync();
 
-            var Consolidated = from nr in NRData
-                               join env in Envelope
-                               on nr.Id equals env.NrDataId
-                               select new
-                               {
-                                NRDataId = nr.Id,
-                                InnerEnv = env.InnerEnvelope,
-                                OuterEnv = env.OuterEnvelope,
-                                CourseName = nr.CourseName,
-                                SubjectName = nr.SubjectName,
-                                NrData = nr.NRDatas,
-                                CatchNo = nr.CatchNo,
-                                CenterCode = nr.CenterCode,
-                                ExamTime = nr.ExamTime,
-                                ExamDate = nr.ExamDate,
-                                ProjectId = nr.ProjectId,
-                                Quantity = nr.Quantity,
+            var Envelope = await _context.EnvelopeBreakages
+                .Where(p => p.ProjectId == ProjectId)
+                .ToListAsync();
 
-                               };
-              return Ok(Consolidated);
+            if (!NRData.Any() || !Envelope.Any())
+                return NotFound("No data available for this project.");
+
+            var Consolidated = (from nr in NRData
+                                join env in Envelope on nr.Id equals env.NrDataId
+                                select new
+                                {
+                                    nr.Id,
+                                    nr.ProjectId,
+                                    nr.CourseName,
+                                    nr.SubjectName,
+                                    nr.NRDatas,
+                                    nr.CatchNo,
+                                    nr.CenterCode,
+                                    nr.ExamTime,
+                                    nr.ExamDate,
+                                    nr.Quantity,
+                                    env.InnerEnvelope,
+                                    env.OuterEnvelope
+                                }).ToList();
+
+            var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "reports");
+            Directory.CreateDirectory(reportPath);
+
+            var filename = $"EnvelopeBreaking_{ProjectId}.xlsx";
+            var filePath = Path.Combine(reportPath, filename);
+
+            // 📁 Skip generation if file already exists
+            if (System.IO.File.Exists(filePath))
+            {
+                return Ok(Consolidated); // Still return data for UI
+            }
+
+            // Collect unique keys from Inner/OuterEnvelope
+            var innerKeys = new HashSet<string>();
+            var outerKeys = new HashSet<string>();
+
+            var parsedRows = new List<Dictionary<string, object>>();
+
+            foreach (var row in Consolidated)
+            {
+                var parsedRow = new Dictionary<string, object>
+                {
+                    ["Id"] = row.Id,
+                    ["ProjectId"] = row.ProjectId,
+                    ["CourseName"] = row.CourseName,
+                    ["SubjectName"] = row.SubjectName,
+                    ["NRDatas"] = row.NRDatas,
+                    ["CatchNo"] = row.CatchNo,
+                    ["CenterCode"] = row.CenterCode,
+                    ["ExamTime"] = row.ExamTime,
+                    ["ExamDate"] = row.ExamDate,
+                    ["Quantity"] = row.Quantity
+                };
+
+                // Parse NRDatas
+                if (!string.IsNullOrEmpty(row.NRDatas))
+                {
+                    try
+                    {
+                        var nrDatasDict = JsonSerializer.Deserialize<Dictionary<string, string>>(row.NRDatas);
+                        foreach (var kvp in nrDatasDict)
+                            parsedRow[kvp.Key] = kvp.Value;
+                    }
+                    catch { /* Ignore */ }
+                }
+
+                // Parse InnerEnvelope
+                if (!string.IsNullOrEmpty(row.InnerEnvelope))
+                {
+                    try
+                    {
+                        var innerDict = JsonSerializer.Deserialize<Dictionary<string, string>>(row.InnerEnvelope);
+                        foreach (var kvp in innerDict)
+                        {
+                            string key = $"Inner_{kvp.Key}";
+                            parsedRow[key] = kvp.Value;
+                            innerKeys.Add(key);
+                        }
+                    }
+                    catch { }
+                }
+
+                // Parse OuterEnvelope
+                if (!string.IsNullOrEmpty(row.OuterEnvelope))
+                {
+                    try
+                    {
+                        var outerDict = JsonSerializer.Deserialize<Dictionary<string, string>>(row.OuterEnvelope);
+                        foreach (var kvp in outerDict)
+                        {
+                            string key = $"Outer_{kvp.Key}";
+                            parsedRow[key] = kvp.Value;
+                            outerKeys.Add(key);
+                        }
+                    }
+                    catch { }
+                }
+
+                parsedRows.Add(parsedRow);
+            }
+
+            var allHeaders = parsedRows
+                .SelectMany(d => d.Keys)
+                .Union(innerKeys)
+                .Union(outerKeys)
+                .Distinct()
+                .OrderBy(k => k)
+                .ToList();
+
+            // 🧾 Generate Excel report
+            using (var package = new ExcelPackage())
+            {
+                var ws = package.Workbook.Worksheets.Add("Envelope Report");
+
+                // Write headers
+                for (int i = 0; i < allHeaders.Count; i++)
+                {
+                    ws.Cells[1, i + 1].Value = allHeaders[i];
+                    ws.Cells[1, i + 1].Style.Font.Bold = true;
+                }
+
+                // Write data rows
+                int rowIdx = 2;
+                foreach (var rowDict in parsedRows)
+                {
+                    for (int colIdx = 0; colIdx < allHeaders.Count; colIdx++)
+                    {
+                        var key = allHeaders[colIdx];
+                        rowDict.TryGetValue(key, out object value);
+                        ws.Cells[rowIdx, colIdx + 1].Value = value?.ToString() ?? "";
+                    }
+
+                    rowIdx++;
+                }
+
+                ws.Cells[ws.Dimension.Address].AutoFitColumns();
+                package.SaveAs(new FileInfo(filePath));
+            }
+
+            return Ok(Consolidated); // Return original data for UI (optional)
         }
 
         // GET: api/EnvelopeBreakages/5

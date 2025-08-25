@@ -81,7 +81,7 @@ namespace Tools.Controllers
             var extra = await _context.ExtraConfigurations.FindAsync(extrasConfiguration.ProjectId);
             if (extra!= null)
             {
-                return BadRequest();
+                return Conflict(new { message = "A configuration already exists for this project." });
             }
             _context.ExtraConfigurations.Add(extrasConfiguration);
             await _context.SaveChangesAsync();

@@ -78,6 +78,11 @@ namespace Tools.Controllers
         [HttpPost]
         public async Task<ActionResult<ProjectConfig>> PostProjectConfig(ProjectConfig projectConfig)
         {
+            var config = await _context.ProjectConfigs.Where(p=>p.ProjectId == projectConfig.ProjectId).FirstOrDefaultAsync();
+            if (config!= null)
+            {
+                return Conflict(new { message = "A configuration already exists for this project." });
+            }
             _context.ProjectConfigs.Add(projectConfig);
             await _context.SaveChangesAsync();
 

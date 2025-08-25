@@ -24,8 +24,10 @@ namespace Tools.Controllers
 
         // GET: api/ExtraEnvelopes
         [HttpGet]
-        public async Task<ActionResult<IEnumerable<ExtraEnvelopes>>> GetExtrasEnvelope()
+        public async Task<ActionResult<IEnumerable<ExtraEnvelopes>>> GetExtrasEnvelope(int ProjectId)
         {
+            var NrData = await _context.NRDatas.Where(p=>p.ProjectId == ProjectId).ToListAsync();
+
             return await _context.ExtrasEnvelope.ToListAsync();
         }
 
@@ -84,75 +86,78 @@ namespace Tools.Controllers
         // POST: api/ExtraEnvelopes
         // To protect from overposting attacks, see https://go.microsoft.com/fwlink/?linkid=2123754
         [HttpPost]
-        public async Task<ActionResult> PostExtraEnvelopes(ExtraEnvelopes envelopeInput)
+        public async Task<ActionResult> PostExtraEnvelopes(int ProjectId)
         {
             var nrDataList = await _context.NRDatas
-                .Where(d => d.ProjectId == envelopeInput.ProjectId)
+                .Where(d => d.ProjectId == ProjectId)
                 .ToListAsync();
 
             var extraConfig = await _context.ExtraConfigurations
-                .FirstOrDefaultAsync(c => c.ProjectId == envelopeInput.ProjectId);
+                .Where(c => c.ProjectId == ProjectId).ToListAsync();
 
-            if (extraConfig == null)
+            if (extraConfig == null || !extraConfig.Any())
                 return BadRequest("No ExtraConfiguration found for the project.");
 
-            EnvelopeType envelopeType;
-            try
-            {
-                envelopeType = JsonSerializer.Deserialize<EnvelopeType>(extraConfig.EnvelopeType);
-            }
-            catch
-            {
-                return BadRequest("Invalid EnvelopeType JSON format.");
-            }
-
-            int innerCapacity = GetEnvelopeCapacity(envelopeType.Inner);
-            int outerCapacity = GetEnvelopeCapacity(envelopeType.Outer);
-
             var envelopesToAdd = new List<ExtraEnvelopes>();
-
-            foreach (var data in nrDataList)
+            foreach (var config in extraConfig)
             {
-                int calculatedQuantity = 0;
-
-                switch (extraConfig.Mode)
+                EnvelopeType envelopeType;
+                try
                 {
-                    case "Fixed":
-                        calculatedQuantity = int.Parse(extraConfig.Value);
-                        break;
-
-                    case "Percentage":
-                        if (decimal.TryParse(extraConfig.Value, out var percentValue))
-                        {
-                            calculatedQuantity = (int)Math.Ceiling((double)(data.Quantity * percentValue) / 100);
-                        }
-                        break;
-
-                    case "Range":
-                       // calculatedQuantity = HandleRangeLogic(data, extraConfig);
-                        break;
+                    envelopeType = JsonSerializer.Deserialize<EnvelopeType>(config.EnvelopeType);
+                }
+                catch
+                {
+                    return BadRequest($"Invalid EnvelopeType JSON for ExtraType {config.ExtraType}");
                 }
 
-                int innerCount = (int)Math.Ceiling((double)calculatedQuantity / innerCapacity);
-                int outerCount = (int)Math.Ceiling((double)calculatedQuantity / outerCapacity);
 
-                var envelope = new ExtraEnvelopes
+                int innerCapacity = GetEnvelopeCapacity(envelopeType.Inner);
+                int outerCapacity = GetEnvelopeCapacity(envelopeType.Outer);
+
+
+                foreach (var data in nrDataList)
                 {
-                    ProjectId = envelopeInput.ProjectId,
-                    NRDataId = data.Id,
-                    ExtraId = extraConfig.Id,
-                    Quantity = calculatedQuantity,
-                    InnerEnvelope = innerCount.ToString(),
-                    OuterEnvelope = outerCount.ToString(),
+                    int calculatedQuantity = 0;
 
-                };
+                    switch (config.Mode)
+                    {
+                        case "Fixed":
+                            calculatedQuantity = int.Parse(config.Value);
+                            break;
 
-                envelopesToAdd.Add(envelope);
+                        case "Percentage":
+                            if (decimal.TryParse(config.Value, out var percentValue))
+                            {
+                                calculatedQuantity = (int)Math.Ceiling((double)(data.Quantity * percentValue) / 100);
+                            }
+                            break;
 
-                // Log
-                Console.WriteLine($"NRDataId {data.Id} → Quantity: {calculatedQuantity}, Inner: {innerCount} packets, Outer: {outerCount} packets");
+                        case "Range":
+                            // calculatedQuantity = HandleRangeLogic(data, extraConfig);
+                            break;
+                    }
+
+                    int innerCount = (int)Math.Ceiling((double)calculatedQuantity / innerCapacity);
+                    int outerCount = (int)Math.Ceiling((double)calculatedQuantity / outerCapacity);
+
+                    var envelope = new ExtraEnvelopes
+                    {
+                        ProjectId =ProjectId,
+                        NRDataId = data.Id,
+                        ExtraId = config.ExtraType,
+                        Quantity = calculatedQuantity,
+                        InnerEnvelope = innerCount.ToString(),
+                        OuterEnvelope = outerCount.ToString(),
+
+                    };
+
+                    envelopesToAdd.Add(envelope);
+
+                    // Log
+                    Console.WriteLine($"NRDataId {data.Id} → Quantity: {calculatedQuantity}, Inner: {innerCount} packets, Outer: {outerCount} packets");
+                }
             }
-
             await _context.ExtrasEnvelope.AddRangeAsync(envelopesToAdd);
             await _context.SaveChangesAsync();
 
