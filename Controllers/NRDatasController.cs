@@ -44,6 +44,23 @@ namespace Tools.Controllers
             return nRData;
         }
 
+        // GET: api/NRDatas/GetByProjectId/5
+        [HttpGet("GetByProjectId/{projectId}")]
+        public async Task<ActionResult<IEnumerable<NRData>>> GetByProjectId(int projectId)
+        {
+            var nrData = await _context.NRDatas
+                .Where(d => d.ProjectId == projectId)
+                .ToListAsync();
+
+            if (!nrData.Any())
+            {
+                return NotFound($"No NRData found for ProjectId {projectId}");
+            }
+
+            return Ok(nrData);
+        }
+
+
         // PUT: api/NRDatas/5
         // To protect from overposting attacks, see https://go.microsoft.com/fwlink/?linkid=2123754
         [HttpPut("{id}")]
