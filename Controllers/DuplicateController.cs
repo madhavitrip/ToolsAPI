@@ -69,6 +69,25 @@ namespace Tools.Controllers
                 if (consolidate)
                 {
                     keep.Quantity = group.Sum(x => x.Quantity);
+                    var subjectValues = group.Select(x => x.SubjectName?.Trim())
+                                 .Where(v => !string.IsNullOrEmpty(v))
+                                 .Distinct(StringComparer.OrdinalIgnoreCase)
+                                 .ToList();
+
+                    if (subjectValues.Count > 1)
+                        keep.SubjectName = string.Join(" / ", subjectValues);
+                    else if (subjectValues.Count == 1)
+                        keep.SubjectName = subjectValues.First();
+
+                    var courseValues = group.Select(x => x.CourseName?.Trim())
+                                            .Where(v => !string.IsNullOrEmpty(v))
+                                            .Distinct(StringComparer.OrdinalIgnoreCase)
+                                            .ToList();
+
+                    if (courseValues.Count > 1)
+                        keep.CourseName = string.Join(" / ", courseValues);
+                    else if (courseValues.Count == 1)
+                        keep.CourseName = courseValues.First();
                 }
 
 
