@@ -69,25 +69,24 @@ namespace Tools.Controllers
                 if (consolidate)
                 {
                     keep.Quantity = group.Sum(x => x.Quantity);
+
                     var subjectValues = group.Select(x => x.SubjectName?.Trim())
                                  .Where(v => !string.IsNullOrEmpty(v))
                                  .Distinct(StringComparer.OrdinalIgnoreCase)
                                  .ToList();
 
-                    if (subjectValues.Count > 1)
-                        keep.SubjectName = string.Join(" / ", subjectValues);
-                    else if (subjectValues.Count == 1)
-                        keep.SubjectName = subjectValues.First();
+                    keep.SubjectName = subjectValues.Any()
+                        ? string.Join(" / ", subjectValues)
+                        : keep.SubjectName;
 
                     var courseValues = group.Select(x => x.CourseName?.Trim())
                                             .Where(v => !string.IsNullOrEmpty(v))
                                             .Distinct(StringComparer.OrdinalIgnoreCase)
                                             .ToList();
 
-                    if (courseValues.Count > 1)
-                        keep.CourseName = string.Join(" / ", courseValues);
-                    else if (courseValues.Count == 1)
-                        keep.CourseName = courseValues.First();
+                    keep.CourseName = courseValues.Any()
+                        ? string.Join(" / ", courseValues)
+                        : keep.CourseName;
                 }
 
 
@@ -153,7 +152,7 @@ namespace Tools.Controllers
             // Excel Report Path
             var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "reports");
             Directory.CreateDirectory(reportPath);
-            var filename = $"DuplicateTool {ProjectId}.xlsx";
+            var filename = $"DuplicateTool_{ProjectId}.xlsx";
             var filePath = Path.Combine(reportPath, filename);
 
             // Gather static properties (excluding NRDatas)
@@ -253,7 +252,8 @@ namespace Tools.Controllers
         }
 
 
-        
+     
+
 
 
     }
