@@ -12,6 +12,7 @@ using OfficeOpenXml.Style;
 using OfficeOpenXml;
 using System.Drawing;
 using System.Reflection;
+using Tools.Migrations;
 
 namespace Tools.Controllers
 {
@@ -94,18 +95,22 @@ namespace Tools.Controllers
         {
             var nrDataList = await _context.NRDatas
                 .Where(d => d.ProjectId == ProjectId)
-                .GroupBy(d => d.CatchNo)
+                .ToListAsync();
+
+            var groupedNR = nrDataList
+                .GroupBy(x => x.CatchNo)
                 .Select(g => new
                 {
                     CatchNo = g.Key,
-                    Quantity = g.Sum(x => x.Quantity)
+                    Quantity = g.Sum(x => x.Quantity ?? 0)
                 })
-                .ToListAsync();
+                .ToList();
 
             var extraConfig = await _context.ExtraConfigurations
-                .Where(c => c.ProjectId == ProjectId).ToListAsync();
+                .Where(c => c.ProjectId == ProjectId)
+                .ToListAsync();
 
-            if (extraConfig == null || !extraConfig.Any())
+            if (!extraConfig.Any())
                 return BadRequest("No ExtraConfiguration found for the project.");
 
             var envelopesToAdd = new List<ExtraEnvelopes>();
@@ -124,32 +129,24 @@ namespace Tools.Controllers
                 int innerCapacity = GetEnvelopeCapacity(envelopeType.Inner);
                 int outerCapacity = GetEnvelopeCapacity(envelopeType.Outer);
 
-                foreach (var data in nrDataList)
+                foreach (var data in groupedNR)
                 {
                     int calculatedQuantity = 0;
-
                     switch (config.Mode)
                     {
                         case "Fixed":
                             calculatedQuantity = int.Parse(config.Value);
                             break;
-
                         case "Percentage":
                             if (decimal.TryParse(config.Value, out var percentValue))
-                            {
                                 calculatedQuantity = (int)Math.Ceiling((double)(data.Quantity * percentValue) / 100);
-                            }
-                            break;
-
-                        case "Range":
-                            // calculatedQuantity = HandleRangeLogic(data, extraConfig);
                             break;
                     }
 
                     int innerCount = (int)Math.Ceiling((double)calculatedQuantity / innerCapacity);
                     int outerCount = (int)Math.Ceiling((double)calculatedQuantity / outerCapacity);
 
-                    var envelope = new ExtraEnvelopes
+                    envelopesToAdd.Add(new ExtraEnvelopes
                     {
                         ProjectId = ProjectId,
                         CatchNo = data.CatchNo,
@@ -157,18 +154,15 @@ namespace Tools.Controllers
                         Quantity = calculatedQuantity,
                         InnerEnvelope = innerCount.ToString(),
                         OuterEnvelope = outerCount.ToString(),
-                    };
-
-                    envelopesToAdd.Add(envelope);
-
-                    // Log
-                    Console.WriteLine($"CatchNo {data.CatchNo} → Quantity: {calculatedQuantity}, Inner: {innerCount} packets, Outer: {outerCount} packets");
+                    });
                 }
             }
+
+            // ❌ Check for duplicates
             var existingCombinations = await _context.ExtrasEnvelope
-            .Where(e => e.ProjectId == ProjectId)
-            .Select(e => new { e.ProjectId, e.CatchNo, e.ExtraId })
-             .ToListAsync();
+                .Where(e => e.ProjectId == ProjectId)
+                .Select(e => new { e.ProjectId, e.CatchNo, e.ExtraId })
+                .ToListAsync();
 
             var duplicates = envelopesToAdd
                 .Where(e => existingCombinations.Any(existing =>
@@ -180,211 +174,180 @@ namespace Tools.Controllers
             if (duplicates.Any())
             {
                 var duplicateList = string.Join(", ", duplicates.Select(d => $"CatchNo: {d.CatchNo}, ExtraId: {d.ExtraId}"));
-                return BadRequest($"Duplicate ExtraEnvelopes detected for the following combinations: {duplicateList}");
+                return BadRequest($"Duplicate ExtraEnvelopes detected for: {duplicateList}");
             }
 
             await _context.ExtrasEnvelope.AddRangeAsync(envelopesToAdd);
             await _context.SaveChangesAsync();
 
-            var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "reports");
-            Directory.CreateDirectory(reportPath);
-            var filename = $"ExtraEnvelope {ProjectId}.xlsx";
-            var filePath = Path.Combine(reportPath, filename);
-
-            // Assuming reportRows is defined elsewhere or fetched here, otherwise add fetching logic
-            var reportRows = await _context.NRDatas
-                .Where(d => d.ProjectId == ProjectId)
+            // ------------------- 📊 Generate Excel Report -------------------
+            var allNRData = await _context.NRDatas
+                .Where(x => x.ProjectId == ProjectId)
                 .ToListAsync();
 
-            // Gather static properties (excluding NRDatas)
-            var baseProperties = typeof(NRData).GetProperties(BindingFlags.Public | BindingFlags.Instance)
-                                               .Where(p => p.Name != "NRDatas")
-                                               .ToList();
+            var envelopeBreakages = await _context.EnvelopeBreakages
+                .Where(x => x.ProjectId == ProjectId)
+                .ToListAsync();
+
+            var envelopeDict = envelopeBreakages.ToDictionary(e => e.NrDataId);
+
+            var groupedByNodal = allNRData.GroupBy(x => x.NodalCode).ToList();
 
             var extraHeaders = new HashSet<string>();
+            var innerKeys = new HashSet<string>();
+            var outerKeys = new HashSet<string>();
 
-            // Group reportRows by Nodal property and assign ExtraTypeId incrementally
-            var groupedByNodal = reportRows.GroupBy(r => r.NodalCode).ToList();
+            var allRows = new List<Dictionary<string, object>>();
 
-            var rowsWithExtraTypeId = new List<(NRData row, Dictionary<string, string> extras, int ExtraTypeId)>();
-
-            int extraTypeCounter = 1;
-            foreach (var group in groupedByNodal)
+            foreach (var nodalGroup in groupedByNodal)
             {
-                foreach (var row in group)
+                foreach (var row in nodalGroup)
                 {
-                    Dictionary<string, string> extras = new();
-
-                    if (!string.IsNullOrEmpty(row.NRDatas))
-                    {
-                        try
-                        {
-                            extras = JsonSerializer.Deserialize<Dictionary<string, string>>(row.NRDatas) ?? new();
-                            foreach (var key in extras.Keys)
-                                extraHeaders.Add(key);
-                        }
-                        catch
-                        {
-                            // Optionally log parsing error
-                        }
-                    }
-
-                    rowsWithExtraTypeId.Add((row, extras, extraTypeCounter));
+                    var dict = NRDataToDictionary(row, envelopeDict, extraHeaders, innerKeys, outerKeys);
+                    allRows.Add(dict);
                 }
-                extraTypeCounter++;
+
+                // ➕ Add ExtraTypeId = 1 for this nodal group
+                var catchNos = nodalGroup.Select(x => x.CatchNo).ToHashSet();
+                var extras1 = envelopesToAdd.Where(e => e.ExtraId == 1 && catchNos.Contains(e.CatchNo)).ToList();
+
+                foreach (var extra in extras1)
+                {
+                    var baseRow = allNRData.FirstOrDefault(x => x.CatchNo == extra.CatchNo);
+                    if (baseRow == null) continue;
+
+                    var dict = NRDataToDictionary(baseRow, envelopeDict, extraHeaders, innerKeys, outerKeys);
+                    dict["Quantity"] = extra.Quantity;
+                    dict["CenterCode"] = "Nodal Extra";
+                    allRows.Add(dict);
+                }
             }
+
+            // ➕ Add ExtraTypeId = 2 (University) and 3 (Office) at the end
+            foreach (var extraType in new[] { 2, 3 })
+            {
+                var extras = envelopesToAdd.Where(e => e.ExtraId == extraType).ToList();
+
+                foreach (var extra in extras)
+                {
+                    var baseRow = allNRData.FirstOrDefault(x => x.CatchNo == extra.CatchNo);
+                    if (baseRow == null) continue;
+
+                    var dict = NRDataToDictionary(baseRow, envelopeDict, extraHeaders, innerKeys, outerKeys);
+                    dict["Quantity"] = extra.Quantity;
+                    dict["CenterCode"] = extraType == 2 ? "University Extra" : "Office Extra";
+                    dict["NodalCode"] = "Extras";
+                    allRows.Add(dict);
+                }
+            }
+
+            // Create Excel
+            var allHeaders = typeof(Tools.Models.NRData).GetProperties().Select(p => p.Name).ToList();
+            allHeaders.AddRange(extraHeaders.OrderBy(x => x));
+            allHeaders.AddRange(innerKeys.OrderBy(x => x));
+            allHeaders.AddRange(outerKeys.OrderBy(x => x));
+
+            var filePath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "reports", $"ExtraEnvelope_{ProjectId}.xlsx");
+            Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
 
             using (var package = new ExcelPackage())
             {
-                var ws = package.Workbook.Worksheets.Add("Merge Report");
+                var ws = package.Workbook.Worksheets.Add("Extra Envelope");
 
-                // Write Headers
-                var properties = typeof(NRData).GetProperties(BindingFlags.Public | BindingFlags.Instance);
-                int col = 1;
-                foreach (var prop in properties)
+                for (int i = 0; i < allHeaders.Count; i++)
                 {
-                    ws.Cells[1, col].Value = prop.Name;
-                    ws.Cells[1, col].Style.Font.Bold = true;
-                    col++;
+                    ws.Cells[1, i + 1].Value = allHeaders[i];
+                    ws.Cells[1, i + 1].Style.Font.Bold = true;
                 }
 
                 int rowIdx = 2;
-
-                // Group NRData by NodalCode
-
-                foreach (var nodalGroup in groupedByNodal)
+                foreach (var row in allRows)
                 {
-                    // 1. Write all original NRData rows in this Nodal group
-                    foreach (var data in nodalGroup)
+                    for (int colIdx = 0; colIdx < allHeaders.Count; colIdx++)
                     {
-                        col = 1;
-                        foreach (var prop in properties)
-                        {
-                            var value = prop.GetValue(data);
-                            ws.Cells[rowIdx, col++].Value = value?.ToString() ?? "";
-                        }
-                        rowIdx++;
-                    }
-
-                    // 2. Write ExtraId == 1 for this Nodal group (matching CatchNo)
-                    var nodalCatchNos = nodalGroup.Select(x => x.CatchNo).ToHashSet();
-
-                    var extrasType1 = envelopesToAdd
-                        .Where(e => e.ExtraId == 1 && nodalCatchNos.Contains(e.CatchNo))
-                        .ToList();
-
-                    foreach (var extra in extrasType1)
-                    {
-                        // Find base NRData row
-                        var baseData = reportRows.FirstOrDefault(r => r.CatchNo == extra.CatchNo);
-                        if (baseData == null) continue;
-
-                        col = 1;
-                        foreach (var prop in properties)
-                        {
-                            object? value = null;
-                            switch (prop.Name)
-                            {
-                                case nameof(NRData.Quantity):
-                                    value = extra.Quantity;
-                                    break;
-
-                                case nameof(NRData.CenterCode):
-                                    value = "Nodal Extra";
-                                    break;
-
-                                default:
-                                    value = prop.GetValue(baseData);
-                                    break;
-                            }
-
-                            ws.Cells[rowIdx, col++].Value = value?.ToString() ?? "";
-                        }
-                        rowIdx++;
-                    }
-                }
-
-                // 3. Write ExtraId == 2 and 3 rows (after all nodals)
-                var extrasType2 = envelopesToAdd
-                    .Where(e => e.ExtraId == 2)
-                    .ToList();
-
-                foreach (var extra in extrasType2)
-                {
-                    var baseData = reportRows.FirstOrDefault(r => r.CatchNo == extra.CatchNo);
-                    if (baseData == null) continue;
-
-                    col = 1;
-                    foreach (var prop in properties)
-                    {
-                        object? value = null;
-                        switch (prop.Name)
-                        {
-                            case nameof(NRData.Quantity):
-                                value = extra.Quantity;
-                                break;
-
-                            case nameof(NRData.CenterCode):
-                                value = "University Extra";
-                                break;
-
-                            case nameof(NRData.NodalCode):
-                                value = "Extras";
-                                    break;
-
-                            default:
-                                value = prop.GetValue(baseData);
-                                break;
-                        }
-
-                        ws.Cells[rowIdx, col++].Value = value?.ToString() ?? "";
+                        var key = allHeaders[colIdx];
+                        row.TryGetValue(key, out object value);
+                        ws.Cells[rowIdx, colIdx + 1].Value = value?.ToString() ?? "";
                     }
                     rowIdx++;
                 }
 
-                var extrasType3 = envelopesToAdd
-                   .Where(e => e.ExtraId == 3)
-                   .ToList();
-
-                foreach (var extra in extrasType3)
-                {
-                    var baseData = reportRows.FirstOrDefault(r => r.CatchNo == extra.CatchNo);
-                    if (baseData == null) continue;
-
-                    col = 1;
-                    foreach (var prop in properties)
-                    {
-                        object? value = null;
-                        switch (prop.Name)
-                        {
-                            case nameof(NRData.Quantity):
-                                value = extra.Quantity;
-                                break;
-
-                            case nameof(NRData.CenterCode):
-                                value = "Office Extra";
-                                break;
-
-                            case nameof(NRData.NodalCode):
-                                value = "Extras";
-                                break;
-
-                            default:
-                                value = prop.GetValue(baseData);
-                                break;
-                        }
-
-                        ws.Cells[rowIdx, col++].Value = value?.ToString() ?? "";
-                    }
-                    rowIdx++;
-                }
                 ws.Cells[ws.Dimension.Address].AutoFitColumns();
                 package.SaveAs(new FileInfo(filePath));
             }
 
-
             return Ok(envelopesToAdd);
         }
+
+        private Dictionary<string, object> NRDataToDictionary(
+        Tools.Models.NRData row,
+            Dictionary<int, Tools.Models.EnvelopeBreakage> envMap,
+            HashSet<string> extraKeys,
+            HashSet<string> innerKeys,
+            HashSet<string> outerKeys)
+        {
+            var dict = new Dictionary<string, object>
+            {
+                ["Id"] = row.Id,
+                ["ProjectId"] = row.ProjectId,
+                ["CourseName"] = row.CourseName,
+                ["SubjectName"] = row.SubjectName,
+                ["CatchNo"] = row.CatchNo,
+                ["CenterCode"] = row.CenterCode,
+                ["ExamTime"] = row.ExamTime,
+                ["ExamDate"] = row.ExamDate,
+                ["Quantity"] = row.Quantity,
+                ["NodalCode"] = row.NodalCode,
+                ["NRDatas"] = row.NRDatas
+            };
+
+            if (!string.IsNullOrEmpty(row.NRDatas))
+            {
+                try
+                {
+                    var extras = JsonSerializer.Deserialize<Dictionary<string, string>>(row.NRDatas);
+                    if (extras != null)
+                    {
+                        foreach (var kvp in extras)
+                        {
+                            dict[kvp.Key] = kvp.Value;
+                            extraKeys.Add(kvp.Key);
+                        }
+                    }
+                }
+                catch { }
+            }
+
+            if (envMap.TryGetValue(row.Id, out var env))
+            {
+                void ParseEnv(string? json, HashSet<string> keySet, string prefix)
+                {
+                    if (!string.IsNullOrEmpty(json))
+                    {
+                        try
+                        {
+                            var envDict = JsonSerializer.Deserialize<Dictionary<string, string>>(json);
+                            if (envDict != null)
+                            {
+                                foreach (var kvp in envDict)
+                                {
+                                    string key = $"{prefix}_{kvp.Key}";
+                                    dict[key] = kvp.Value;
+                                    keySet.Add(key);
+                                }
+                            }
+                        }
+                        catch { }
+                    }
+                }
+
+                ParseEnv(env.InnerEnvelope, innerKeys, "Inner");
+                ParseEnv(env.OuterEnvelope, outerKeys, "Outer");
+            }
+
+            return dict;
+        }
+
 
         private int GetEnvelopeCapacity(string envelopeCode)
         {
