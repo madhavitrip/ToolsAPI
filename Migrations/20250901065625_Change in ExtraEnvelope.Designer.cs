@@ -4,6 +4,7 @@ using ERPToolsAPI.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace Tools.Migrations
 {
     [DbContext(typeof(ERPToolsDbContext))]
-    partial class ERPToolsDbContextModelSnapshot : ModelSnapshot
+    [Migration("20250901065625_Change in ExtraEnvelope")]
+    partial class ChangeinExtraEnvelope
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -287,9 +290,6 @@ namespace Tools.Migrations
                         .HasColumnType("longtext");
 
                     b.Property<string>("NRDatas")
-                        .HasColumnType("longtext");
-
-                    b.Property<string>("NodalCode")
                         .HasColumnType("longtext");
 
                     b.Property<int>("ProjectId")

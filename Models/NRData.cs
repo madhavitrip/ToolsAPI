@@ -17,6 +17,7 @@ namespace Tools.Models
         public string? ExamDate { get; set; }
         public string? ExamTime { get; set; }
         public string? NRDatas { get; set; }
+        public string ? NodalCode { get; set; }
 
     }
 }
