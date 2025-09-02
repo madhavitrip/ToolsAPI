@@ -165,6 +165,23 @@ namespace Tools.Controllers
                     Console.WriteLine($"CatchNo {data.CatchNo} → Quantity: {calculatedQuantity}, Inner: {innerCount} packets, Outer: {outerCount} packets");
                 }
             }
+            var existingCombinations = await _context.ExtrasEnvelope
+            .Where(e => e.ProjectId == ProjectId)
+            .Select(e => new { e.ProjectId, e.CatchNo, e.ExtraId })
+             .ToListAsync();
+
+            var duplicates = envelopesToAdd
+                .Where(e => existingCombinations.Any(existing =>
+                    existing.ProjectId == e.ProjectId &&
+                    existing.CatchNo == e.CatchNo &&
+                    existing.ExtraId == e.ExtraId))
+                .ToList();
+
+            if (duplicates.Any())
+            {
+                var duplicateList = string.Join(", ", duplicates.Select(d => $"CatchNo: {d.CatchNo}, ExtraId: {d.ExtraId}"));
+                return BadRequest($"Duplicate ExtraEnvelopes detected for the following combinations: {duplicateList}");
+            }
 
             await _context.ExtrasEnvelope.AddRangeAsync(envelopesToAdd);
             await _context.SaveChangesAsync();
@@ -222,55 +239,149 @@ namespace Tools.Controllers
                 var ws = package.Workbook.Worksheets.Add("Merge Report");
 
                 // Write Headers
+                var properties = typeof(NRData).GetProperties(BindingFlags.Public | BindingFlags.Instance);
                 int col = 1;
-                foreach (var prop in baseProperties)
+                foreach (var prop in properties)
                 {
                     ws.Cells[1, col].Value = prop.Name;
                     ws.Cells[1, col].Style.Font.Bold = true;
                     col++;
                 }
 
-                // Add ExtraTypeId header before extraHeaders
-                ws.Cells[1, col].Value = "ExtraTypeId";
-                ws.Cells[1, col].Style.Font.Bold = true;
-                col++;
+                int rowIdx = 2;
 
-                var extraHeaderList = extraHeaders.OrderBy(k => k).ToList();
-                foreach (var key in extraHeaderList)
+                // Group NRData by NodalCode
+
+                foreach (var nodalGroup in groupedByNodal)
                 {
-                    ws.Cells[1, col].Value = key;
-                    ws.Cells[1, col].Style.Font.Bold = true;
-                    col++;
+                    // 1. Write all original NRData rows in this Nodal group
+                    foreach (var data in nodalGroup)
+                    {
+                        col = 1;
+                        foreach (var prop in properties)
+                        {
+                            var value = prop.GetValue(data);
+                            ws.Cells[rowIdx, col++].Value = value?.ToString() ?? "";
+                        }
+                        rowIdx++;
+                    }
+
+                    // 2. Write ExtraId == 1 for this Nodal group (matching CatchNo)
+                    var nodalCatchNos = nodalGroup.Select(x => x.CatchNo).ToHashSet();
+
+                    var extrasType1 = envelopesToAdd
+                        .Where(e => e.ExtraId == 1 && nodalCatchNos.Contains(e.CatchNo))
+                        .ToList();
+
+                    foreach (var extra in extrasType1)
+                    {
+                        // Find base NRData row
+                        var baseData = reportRows.FirstOrDefault(r => r.CatchNo == extra.CatchNo);
+                        if (baseData == null) continue;
+
+                        col = 1;
+                        foreach (var prop in properties)
+                        {
+                            object? value = null;
+                            switch (prop.Name)
+                            {
+                                case nameof(NRData.Quantity):
+                                    value = extra.Quantity;
+                                    break;
+
+                                case nameof(NRData.CenterCode):
+                                    value = "Nodal Extra";
+                                    break;
+
+                                default:
+                                    value = prop.GetValue(baseData);
+                                    break;
+                            }
+
+                            ws.Cells[rowIdx, col++].Value = value?.ToString() ?? "";
+                        }
+                        rowIdx++;
+                    }
                 }
 
-                // Write Rows
-                int rowIdx = 2;
-                foreach (var (item, extras, extraTypeId) in rowsWithExtraTypeId)
-                {
-                    col = 1;
+                // 3. Write ExtraId == 2 and 3 rows (after all nodals)
+                var extrasType2 = envelopesToAdd
+                    .Where(e => e.ExtraId == 2)
+                    .ToList();
 
-                    foreach (var prop in baseProperties)
+                foreach (var extra in extrasType2)
+                {
+                    var baseData = reportRows.FirstOrDefault(r => r.CatchNo == extra.CatchNo);
+                    if (baseData == null) continue;
+
+                    col = 1;
+                    foreach (var prop in properties)
                     {
-                        var value = prop.GetValue(item);
+                        object? value = null;
+                        switch (prop.Name)
+                        {
+                            case nameof(NRData.Quantity):
+                                value = extra.Quantity;
+                                break;
+
+                            case nameof(NRData.CenterCode):
+                                value = "University Extra";
+                                break;
+
+                            case nameof(NRData.NodalCode):
+                                value = "Extras";
+                                    break;
+
+                            default:
+                                value = prop.GetValue(baseData);
+                                break;
+                        }
+
                         ws.Cells[rowIdx, col++].Value = value?.ToString() ?? "";
                     }
-
-                    // Write ExtraTypeId
-                    ws.Cells[rowIdx, col++].Value = extraTypeId;
-
-                    foreach (var key in extraHeaderList)
-                    {
-                        extras.TryGetValue(key, out var val);
-                        ws.Cells[rowIdx, col++].Value = val ?? "";
-                    }
-
-
                     rowIdx++;
                 }
 
+                var extrasType3 = envelopesToAdd
+                   .Where(e => e.ExtraId == 3)
+                   .ToList();
+
+                foreach (var extra in extrasType3)
+                {
+                    var baseData = reportRows.FirstOrDefault(r => r.CatchNo == extra.CatchNo);
+                    if (baseData == null) continue;
+
+                    col = 1;
+                    foreach (var prop in properties)
+                    {
+                        object? value = null;
+                        switch (prop.Name)
+                        {
+                            case nameof(NRData.Quantity):
+                                value = extra.Quantity;
+                                break;
+
+                            case nameof(NRData.CenterCode):
+                                value = "Office Extra";
+                                break;
+
+                            case nameof(NRData.NodalCode):
+                                value = "Extras";
+                                break;
+
+                            default:
+                                value = prop.GetValue(baseData);
+                                break;
+                        }
+
+                        ws.Cells[rowIdx, col++].Value = value?.ToString() ?? "";
+                    }
+                    rowIdx++;
+                }
                 ws.Cells[ws.Dimension.Address].AutoFitColumns();
                 package.SaveAs(new FileInfo(filePath));
             }
+
 
             return Ok(envelopesToAdd);
         }
