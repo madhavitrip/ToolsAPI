@@ -189,6 +189,9 @@ namespace Tools.Controllers
                 .Where(x => x.ProjectId == ProjectId)
                 .ToListAsync();
 
+            var extraconfig = await _context.ExtraConfigurations
+                .Where(x => x.ProjectId == ProjectId) .ToListAsync();
+
             var envelopeDict = envelopeBreakages.ToDictionary(e => e.NrDataId);
 
             var groupedByNodal = allNRData.GroupBy(x => x.NodalCode).ToList();
@@ -219,6 +222,8 @@ namespace Tools.Controllers
                     var dict = NRDataToDictionary(baseRow, envelopeDict, extraHeaders, innerKeys, outerKeys);
                     dict["Quantity"] = extra.Quantity;
                     dict["CenterCode"] = "Nodal Extra";
+                    dict["InnerEnvelope"] = extra.InnerEnvelope;
+                    dict["OuterEnvelope"] = extra.OuterEnvelope;
                     allRows.Add(dict);
                 }
             }
@@ -237,6 +242,8 @@ namespace Tools.Controllers
                     dict["Quantity"] = extra.Quantity;
                     dict["CenterCode"] = extraType == 2 ? "University Extra" : "Office Extra";
                     dict["NodalCode"] = "Extras";
+                    dict["InnerEnvelope"] = extra.InnerEnvelope;
+                    dict["OuterEnvelope"] = extra.OuterEnvelope;
                     allRows.Add(dict);
                 }
             }
