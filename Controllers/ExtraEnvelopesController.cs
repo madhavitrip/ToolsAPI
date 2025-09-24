@@ -314,11 +314,11 @@ namespace Tools.Controllers
                     break;
                 case 2:
                     dict["CenterCode"] = "University Extra";
-                    dict["NodalCode"] = "Extras";
+                 
                     break;
                 case 3:
                     dict["CenterCode"] = "Office Extra";
-                    dict["NodalCode"] = "Extras";
+                 
                     break;
                 default:
                     dict["CenterCode"] = "Extra";

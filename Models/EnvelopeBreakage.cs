@@ -12,5 +12,6 @@ namespace Tools.Models
         public int NrDataId { get; set; }
         public string InnerEnvelope {  get; set; }
         public string OuterEnvelope { get; set; }
+        public int TotalEnvelope { get; set; }
     }
 }
