@@ -55,6 +55,7 @@ namespace Tools.Controllers
                                     nr.ExamTime,
                                     nr.ExamDate,
                                     nr.Quantity,
+                                    nr.NodalCode,
                                     env.InnerEnvelope,
                                     env.OuterEnvelope
                                 }).ToList();
@@ -90,7 +91,8 @@ namespace Tools.Controllers
                     ["CenterCode"] = row.CenterCode,
                     ["ExamTime"] = row.ExamTime,
                     ["ExamDate"] = row.ExamDate,
-                    ["Quantity"] = row.Quantity
+                    ["Quantity"] = row.Quantity,
+                    ["NodalCode"] = row.NodalCode,
                 };
 
                 // Parse NRDatas
