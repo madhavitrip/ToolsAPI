@@ -316,185 +316,18 @@ namespace Tools.Controllers
             return Ok("Envelope breakdown successfully saved to EnvelopeBreakage table.");
         }
 
-        /*   [HttpGet("Replication")]
-           public async Task<IActionResult> ReplicationConfiguration(int ProjectId, string SortingFields)
-           {
-               var nrData = await _context.NRDatas
-                   .Where(p => p.ProjectId == ProjectId)
-                   .ToListAsync();
-
-               var envBreaking = await _context.EnvelopeBreakages
-                   .Where(p => p.ProjectId == ProjectId)
-                   .ToListAsync();
-
-               var extras = await _context.ExtrasEnvelope
-                   .Where(p => p.ProjectId == ProjectId)
-                   .ToListAsync();
-
-               // Handle sorting
-               if (!string.IsNullOrEmpty(SortingFields))
-               {
-                   var sortFields = SortingFields.Split('-');
-                   IOrderedEnumerable<NRData> orderedData = null;
-
-                   foreach (var (field, index) in sortFields.Select((value, i) => (value, i)))
-                   {
-                       var property = typeof(NRData).GetProperty(field);
-                       if (property == null) continue;
-
-                       if (index == 0)
-                           orderedData = nrData.OrderBy(x => property.GetValue(x, null));
-                       else
-                           orderedData = orderedData.ThenBy(x => property.GetValue(x, null));
-                   }
-
-                   if (orderedData != null)
-                       nrData = orderedData.ToList();
-               }
-
-               // Build dictionary for fast lookup of TotalEnv by NrDataId
-               var envDict = envBreaking.ToDictionary(e => e.NrDataId, e => e.TotalEnvelope);
-
-               var resultList = new List<object>();
-
-               string prevNodalCode = null;
-               string prevCatchNo = null;
-
-               // Track which extras have been added to avoid duplicates
-               var nodalExtrasAddedForCatchNo = new HashSet<string>(); // CatchNos for which nodal extra (ExtraId=1) was added
-               var catchExtrasAdded = new HashSet<(int ExtraId, string CatchNo)>(); // For ExtraId 2 & 3
-
-               for (int i = 0; i < nrData.Count; i++)
-               {
-                   var current = nrData[i];
-
-                   // When NodalCode changes (and not first item), add ExtraId=1 for the CatchNo of previous row ONLY
-                   if (prevNodalCode != null && current.NodalCode != prevNodalCode)
-                   {
-                       if (!nodalExtrasAddedForCatchNo.Contains(prevCatchNo))
-                       {
-                           var extrasToAdd = extras.Where(e => e.ExtraId == 1 && e.CatchNo == prevCatchNo).ToList();
-
-                           foreach (var extra in extrasToAdd)
-                           {
-                               resultList.Add(new
-                               {
-                                   ExtraAttached = true,
-                                   ExtraId = 1,
-                                   extra.CatchNo,
-                                   extra.Quantity,
-                                   extra.InnerEnvelope,
-                                   extra.OuterEnvelope,
-                                   CenterCode = "Nodal Extra"
-                               });
-                           }
-                           nodalExtrasAddedForCatchNo.Add(prevCatchNo);
-                       }
-                   }
-
-                   // When CatchNo changes (and not first item), add ExtraId=2 and 3 for the previous CatchNo ONLY
-                   if (prevCatchNo != null && current.CatchNo != prevCatchNo)
-                   {
-                       foreach (var extraId in new[] { 2, 3 })
-                       {
-                           if (!catchExtrasAdded.Contains((extraId, prevCatchNo)))
-                           {
-                               var extrasToAdd = extras.Where(e => e.ExtraId == extraId && e.CatchNo == prevCatchNo).ToList();
-                               foreach (var extra in extrasToAdd)
-                               {
-                                   resultList.Add(new
-                                   {
-                                       ExtraAttached = true,
-                                       extra.ExtraId,
-                                       extra.CatchNo,
-                                       extra.Quantity,
-                                       extra.InnerEnvelope,
-                                       extra.OuterEnvelope,
-                                       CenterCode = extraId == 2 ? "University Extra" : "Office Extra"
-                                   });
-                               }
-                               catchExtrasAdded.Add((extraId, prevCatchNo));
-                           }
-                       }
-                   }
-
-                   // Add the current NRData with TotalEnv attached
-                   envDict.TryGetValue(current.Id, out int totalEnv);
-
-                   resultList.Add(new
-                   {
-                       current.Id,
-                       current.CourseName,
-                       current.SubjectName,
-                       current.CatchNo,
-                       current.CenterCode,
-                       current.ExamTime,
-                       current.ExamDate,
-                       current.Quantity,
-                       current.NodalCode,
-                       current.NRDatas,
-                       TotalEnv = totalEnv
-                   });
-
-                   prevNodalCode = current.NodalCode;
-                   prevCatchNo = current.CatchNo;
-               }
-
-               // After the loop, add extras for the last CatchNo and NodalCode group if not already added
-               if (prevNodalCode != null && prevCatchNo != null)
-               {
-                   if (!nodalExtrasAddedForCatchNo.Contains(prevCatchNo))
-                   {
-                       var extrasToAdd = extras.Where(e => e.ExtraId == 1 && e.CatchNo == prevCatchNo).ToList();
-                       foreach (var extra in extrasToAdd)
-                       {
-                           resultList.Add(new
-                           {
-                               ExtraAttached = true,
-                               ExtraId = 1,
-                               extra.CatchNo,
-                               extra.Quantity,
-                               extra.InnerEnvelope,
-                               extra.OuterEnvelope,
-                               CenterCode = "Nodal Extra"
-                           });
-                       }
-                       nodalExtrasAddedForCatchNo.Add(prevCatchNo);
-                   }
-
-                   foreach (var extraId in new[] { 2, 3 })
-                   {
-                       if (!catchExtrasAdded.Contains((extraId, prevCatchNo)))
-                       {
-                           var extrasToAdd = extras.Where(e => e.ExtraId == extraId && e.CatchNo == prevCatchNo).ToList();
-                           foreach (var extra in extrasToAdd)
-                           {
-                               resultList.Add(new
-                               {
-                                   ExtraAttached = true,
-                                   extra.ExtraId,
-                                   extra.CatchNo,
-                                   extra.Quantity,
-                                   extra.InnerEnvelope,
-                                   extra.OuterEnvelope,
-                                   CenterCode = extraId == 2 ? "University Extra" : "Office Extra"
-                               });
-                           }
-                           catchExtrasAdded.Add((extraId, prevCatchNo));
-                       }
-                   }
-               }
-
-               return Ok(new
-               {
-                   Result = resultList
-               });
-           }
-   */
 
         [HttpGet("Replication")]
         public async Task<IActionResult> ReplicationConfiguration(int ProjectId, string SortingFields)
         {
+            // Envelope capacities map (can be pulled from DB if needed)
+            var envCaps = await _context.EnvelopesTypes
+          .Select(e => new { e.EnvelopeName, e.Capacity })
+          .ToListAsync();
+            // Convert to dictionary for fast lookup
+            Dictionary<string, int> envelopeCapacities = envCaps
+                .ToDictionary(x => x.EnvelopeName, x => x.Capacity);
+
             var nrData = await _context.NRDatas
                 .Where(p => p.ProjectId == ProjectId)
                 .ToListAsync();
@@ -508,9 +341,13 @@ namespace Tools.Controllers
                 .ToListAsync();
 
             var projectconfig = await _context.ProjectConfigs
-                .Where(p => p.ProjectId == ProjectId).Select(p => p.Envelope).ToListAsync();
+                .Where(p => p.ProjectId == ProjectId)
+                .Select(p => p.Envelope)
+                .ToListAsync();
+
             var extrasconfig = await _context.ExtraConfigurations
-                .Where(p => p.ProjectId == ProjectId).ToListAsync();
+                .Where(p => p.ProjectId == ProjectId)
+                .ToListAsync();
 
             // Handle sorting
             if (!string.IsNullOrEmpty(SortingFields))
@@ -537,49 +374,80 @@ namespace Tools.Controllers
             var envDict = envBreaking.ToDictionary(e => e.NrDataId, e => e.TotalEnvelope);
 
             var resultList = new List<object>();
-
+            int serialnumber = 1;
             string prevNodalCode = null;
             string prevCatchNo = null;
 
             var nodalExtrasAddedForCatchNo = new HashSet<string>();
             var catchExtrasAdded = new HashSet<(int ExtraId, string CatchNo)>();
 
-            void AddExtraWithEnv(ExtraEnvelopes extra)
+            // Extract outer envelope config from project config
+            int nrOuterCapacity = 100; // default
+            string outerEnvJson = projectconfig.FirstOrDefault();
+
+            if (!string.IsNullOrEmpty(outerEnvJson))
             {
-                if (int.TryParse(extra.OuterEnvelope, out int outerCount) && outerCount > 0)
+                var outerEnvDict = JsonSerializer.Deserialize<Dictionary<string, string>>(outerEnvJson);
+                var outerKey = outerEnvDict.Keys.FirstOrDefault();
+                if (outerKey != null && envelopeCapacities.ContainsKey(outerKey))
                 {
-                    for (int j = 1; j <= outerCount; j++)
-                    {
-                        resultList.Add(new
-                        {
-                            ExtraAttached = true,
-                            extra.ExtraId,
-                            extra.CatchNo,
-                            extra.Quantity,
-                            extra.InnerEnvelope,
-                            extra.OuterEnvelope,
-                            CenterCode = extra.ExtraId switch
-                            {
-                                1 => "Nodal Extra",
-                                2 => "University Extra",
-                                3 => "Office Extra",
-                                _ => "Extra"
-                            },
-                            Env = $"{j}/{outerCount}"
-                        });
-                    }
+                    nrOuterCapacity = envelopeCapacities[outerKey];
                 }
             }
 
-            // Function to parse envelope sizes from JSON string
-            int GetEnvelopeSizeFromConfig(string envelopeJson, string key)
+            // Helper method to add extra envelopes
+            void AddExtraWithEnv(ExtraEnvelopes extra)
             {
-                var envelopeConfig = JsonSerializer.Deserialize<Dictionary<string, string>>(envelopeJson);
-                if (envelopeConfig != null && envelopeConfig.ContainsKey(key))
+                var extraConfig = extrasconfig.FirstOrDefault(e => e.ExtraType == extra.ExtraId);
+                int envCapacity = 100; // default fallback
+
+                if (extraConfig != null && !string.IsNullOrEmpty(extraConfig.EnvelopeType))
                 {
-                    return int.TryParse(envelopeConfig[key], out var size) ? size : 0;
+                    var envType = JsonSerializer.Deserialize<Dictionary<string, string>>(extraConfig.EnvelopeType);
+                    if (envType.TryGetValue("Outer", out string outerType))
+                    {
+                        if (envelopeCapacities.TryGetValue(outerType, out int cap))
+                            envCapacity = cap;
+                    }
                 }
-                return 0;
+
+                int totalEnv = (int)Math.Ceiling((double)extra.Quantity / envCapacity);
+                int quantityLeft = extra.Quantity;
+
+                for (int j = 1; j <= totalEnv; j++)
+                {
+                    int envQuantity;
+                    if (j == 1 && totalEnv > 1)
+                    {
+                        int filledCapacity = envCapacity * (totalEnv - 1);
+                        envQuantity = extra.Quantity - filledCapacity;
+                    }
+                    else
+                    {
+                        envQuantity = Math.Min(quantityLeft, envCapacity);
+                    }
+
+                    resultList.Add(new
+                    {
+                        Serialnumber = serialnumber++,
+                        ExtraAttached = true,
+                        extra.ExtraId,
+                        extra.CatchNo,
+                        Quantity = envQuantity,
+                        extra.InnerEnvelope,
+                        extra.OuterEnvelope,
+                        CenterCode = extra.ExtraId switch
+                        {
+                            1 => "Nodal Extra",
+                            2 => "University Extra",
+                            3 => "Office Extra",
+                            _ => "Extra"
+                        },
+                        Env = $"{j}/{totalEnv}"
+                    });
+
+                    quantityLeft -= envQuantity;
+                }
             }
 
             for (int i = 0; i < nrData.Count; i++)
@@ -617,63 +485,40 @@ namespace Tools.Controllers
                     }
                 }
 
-                // ➕ Add current NRData row with TotalEnv replication and Quantity splitting
+                // ➕ Add current NRData row with TotalEnv replication
                 envDict.TryGetValue(current.Id, out int totalEnv);
-                if (totalEnv <= 0) totalEnv = 1; // fallback
+                if (totalEnv <= 0) totalEnv = 1;
 
-                // Retrieve the envelope size from EnvelopeBreakages or ExtraConfig
-                var envConfig = envBreaking.FirstOrDefault(e => e.ProjectId == ProjectId);
-                int envelopeSize = 0;
-                if (envConfig != null)
-                {
-                    // Assuming we are using "E100" for the primary envelope size from Env config.
-                    envelopeSize = GetEnvelopeSizeFromConfig(envConfig.OuterEnvelope, "E100");
-                }
+                int quantityLeft = current?.Quantity ?? 0;
 
-                // If no envelope size found, fallback to extras configuration
-                if (envelopeSize == 0)
+                for (int j = 1; j <= totalEnv; j++)
                 {
-                    var extraConfig = extrasconfig.FirstOrDefault(e => e.ProjectId == ProjectId && e.ExtraType == 2); // For example, using ExtraType 2
-                    if (extraConfig != null)
+                    int envQuantity;
+
+                    if (j == 1 && totalEnv > 1)
                     {
-                        envelopeSize = GetEnvelopeSizeFromConfig(extraConfig.Value, "Outer"); // Extract size from outer envelope for extras
+                        int filledCapacity = nrOuterCapacity * (totalEnv - 1);
+                        envQuantity = current?.Quantity - filledCapacity ?? 0;
                     }
-                }
-
-                int totalQuantity = current?.Quantity??0;
-                int remainingQuantity = totalQuantity;
-                int envCount = totalEnv;
-
-                // Distribute quantity across envelopes
-                for (int j = 1; j <= envCount; j++)
-                {
-                    int currentQuantity = envelopeSize;
-
-                    // Adjust the quantity for the last envelope
-                    if (remainingQuantity < envelopeSize && remainingQuantity > 0)
+                    else
                     {
-                        currentQuantity = remainingQuantity;
+                        envQuantity = Math.Min(quantityLeft, nrOuterCapacity);
                     }
 
-                    // Create result for the envelope with the adjusted quantity
                     resultList.Add(new
                     {
-                        current.Id,
-                        current.CourseName,
-                        current.SubjectName,
+                        SerialNumber = serialnumber++,
                         current.CatchNo,
                         current.CenterCode,
                         current.ExamTime,
                         current.ExamDate,
-                        Quantity = currentQuantity, // Use the adjusted quantity
+                        Quantity = envQuantity,
                         current.NodalCode,
-                        current.NRDatas,
                         TotalEnv = totalEnv,
                         Env = $"{j}/{totalEnv}"
                     });
 
-                    // Decrease the remaining quantity for the next envelope
-                    remainingQuantity -= currentQuantity;
+                    quantityLeft -= envQuantity;
                 }
 
                 prevNodalCode = current.NodalCode;
@@ -704,12 +549,84 @@ namespace Tools.Controllers
                     }
                 }
             }
+            var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "reports");
 
-            return Ok(new
+            // Ensure the directory exists
+            Directory.CreateDirectory(reportPath);
+
+            var filename = $"EnvelopeMaking_{ProjectId}.xlsx";
+            var filePath = Path.Combine(reportPath, filename);
+
+            // 📁 Skip generation if file already exists
+            if (System.IO.File.Exists(filePath))
             {
-                Result = resultList
-            });
-        }
+                return Ok(new { message = "File already exists", filePath }); // Still return data for UI
+            }
+
+            // Generate Excel file and save it to the directory
+            using (var package = new ExcelPackage())
+            {
+                // Create a worksheet
+                var worksheet = package.Workbook.Worksheets.Add("ReplicationResult");
+
+                // Add headers to the worksheet
+                worksheet.Cells[1, 1].Value = "SerialNumber";
+                worksheet.Cells[1, 2].Value = "CatchNo";
+                worksheet.Cells[1, 3].Value = "CenterCode";
+                worksheet.Cells[1, 4].Value = "ExamTime";
+                worksheet.Cells[1, 5].Value = "ExamDate";
+                worksheet.Cells[1, 6].Value = "Quantity";
+                worksheet.Cells[1, 7].Value = "NodalCode";
+                worksheet.Cells[1, 8].Value = "TotalEnv";
+                worksheet.Cells[1, 9].Value = "Env";
+                worksheet.Cells[1, 10].Value = "Start";
+                worksheet.Cells[1, 11].Value = "End";
+                worksheet.Cells[1, 12].Value = "Serial";
+                // Fill in data
+                int row = 2; // Start from row 2 (because row 1 is for headers)
+                int serialNumber = 1;
+                string preCatchNo = null;
+                int prevEnd = 0;
+
+                foreach (var item in resultList)
+                {
+                    var catchNo = item.GetType().GetProperty("CatchNo")?.GetValue(item)?.ToString();
+                    var centerCode = item.GetType().GetProperty("CenterCode")?.GetValue(item)?.ToString();
+                    var quantity = Convert.ToInt32(item.GetType().GetProperty("Quantity")?.GetValue(item));
+                    var totalEnv = Convert.ToInt32(item.GetType().GetProperty("TotalEnv")?.GetValue(item));
+
+                    // Calculate the Start column based on the CatchNo
+                    int start = (catchNo != prevCatchNo) ? 1 : prevEnd + 1;
+                    int end = start + totalEnv - 1; // End is Start + TotalEnv - 1
+                    string serial = $"{start} to {end}";
+
+                    worksheet.Cells[row, 1].Value = item.GetType().GetProperty("Serialnumber")?.GetValue(item);
+                    worksheet.Cells[row, 2].Value = catchNo;
+                    worksheet.Cells[row, 3].Value = centerCode;
+                    worksheet.Cells[row, 4].Value = item.GetType().GetProperty("ExamTime")?.GetValue(item);
+                    worksheet.Cells[row, 5].Value = item.GetType().GetProperty("ExamDate")?.GetValue(item);
+                    worksheet.Cells[row, 6].Value = quantity;
+                    worksheet.Cells[row, 7].Value = item.GetType().GetProperty("NodalCode")?.GetValue(item);
+                    worksheet.Cells[row, 8].Value =totalEnv;
+                    worksheet.Cells[row, 9].Value = item.GetType().GetProperty("Env")?.GetValue(item);
+                    worksheet.Cells[row, 10].Value = start; // Start
+                    worksheet.Cells[row, 11].Value = end; // End
+                    worksheet.Cells[row, 12].Value = serial; // Serial (Start to End)
+
+                    preCatchNo = catchNo;
+                    prevEnd = end;
+                    row++;
+                }
+
+                // Save the Excel package to the specified path
+                FileInfo fi = new FileInfo(filePath);
+                package.SaveAs(fi);
+            }
+
+            // Return success message or file path
+            return Ok(new { message = "File successfully created", filePath });
+
+    }
 
         // DELETE: api/EnvelopeBreakages/5
         [HttpDelete("{id}")]

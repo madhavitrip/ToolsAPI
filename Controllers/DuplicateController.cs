@@ -112,8 +112,7 @@ namespace Tools.Controllers
                     }
                 }
             }
-            else
-            {
+
                 var innerEnv = await _context.ProjectConfigs.
                     Where(s => s.ProjectId == ProjectId).Select(s => s.Envelope)
                     .FirstOrDefaultAsync();
@@ -151,7 +150,7 @@ namespace Tools.Controllers
 
                 }
 
-            }
+            
             await _context.SaveChangesAsync();
             // Excel Report Path
             var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "reports");
