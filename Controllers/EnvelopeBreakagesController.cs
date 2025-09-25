@@ -318,7 +318,7 @@ namespace Tools.Controllers
 
 
         [HttpGet("Replication")]
-        public async Task<IActionResult> ReplicationConfiguration(int ProjectId, string SortingFields)
+        public async Task<IActionResult> ReplicationConfiguration(int ProjectId, string SortingFields, string MergedFields)
         {
             // Envelope capacities map (can be pulled from DB if needed)
             var envCaps = await _context.EnvelopesTypes
@@ -433,7 +433,8 @@ namespace Tools.Controllers
                         ExtraAttached = true,
                         extra.ExtraId,
                         extra.CatchNo,
-                        Quantity = envQuantity,
+                        EnvQuantity = envQuantity,
+                        extra.Quantity,
                         extra.InnerEnvelope,
                         extra.OuterEnvelope,
                         CenterCode = extra.ExtraId switch
@@ -512,7 +513,8 @@ namespace Tools.Controllers
                         current.CenterCode,
                         current.ExamTime,
                         current.ExamDate,
-                        Quantity = envQuantity,
+                        EnvQuantity = envQuantity,
+                        current.Quantity,
                         current.NodalCode,
                         TotalEnv = totalEnv,
                         Env = $"{j}/{totalEnv}"
@@ -554,7 +556,7 @@ namespace Tools.Controllers
             // Ensure the directory exists
             Directory.CreateDirectory(reportPath);
 
-            var filename = $"EnvelopeMaking_{ProjectId}.xlsx";
+            var filename = $"SerialNumbering_{ProjectId}.xlsx";
             var filePath = Path.Combine(reportPath, filename);
 
             // 📁 Skip generation if file already exists
@@ -563,13 +565,159 @@ namespace Tools.Controllers
                 return Ok(new { message = "File already exists", filePath }); // Still return data for UI
             }
 
-            // Generate Excel file and save it to the directory
+            // Step 1: Remove duplicates (CatchNo + CenterCode), preserving first occurrence
+            var uniqueData = resultList
+                .GroupBy(x =>
+                    $"{x.GetType().GetProperty("CatchNo")?.GetValue(x)}_{x.GetType().GetProperty("CenterCode")?.GetValue(x)}"
+                )
+                .Select(g => g.First()) // Keep first
+                .ToList();
+
+            // Step 2: Calculate Start, End, Serial (before sorting)
+            var enrichedList = new List<dynamic>();
+            string previousCatchNo = null;
+            int previousEnd = 0;
+
+            foreach (var item in uniqueData)
+            {
+                var catchNo = item.GetType().GetProperty("CatchNo")?.GetValue(item)?.ToString();
+                var centerCode = item.GetType().GetProperty("CenterCode")?.GetValue(item)?.ToString();
+                var examTime = item.GetType().GetProperty("ExamTime")?.GetValue(item);
+                var examDate = item.GetType().GetProperty("ExamDate")?.GetValue(item);
+                var quantity = Convert.ToInt32(item.GetType().GetProperty("Quantity")?.GetValue(item));
+                var nodalCode = item.GetType().GetProperty("NodalCode")?.GetValue(item)?.ToString();
+                var totalEnv = Convert.ToInt32(item.GetType().GetProperty("TotalEnv")?.GetValue(item));
+                var env = item.GetType().GetProperty("Env")?.GetValue(item)?.ToString();
+
+                int start;
+                if (catchNo != previousCatchNo)
+                    start = 1;
+                else
+                    start = previousEnd + 1;
+
+                int end = start + totalEnv - 1;
+                string serial = $"{start} to {end}";
+
+                enrichedList.Add(new
+                {
+                    CatchNo = catchNo,
+                    CenterCode = centerCode,
+                    ExamTime = examTime,
+                    ExamDate = examDate,
+                    Quantity = quantity,
+                    NodalCode = nodalCode,
+                    TotalEnv = totalEnv,
+                    Env = env,
+                    Start = start,
+                    End = end,
+                    Serial = serial
+                });
+
+                previousCatchNo = catchNo;
+                previousEnd = end;
+            }
+
+            // Step 3: Assign SerialNumbers AFTER serial calculation, using original order
+            int serialNumber = 1;
+            var withSerials = enrichedList
+                .Select(x => new
+                {
+                    SerialNumber = serialNumber++,
+                    x.CatchNo,
+                    x.CenterCode,
+                    x.ExamTime,
+                    x.ExamDate,
+                    x.Quantity,
+                    x.NodalCode,
+                    x.TotalEnv,
+                    x.Env,
+                    x.Start,
+                    x.End,
+                    x.Serial
+                })
+                .ToList();
+
+            // Step 4: Now SORT the data by CenterCode, then CatchNo
+            var finalSorted = withSerials
+                .OrderBy(x => x.CenterCode)
+                .ThenBy(x => x.CatchNo)
+                .ToList();
+
+            // Step 6: Add TotalPages and BoxNo
+            int boxNo = 1001;
+            int runningPages = 0;
+            string prevMergeKey = null;
+
+            var mergedFieldsList = !string.IsNullOrEmpty(MergedFields)
+                ? MergedFields.Split('-')
+                : Array.Empty<string>();
+
+            var finalWithBoxes = new List<dynamic>();
+
+            foreach (var item in finalSorted)
+            {
+                // Total pages = Quantity * Pages (from NRData)
+                // 🔑 you need Pages from NRData, so join it back
+                var nrRow = nrData.FirstOrDefault(n => n.CenterCode == item.CenterCode && n.CatchNo == item.CatchNo);
+                int pages = nrRow?.Pages ?? 1;
+                int totalPages = (item.Quantity ?? 0) * pages;
+
+                // Build merge key based on fields
+                string mergeKey = "";
+                if (mergedFieldsList.Any())
+                {
+                    mergeKey = string.Join("_", mergedFieldsList.Select(f =>
+                    {
+                        var prop = nrRow?.GetType().GetProperty(f);
+                        return prop?.GetValue(nrRow)?.ToString() ?? "";
+                    }));
+                }
+
+                // Check conditions for new box
+                bool newBoxRequired = false;
+
+                if (prevMergeKey != null && mergeKey != prevMergeKey)
+                    newBoxRequired = true;
+
+                if (runningPages + totalPages > 17000)
+                    newBoxRequired = true;
+
+                if (newBoxRequired)
+                {
+                    boxNo++;
+                    runningPages = 0;
+                }
+
+                runningPages += totalPages;
+
+                finalWithBoxes.Add(new
+                {
+                    item.SerialNumber,
+                    item.CatchNo,
+                    item.CenterCode,
+                    item.ExamTime,
+                    item.ExamDate,
+                    item.Quantity,
+                    item.NodalCode,
+                    item.TotalEnv,
+                    item.Env,
+                    item.Start,
+                    item.End,
+                    item.Serial,
+                    TotalPages = totalPages,
+                    BoxNo = boxNo
+                });
+
+                prevMergeKey = mergeKey;
+            }
+
+
+            // Step 5: Export to Excel
             using (var package = new ExcelPackage())
             {
-                // Create a worksheet
                 var worksheet = package.Workbook.Worksheets.Add("ReplicationResult");
 
-                // Add headers to the worksheet
+                // Headers
                 worksheet.Cells[1, 1].Value = "SerialNumber";
                 worksheet.Cells[1, 2].Value = "CatchNo";
                 worksheet.Cells[1, 3].Value = "CenterCode";
@@ -582,51 +730,37 @@ namespace Tools.Controllers
                 worksheet.Cells[1, 10].Value = "Start";
                 worksheet.Cells[1, 11].Value = "End";
                 worksheet.Cells[1, 12].Value = "Serial";
-                // Fill in data
-                int row = 2; // Start from row 2 (because row 1 is for headers)
-                int serialNumber = 1;
-                string preCatchNo = null;
-                int prevEnd = 0;
+                worksheet.Cells[1, 13].Value = "TotalPages";
+                worksheet.Cells[1, 14].Value = "BoxNo";
 
-                foreach (var item in resultList)
+                int row = 2;
+                foreach (var item in finalWithBoxes)
                 {
-                    var catchNo = item.GetType().GetProperty("CatchNo")?.GetValue(item)?.ToString();
-                    var centerCode = item.GetType().GetProperty("CenterCode")?.GetValue(item)?.ToString();
-                    var quantity = Convert.ToInt32(item.GetType().GetProperty("Quantity")?.GetValue(item));
-                    var totalEnv = Convert.ToInt32(item.GetType().GetProperty("TotalEnv")?.GetValue(item));
-
-                    // Calculate the Start column based on the CatchNo
-                    int start = (catchNo != prevCatchNo) ? 1 : prevEnd + 1;
-                    int end = start + totalEnv - 1; // End is Start + TotalEnv - 1
-                    string serial = $"{start} to {end}";
-
-                    worksheet.Cells[row, 1].Value = item.GetType().GetProperty("Serialnumber")?.GetValue(item);
-                    worksheet.Cells[row, 2].Value = catchNo;
-                    worksheet.Cells[row, 3].Value = centerCode;
-                    worksheet.Cells[row, 4].Value = item.GetType().GetProperty("ExamTime")?.GetValue(item);
-                    worksheet.Cells[row, 5].Value = item.GetType().GetProperty("ExamDate")?.GetValue(item);
-                    worksheet.Cells[row, 6].Value = quantity;
-                    worksheet.Cells[row, 7].Value = item.GetType().GetProperty("NodalCode")?.GetValue(item);
-                    worksheet.Cells[row, 8].Value =totalEnv;
-                    worksheet.Cells[row, 9].Value = item.GetType().GetProperty("Env")?.GetValue(item);
-                    worksheet.Cells[row, 10].Value = start; // Start
-                    worksheet.Cells[row, 11].Value = end; // End
-                    worksheet.Cells[row, 12].Value = serial; // Serial (Start to End)
-
-                    preCatchNo = catchNo;
-                    prevEnd = end;
+                    worksheet.Cells[row, 1].Value = item.SerialNumber;
+                    worksheet.Cells[row, 2].Value = item.CatchNo;
+                    worksheet.Cells[row, 3].Value = item.CenterCode;
+                    worksheet.Cells[row, 4].Value = item.ExamTime;
+                    worksheet.Cells[row, 5].Value = item.ExamDate;
+                    worksheet.Cells[row, 6].Value = item.Quantity;
+                    worksheet.Cells[row, 7].Value = item.NodalCode;
+                    worksheet.Cells[row, 8].Value = item.TotalEnv;
+                    worksheet.Cells[row, 9].Value = item.Env;
+                    worksheet.Cells[row, 10].Value = item.Start;
+                    worksheet.Cells[row, 11].Value = item.End;
+                    worksheet.Cells[row, 12].Value = item.Serial;
+                    worksheet.Cells[row, 13].Value = item.TotalPages;
+                    worksheet.Cells[row, 14].Value = item.BoxNo;
                     row++;
                 }
 
-                // Save the Excel package to the specified path
                 FileInfo fi = new FileInfo(filePath);
                 package.SaveAs(fi);
             }
 
-            // Return success message or file path
             return Ok(new { message = "File successfully created", filePath });
 
-    }
+
+        }
 
         // DELETE: api/EnvelopeBreakages/5
         [HttpDelete("{id}")]
