@@ -647,22 +647,19 @@ namespace Tools.Controllers
             int boxNo = 1001;
             int runningPages = 0;
             string prevMergeKey = null;
-
             var mergedFieldsList = !string.IsNullOrEmpty(MergedFields)
-                ? MergedFields.Split('-')
-                : Array.Empty<string>();
+             ? MergedFields.Split('-')
+             : Array.Empty<string>();
 
             var finalWithBoxes = new List<dynamic>();
 
             foreach (var item in finalSorted)
             {
-                // Total pages = Quantity * Pages (from NRData)
-                // 🔑 you need Pages from NRData, so join it back
                 var nrRow = nrData.FirstOrDefault(n => n.CenterCode == item.CenterCode && n.CatchNo == item.CatchNo);
                 int pages = nrRow?.Pages ?? 1;
                 int totalPages = (item.Quantity ?? 0) * pages;
 
-                // Build merge key based on fields
+                // Build merge key
                 string mergeKey = "";
                 if (mergedFieldsList.Any())
                 {
@@ -673,17 +670,75 @@ namespace Tools.Controllers
                     }));
                 }
 
-                // Check conditions for new box
-                bool newBoxRequired = false;
+                // ---- Rule 1: merge fields change → force new box
+                bool mergeChanged = (prevMergeKey != null && mergeKey != prevMergeKey);
 
-                if (prevMergeKey != null && mergeKey != prevMergeKey)
-                    newBoxRequired = true;
+                // ---- Rule 2: page overflow
+                bool overflow = (runningPages + totalPages > 17000);
 
-                if (runningPages + totalPages > 17000)
-                    newBoxRequired = true;
-
-                if (newBoxRequired)
+                if (mergeChanged || overflow)
                 {
+                    // case: overflow detected
+                    if (overflow)
+                    {
+                        int leftover = (runningPages + totalPages) - 17000;
+                        int filled = totalPages - leftover;
+
+                        // if leftover < 50% threshold, split into two balanced boxes
+                        if (leftover > 0 && leftover < 8500)
+                        {
+                            int combined = 17000 + leftover;
+                            int half = combined / 2;
+
+                            // Adjust: previous box gets half, new box gets half
+                            // 💡 This means we must "reassign" some pages from last box items into new box
+                            // Simplify: we treat this item as split across two boxes
+                            // first portion
+                            finalWithBoxes.Add(new
+                            {
+                                item.SerialNumber,
+                                item.CatchNo,
+                                item.CenterCode,
+                                item.ExamTime,
+                                item.ExamDate,
+                                item.Quantity,
+                                item.NodalCode,
+                                item.TotalEnv,
+                                item.Env,
+                                item.Start,
+                                item.End,
+                                item.Serial,
+                                TotalPages = half,
+                                BoxNo = boxNo
+                            });
+
+                            // second portion
+                            boxNo++;
+                            finalWithBoxes.Add(new
+                            {
+                                item.SerialNumber,
+                                item.CatchNo,
+                                item.CenterCode,
+                                item.ExamTime,
+                                item.ExamDate,
+                                item.Quantity,
+                                item.NodalCode,
+                                item.TotalEnv,
+                                item.Env,
+                                item.Start,
+                                item.End,
+                                item.Serial,
+                                TotalPages = combined - half,
+                                BoxNo = boxNo
+                            });
+
+                            runningPages = combined - half; // carry over for next items
+                            prevMergeKey = mergeKey;
+                            continue; // skip normal add
+                        }
+                    }
+
+                    // normal case: just start new box
                     boxNo++;
                     runningPages = 0;
                 }
@@ -707,7 +762,6 @@ namespace Tools.Controllers
                     TotalPages = totalPages,
                     BoxNo = boxNo
                 });
-
 
                 prevMergeKey = mergeKey;
             }
