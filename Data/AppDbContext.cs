@@ -23,6 +23,7 @@ namespace ERPToolsAPI.Data
         public DbSet<ExtraEnvelopes> ExtrasEnvelope { get; set; }
         public DbSet<ExtraType> ExtraType { get; set; }
         public DbSet<EnvelopeBreakage> EnvelopeBreakages { get; set; }
+        public DbSet<Project> Projects { get; set; }
      
     }
 

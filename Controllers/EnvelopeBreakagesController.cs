@@ -318,7 +318,7 @@ namespace Tools.Controllers
 
 
         [HttpGet("Replication")]
-        public async Task<IActionResult> ReplicationConfiguration(int ProjectId, string SortingFields, string MergedFields)
+        public async Task<IActionResult> ReplicationConfiguration(int ProjectId)
         {
             // Envelope capacities map (can be pulled from DB if needed)
             var envCaps = await _context.EnvelopesTypes
@@ -345,19 +345,38 @@ namespace Tools.Controllers
                 .Select(p => p.Envelope)
                 .ToListAsync();
 
+            var envelopeIds = await _context.ProjectConfigs
+           .Where(p => p.ProjectId == ProjectId)
+           .Select(p => p.EnvelopeMakingCriteria)
+           .FirstOrDefaultAsync();  // Assuming Envelope is a list or collection of IDs.
+
+            var boxIds = await _context.ProjectConfigs
+                .Where (p => p.ProjectId == ProjectId)
+                .Select (p => p.BoxBreakingCriteria) .FirstOrDefaultAsync();
+
+            var fields = await _context.Fields
+                .Where(f=>boxIds.Contains(f.FieldId))
+                .ToListAsync();
+
+            // Step 2: Fetch the corresponding field names from the Fields table
+            var fieldNames = await _context.Fields
+                .Where(f => envelopeIds.Contains(f.FieldId))  // Assuming envelopeIds contains the IDs of the fields to sort by
+                .Select(f => f.Name)  // Get the field names
+                .ToListAsync();
+
+
             var extrasconfig = await _context.ExtraConfigurations
                 .Where(p => p.ProjectId == ProjectId)
                 .ToListAsync();
 
             // Handle sorting
-            if (!string.IsNullOrEmpty(SortingFields))
+            if (fieldNames.Any())
             {
-                var sortFields = SortingFields.Split('-');
                 IOrderedEnumerable<NRData> orderedData = null;
 
-                foreach (var (field, index) in sortFields.Select((value, i) => (value, i)))
+                foreach (var (fieldName, index) in fieldNames.Select((value, i) => (value, i)))
                 {
-                    var property = typeof(NRData).GetProperty(field);
+                    var property = typeof(NRData).GetProperty(fieldName);
                     if (property == null) continue;
 
                     if (index == 0)
@@ -551,12 +570,13 @@ namespace Tools.Controllers
                     }
                 }
             }
-            var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "reports");
+            var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
+            if (!Directory.Exists(reportPath))
+            {
+                Directory.CreateDirectory(reportPath);
+            }
 
-            // Ensure the directory exists
-            Directory.CreateDirectory(reportPath);
-
-            var filename = $"SerialNumbering_{ProjectId}.xlsx";
+            var filename = "BoxBreaking.xlsx";
             var filePath = Path.Combine(reportPath, filename);
 
             // 📁 Skip generation if file already exists
@@ -647,9 +667,7 @@ namespace Tools.Controllers
             int boxNo = 1001;
             int runningPages = 0;
             string prevMergeKey = null;
-            var mergedFieldsList = !string.IsNullOrEmpty(MergedFields)
-             ? MergedFields.Split('-')
-             : Array.Empty<string>();
+            
 
             var finalWithBoxes = new List<dynamic>();
 
@@ -661,12 +679,21 @@ namespace Tools.Controllers
 
                 // Build merge key
                 string mergeKey = "";
-                if (mergedFieldsList.Any())
+                if (boxIds.Any())
                 {
-                    mergeKey = string.Join("_", mergedFieldsList.Select(f =>
+                    mergeKey = string.Join("_", boxIds.Select(fieldId =>
                     {
-                        var prop = nrRow?.GetType().GetProperty(f);
-                        return prop?.GetValue(nrRow)?.ToString() ?? "";
+                        // Fetch the field name from Fields table (assumes fieldId is a valid FieldId)
+                        var fieldName = fields.FirstOrDefault(f => f.FieldId == fieldId)?.Name;
+
+                        // If the field exists in fields, get the corresponding value from nrRow
+                        if (fieldName != null)
+                        {
+                            var prop = nrRow?.GetType().GetProperty(fieldName);
+                            return prop?.GetValue(nrRow)?.ToString() ?? "";
+                        }
+
+                        return "";
                     }));
                 }
 
