@@ -256,7 +256,6 @@ namespace Tools.Controllers
                 MergedRows = mergedCount,
                 Consolidated = consolidate
             });
-
         }
 
 

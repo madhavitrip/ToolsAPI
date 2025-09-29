@@ -7,6 +7,9 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using ERPToolsAPI.Data;
 using Tools.Models;
+using Microsoft.IdentityModel.Tokens;
+using System.IdentityModel.Tokens.Jwt;
+using Microsoft.AspNetCore.Authorization;
 
 namespace Tools.Controllers
 {
@@ -27,6 +30,62 @@ namespace Tools.Controllers
         {
             return await _context.Projects.ToListAsync();
         }
+
+        [Authorize]
+        [HttpGet("UserId")]
+        public async Task<ActionResult<IEnumerable<Project>>> GetProjectByUser()
+        {
+            // Extract token from the Authorization header
+            var token = Request.Headers["Authorization"].ToString()?.Replace("Bearer ", "");
+
+            if (string.IsNullOrEmpty(token))
+            {
+                return Unauthorized("Token is required.");
+            }
+
+            try
+            {
+                // Decode the JWT token and extract userId
+                var handler = new JwtSecurityTokenHandler();
+                var jsonToken = handler.ReadToken(token) as JwtSecurityToken;
+
+                // Extract the userId from the correct claim (adjusting based on your token structure)
+                var userIdClaim = jsonToken?.Claims.FirstOrDefault(c => c.Type == "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name");
+                var userId = userIdClaim?.Value;
+
+                if (string.IsNullOrEmpty(userId))
+                {
+                    return Unauthorized("User ID not found in token.");
+                }
+
+                // Convert userId to integer (if necessary)
+                if (!int.TryParse(userId, out int userIntId))
+                {
+                    return Unauthorized("Invalid User ID format.");
+                }
+
+                // Fetch all projects (we'll filter them in memory)
+                var projects = await _context.Projects
+                    .ToListAsync(); // Fetch all projects (client-side filtering will follow)
+
+                // Filter the projects where the userId is in the UserAssigned list
+                var userProjects = projects
+                    .Where(p => p.UserAssigned.Contains(userIntId)) // Perform client-side filtering
+                    .ToList();
+
+                if (userProjects == null || !userProjects.Any())
+                {
+                    return NotFound("No projects found for this user.");
+                }
+
+                return Ok(userProjects);
+            }
+            catch (Exception ex)
+            {
+                return BadRequest($"Error decoding token: {ex.Message}");
+            }
+        }
+
 
         // GET: api/Projects/5
         [HttpGet("{id}")]

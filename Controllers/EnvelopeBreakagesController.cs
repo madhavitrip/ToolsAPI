@@ -60,10 +60,10 @@ namespace Tools.Controllers
                                     env.OuterEnvelope
                                 }).ToList();
 
-            var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "reports");
+            var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
             Directory.CreateDirectory(reportPath);
 
-            var filename = $"EnvelopeBreaking_{ProjectId}.xlsx";
+            var filename = $"EnvelopeBreaking.xlsx";
             var filePath = Path.Combine(reportPath, filename);
 
             // 📁 Skip generation if file already exists
@@ -150,15 +150,22 @@ namespace Tools.Controllers
                 .OrderBy(k => k)
                 .ToList();
 
+            var columnsToKeep = allHeaders.Where(header =>
+            {
+                return parsedRows.Any(rowDict =>
+                    rowDict.ContainsKey(header) &&
+                    !string.IsNullOrEmpty(rowDict[header]?.ToString()));
+            }).ToList();
+
             // 🧾 Generate Excel report
             using (var package = new ExcelPackage())
             {
                 var ws = package.Workbook.Worksheets.Add("Envelope Report");
 
                 // Write headers
-                for (int i = 0; i < allHeaders.Count; i++)
+                for (int i = 0; i < columnsToKeep.Count; i++)
                 {
-                    ws.Cells[1, i + 1].Value = allHeaders[i];
+                    ws.Cells[1, i + 1].Value = columnsToKeep[i];
                     ws.Cells[1, i + 1].Style.Font.Bold = true;
                 }
 
@@ -166,13 +173,12 @@ namespace Tools.Controllers
                 int rowIdx = 2;
                 foreach (var rowDict in parsedRows)
                 {
-                    for (int colIdx = 0; colIdx < allHeaders.Count; colIdx++)
+                    int colIdx = 1;
+                    foreach (var header in columnsToKeep)
                     {
-                        var key = allHeaders[colIdx];
-                        rowDict.TryGetValue(key, out object value);
-                        ws.Cells[rowIdx, colIdx + 1].Value = value?.ToString() ?? "";
+                        rowDict.TryGetValue(header, out object value);
+                        ws.Cells[rowIdx, colIdx++].Value = value?.ToString() ?? "";
                     }
-
                     rowIdx++;
                 }
 
@@ -270,6 +276,12 @@ namespace Tools.Controllers
 
             foreach (var row in nrDataList)
             {
+                bool exists = await _context.EnvelopeBreakages
+              .AnyAsync(e => e.NrDataId == row.Id);
+
+                if (exists)
+                    continue; // Skip adding this entry because it already exists
+
                 int quantity = row.Quantity ?? 0;
                 int remaining = quantity;
 
@@ -312,6 +324,18 @@ namespace Tools.Controllers
             }
 
             await _context.SaveChangesAsync();
+
+            using var client = new HttpClient();
+            var response = await client.GetAsync($"https://localhost:7276/api/EnvelopeBreakages?ProjectId={ProjectId}");
+
+            if (!response.IsSuccessStatusCode)
+            {
+                // Handle failure from GET call as needed
+                return StatusCode((int)response.StatusCode, "Failed to get envelope breakages after configuration.");
+            }
+
+            var jsonString = await response.Content.ReadAsStringAsync();
+
 
             return Ok("Envelope breakdown successfully saved to EnvelopeBreakage table.");
         }
