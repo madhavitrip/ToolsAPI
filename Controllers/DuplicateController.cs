@@ -153,9 +153,14 @@ namespace Tools.Controllers
             
             await _context.SaveChangesAsync();
             // Excel Report Path
-            var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "reports");
-            Directory.CreateDirectory(reportPath);
-            var filename = $"DuplicateTool {ProjectId}.xlsx";
+            var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
+            if (!Directory.Exists(reportPath))
+            {
+                // Create the directory if it doesn't exist
+                Directory.CreateDirectory(reportPath);
+            }
+
+            var filename = "DuplicateTool.xlsx";
             var filePath = Path.Combine(reportPath, filename);
 
             // Gather static properties (excluding NRDatas)
@@ -251,7 +256,6 @@ namespace Tools.Controllers
                 MergedRows = mergedCount,
                 Consolidated = consolidate
             });
-
         }
 
 

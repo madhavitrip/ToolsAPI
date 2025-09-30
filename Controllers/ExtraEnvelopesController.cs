@@ -254,8 +254,19 @@ namespace Tools.Controllers
             allHeaders.AddRange(innerKeys.OrderBy(x => x));
             allHeaders.AddRange(outerKeys.OrderBy(x => x));
 
-            var filePath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "reports", $"ExtraEnvelope_{ProjectId}.xlsx");
-            Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
+            var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
+            if (!Directory.Exists(reportPath))
+            {
+                Directory.CreateDirectory(reportPath);
+            }
+            var filename = "ExtrasCalculation.xlsx";
+            var filePath = Path.Combine(reportPath, filename);
+
+            // 📁 Skip generation if file already exists
+            if (System.IO.File.Exists(filePath))
+            {
+                return Ok(new { message = "File already exists", filePath }); // Still return data for UI
+            }
 
             using (var package = new ExcelPackage())
             {

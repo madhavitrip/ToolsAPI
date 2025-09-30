@@ -60,10 +60,10 @@ namespace Tools.Controllers
                                     env.OuterEnvelope
                                 }).ToList();
 
-            var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "reports");
+            var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
             Directory.CreateDirectory(reportPath);
 
-            var filename = $"EnvelopeBreaking_{ProjectId}.xlsx";
+            var filename = $"EnvelopeBreaking.xlsx";
             var filePath = Path.Combine(reportPath, filename);
 
             // 📁 Skip generation if file already exists
@@ -150,15 +150,22 @@ namespace Tools.Controllers
                 .OrderBy(k => k)
                 .ToList();
 
+            var columnsToKeep = allHeaders.Where(header =>
+            {
+                return parsedRows.Any(rowDict =>
+                    rowDict.ContainsKey(header) &&
+                    !string.IsNullOrEmpty(rowDict[header]?.ToString()));
+            }).ToList();
+
             // 🧾 Generate Excel report
             using (var package = new ExcelPackage())
             {
                 var ws = package.Workbook.Worksheets.Add("Envelope Report");
 
                 // Write headers
-                for (int i = 0; i < allHeaders.Count; i++)
+                for (int i = 0; i < columnsToKeep.Count; i++)
                 {
-                    ws.Cells[1, i + 1].Value = allHeaders[i];
+                    ws.Cells[1, i + 1].Value = columnsToKeep[i];
                     ws.Cells[1, i + 1].Style.Font.Bold = true;
                 }
 
@@ -166,13 +173,12 @@ namespace Tools.Controllers
                 int rowIdx = 2;
                 foreach (var rowDict in parsedRows)
                 {
-                    for (int colIdx = 0; colIdx < allHeaders.Count; colIdx++)
+                    int colIdx = 1;
+                    foreach (var header in columnsToKeep)
                     {
-                        var key = allHeaders[colIdx];
-                        rowDict.TryGetValue(key, out object value);
-                        ws.Cells[rowIdx, colIdx + 1].Value = value?.ToString() ?? "";
+                        rowDict.TryGetValue(header, out object value);
+                        ws.Cells[rowIdx, colIdx++].Value = value?.ToString() ?? "";
                     }
-
                     rowIdx++;
                 }
 
@@ -270,6 +276,12 @@ namespace Tools.Controllers
 
             foreach (var row in nrDataList)
             {
+                bool exists = await _context.EnvelopeBreakages
+              .AnyAsync(e => e.NrDataId == row.Id);
+
+                if (exists)
+                    continue; // Skip adding this entry because it already exists
+
                 int quantity = row.Quantity ?? 0;
                 int remaining = quantity;
 
@@ -313,12 +325,24 @@ namespace Tools.Controllers
 
             await _context.SaveChangesAsync();
 
+            using var client = new HttpClient();
+            var response = await client.GetAsync($"https://localhost:7276/api/EnvelopeBreakages?ProjectId={ProjectId}");
+
+            if (!response.IsSuccessStatusCode)
+            {
+                // Handle failure from GET call as needed
+                return StatusCode((int)response.StatusCode, "Failed to get envelope breakages after configuration.");
+            }
+
+            var jsonString = await response.Content.ReadAsStringAsync();
+
+
             return Ok("Envelope breakdown successfully saved to EnvelopeBreakage table.");
         }
 
 
         [HttpGet("Replication")]
-        public async Task<IActionResult> ReplicationConfiguration(int ProjectId, string SortingFields, string MergedFields)
+        public async Task<IActionResult> ReplicationConfiguration(int ProjectId)
         {
             // Envelope capacities map (can be pulled from DB if needed)
             var envCaps = await _context.EnvelopesTypes
@@ -345,19 +369,38 @@ namespace Tools.Controllers
                 .Select(p => p.Envelope)
                 .ToListAsync();
 
+            var envelopeIds = await _context.ProjectConfigs
+           .Where(p => p.ProjectId == ProjectId)
+           .Select(p => p.EnvelopeMakingCriteria)
+           .FirstOrDefaultAsync();  // Assuming Envelope is a list or collection of IDs.
+
+            var boxIds = await _context.ProjectConfigs
+                .Where (p => p.ProjectId == ProjectId)
+                .Select (p => p.BoxBreakingCriteria) .FirstOrDefaultAsync();
+
+            var fields = await _context.Fields
+                .Where(f=>boxIds.Contains(f.FieldId))
+                .ToListAsync();
+
+            // Step 2: Fetch the corresponding field names from the Fields table
+            var fieldNames = await _context.Fields
+                .Where(f => envelopeIds.Contains(f.FieldId))  // Assuming envelopeIds contains the IDs of the fields to sort by
+                .Select(f => f.Name)  // Get the field names
+                .ToListAsync();
+
+
             var extrasconfig = await _context.ExtraConfigurations
                 .Where(p => p.ProjectId == ProjectId)
                 .ToListAsync();
 
             // Handle sorting
-            if (!string.IsNullOrEmpty(SortingFields))
+            if (fieldNames.Any())
             {
-                var sortFields = SortingFields.Split('-');
                 IOrderedEnumerable<NRData> orderedData = null;
 
-                foreach (var (field, index) in sortFields.Select((value, i) => (value, i)))
+                foreach (var (fieldName, index) in fieldNames.Select((value, i) => (value, i)))
                 {
-                    var property = typeof(NRData).GetProperty(field);
+                    var property = typeof(NRData).GetProperty(fieldName);
                     if (property == null) continue;
 
                     if (index == 0)
@@ -551,12 +594,13 @@ namespace Tools.Controllers
                     }
                 }
             }
-            var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "reports");
+            var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
+            if (!Directory.Exists(reportPath))
+            {
+                Directory.CreateDirectory(reportPath);
+            }
 
-            // Ensure the directory exists
-            Directory.CreateDirectory(reportPath);
-
-            var filename = $"SerialNumbering_{ProjectId}.xlsx";
+            var filename = "BoxBreaking.xlsx";
             var filePath = Path.Combine(reportPath, filename);
 
             // 📁 Skip generation if file already exists
@@ -647,9 +691,7 @@ namespace Tools.Controllers
             int boxNo = 1001;
             int runningPages = 0;
             string prevMergeKey = null;
-            var mergedFieldsList = !string.IsNullOrEmpty(MergedFields)
-             ? MergedFields.Split('-')
-             : Array.Empty<string>();
+            
 
             var finalWithBoxes = new List<dynamic>();
 
@@ -661,12 +703,21 @@ namespace Tools.Controllers
 
                 // Build merge key
                 string mergeKey = "";
-                if (mergedFieldsList.Any())
+                if (boxIds.Any())
                 {
-                    mergeKey = string.Join("_", mergedFieldsList.Select(f =>
+                    mergeKey = string.Join("_", boxIds.Select(fieldId =>
                     {
-                        var prop = nrRow?.GetType().GetProperty(f);
-                        return prop?.GetValue(nrRow)?.ToString() ?? "";
+                        // Fetch the field name from Fields table (assumes fieldId is a valid FieldId)
+                        var fieldName = fields.FirstOrDefault(f => f.FieldId == fieldId)?.Name;
+
+                        // If the field exists in fields, get the corresponding value from nrRow
+                        if (fieldName != null)
+                        {
+                            var prop = nrRow?.GetType().GetProperty(fieldName);
+                            return prop?.GetValue(nrRow)?.ToString() ?? "";
+                        }
+
+                        return "";
                     }));
                 }
 

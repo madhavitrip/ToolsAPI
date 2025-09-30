@@ -23,7 +23,16 @@ namespace ERPToolsAPI.Data
         public DbSet<ExtraEnvelopes> ExtrasEnvelope { get; set; }
         public DbSet<ExtraType> ExtraType { get; set; }
         public DbSet<EnvelopeBreakage> EnvelopeBreakages { get; set; }
-     
+        public DbSet<Project> Projects { get; set; }
+
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+        {
+            base.OnModelCreating(modelBuilder);
+
+            modelBuilder.Entity<EnvelopeBreakage>()
+                .HasIndex(e => e.NrDataId)
+                .IsUnique();
+        }
     }
 
     
