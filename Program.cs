@@ -62,7 +62,7 @@ app.UseAuthentication();
 app.UseStaticFiles();
 app.UseHttpsRedirection();
 app.UseCors();
-
+app.UseStaticFiles();
 app.UseAuthorization();
 
 app.MapControllers();
