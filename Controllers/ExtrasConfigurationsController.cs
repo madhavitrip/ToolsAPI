@@ -28,6 +28,24 @@ namespace Tools.Controllers
             return await _context.ExtraConfigurations.ToListAsync();
         }
 
+
+        // GET: api/ExtrasConfigurations/ByProjectId
+        [HttpGet("ByProject/{projectId}")]
+        public async Task<ActionResult<IEnumerable<ExtrasConfiguration>>> GetExtrasByProjectId(int projectId)
+        {
+            var extras = await _context.ExtraConfigurations
+                .Where(e => e.ProjectId == projectId)
+                .ToListAsync();
+
+            if (extras == null || extras.Count == 0)
+            {
+                return NotFound(new { message = $"No configurations found for ProjectId: {projectId}" });
+            }
+
+            return Ok(extras);
+        }
+
+
         // GET: api/ExtrasConfigurations/5
         [HttpGet("{id}")]
         public async Task<ActionResult<ExtrasConfiguration>> GetExtrasConfiguration(int id)
