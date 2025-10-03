@@ -28,6 +28,22 @@ namespace Tools.Controllers
             return await _context.ProjectConfigs.ToListAsync();
         }
 
+        // GET: api/ProjectConfigs/ByProject/77
+        [HttpGet("ByProject/{projectId}")]
+        public async Task<ActionResult<ProjectConfig>> GetProjectConfigByProjectId(int projectId)
+        {
+            var config = await _context.ProjectConfigs
+                .FirstOrDefaultAsync(p => p.ProjectId == projectId);
+
+            if (config == null)
+            {
+                return NotFound(new { message = $"No configuration found for ProjectId: {projectId}" });
+            }
+
+            return Ok(config);
+        }
+
+
         // GET: api/ProjectConfigs/5
         [HttpGet("{id}")]
         public async Task<ActionResult<ProjectConfig>> GetProjectConfig(int id)
