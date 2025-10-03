@@ -57,6 +57,8 @@ namespace Tools.Controllers
                 return NotFound($"No NRData found for ProjectId {projectId}");
             }
 
+
+
             return Ok(nrData);
         }
 
