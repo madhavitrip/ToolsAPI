@@ -11,7 +11,8 @@ namespace Tools.Models
         public List<int> Modules { get; set; }
         public int ProjectId { get; set; }
         public string Envelope { get; set; }
-        public List<int> BoxBreaking { get; set; }
+        public List<int> BoxBreakingCriteria { get; set; }
+        public List<int> EnvelopeMakingCriteria { get; set; }
 
     }
 }

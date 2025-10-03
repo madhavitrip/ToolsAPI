@@ -4,6 +4,7 @@ using ERPToolsAPI.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace Tools.Migrations
 {
     [DbContext(typeof(ERPToolsDbContext))]
-    partial class ERPToolsDbContextModelSnapshot : ModelSnapshot
+    [Migration("20250923071718_Changes in EnvelopeBreakages")]
+    partial class ChangesinEnvelopeBreakages
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -116,8 +119,9 @@ namespace Tools.Migrations
                     b.Property<int>("ProjectId")
                         .HasColumnType("int");
 
-                    b.Property<int>("TotalEnvelope")
-                        .HasColumnType("int");
+                    b.Property<string>("TotalEnvelope")
+                        .IsRequired()
+                        .HasColumnType("longtext");
 
                     b.HasKey("EnvelopeId");
 
@@ -295,9 +299,6 @@ namespace Tools.Migrations
                     b.Property<string>("NodalCode")
                         .HasColumnType("longtext");
 
-                    b.Property<int>("Pages")
-                        .HasColumnType("int");
-
                     b.Property<int>("ProjectId")
                         .HasColumnType("int");
 
@@ -312,23 +313,6 @@ namespace Tools.Migrations
                     b.ToTable("NRDatas");
                 });
 
-            modelBuilder.Entity("Tools.Models.Project", b =>
-                {
-                    b.Property<int>("ProjectId")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("int");
-
-                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("ProjectId"));
-
-                    b.Property<string>("UserAssigned")
-                        .IsRequired()
-                        .HasColumnType("longtext");
-
-                    b.HasKey("ProjectId");
-
-                    b.ToTable("Projects");
-                });
-
             modelBuilder.Entity("Tools.Models.ProjectConfig", b =>
                 {
                     b.Property<int>("Id")
@@ -337,15 +321,11 @@ namespace Tools.Migrations
 
                     MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
 
-                    b.Property<string>("BoxBreakingCriteria")
+                    b.Property<string>("BoxBreaking")
                         .IsRequired()
                         .HasColumnType("longtext");
 
                     b.Property<string>("Envelope")
-                        .IsRequired()
-                        .HasColumnType("longtext");
-
-                    b.Property<string>("EnvelopeMakingCriteria")
                         .IsRequired()
                         .HasColumnType("longtext");
 

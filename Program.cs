@@ -59,7 +59,7 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseAuthentication();
-
+app.UseStaticFiles();
 app.UseHttpsRedirection();
 app.UseCors();
 app.UseStaticFiles();

@@ -189,6 +189,10 @@ namespace Tools.Controllers
                 .Where(x => x.ProjectId == ProjectId)
                 .ToListAsync();
 
+            var extraconfig = await _context.ExtraConfigurations
+                .Where(x => x.ProjectId == ProjectId) .ToListAsync();
+
+
             var envelopeDict = envelopeBreakages.ToDictionary(e => e.NrDataId);
 
             var groupedByNodal = allNRData.GroupBy(x => x.NodalCode).ToList();
@@ -216,10 +220,12 @@ namespace Tools.Controllers
                     var baseRow = allNRData.FirstOrDefault(x => x.CatchNo == extra.CatchNo);
                     if (baseRow == null) continue;
 
-                    var dict = NRDataToDictionary(baseRow, envelopeDict, extraHeaders, innerKeys, outerKeys);
-                    dict["Quantity"] = extra.Quantity;
-                    dict["CenterCode"] = "Nodal Extra";
+                    var config = extraConfig.FirstOrDefault(c => c.ExtraType == extra.ExtraId);
+                    if (config == null) continue;
+
+                    var dict = ExtraEnvelopeToDictionary(baseRow, extra, config, extraHeaders, innerKeys, outerKeys);
                     allRows.Add(dict);
+
                 }
             }
 
@@ -232,12 +238,13 @@ namespace Tools.Controllers
                 {
                     var baseRow = allNRData.FirstOrDefault(x => x.CatchNo == extra.CatchNo);
                     if (baseRow == null) continue;
+                    var config = extraConfig.FirstOrDefault(c => c.ExtraType == extra.ExtraId);
+                    if (config == null) continue;
 
-                    var dict = NRDataToDictionary(baseRow, envelopeDict, extraHeaders, innerKeys, outerKeys);
-                    dict["Quantity"] = extra.Quantity;
-                    dict["CenterCode"] = extraType == 2 ? "University Extra" : "Office Extra";
-                    dict["NodalCode"] = "Extras";
+                    var dict = ExtraEnvelopeToDictionary(baseRow, extra, config, extraHeaders, innerKeys, outerKeys);
                     allRows.Add(dict);
+
+
                 }
             }
 
@@ -247,8 +254,19 @@ namespace Tools.Controllers
             allHeaders.AddRange(innerKeys.OrderBy(x => x));
             allHeaders.AddRange(outerKeys.OrderBy(x => x));
 
-            var filePath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "reports", $"ExtraEnvelope_{ProjectId}.xlsx");
-            Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
+            var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
+            if (!Directory.Exists(reportPath))
+            {
+                Directory.CreateDirectory(reportPath);
+            }
+            var filename = "ExtrasCalculation.xlsx";
+            var filePath = Path.Combine(reportPath, filename);
+
+            // 📁 Skip generation if file already exists
+            if (System.IO.File.Exists(filePath))
+            {
+                return Ok(new { message = "File already exists", filePath }); // Still return data for UI
+            }
 
             using (var package = new ExcelPackage())
             {
@@ -279,6 +297,87 @@ namespace Tools.Controllers
             return Ok(envelopesToAdd);
         }
 
+        private Dictionary<string, object> ExtraEnvelopeToDictionary(
+       Tools.Models.NRData baseRow,
+       ExtraEnvelopes extra,
+       ExtrasConfiguration config,
+       HashSet<string> extraKeys,
+       HashSet<string> innerKeys,
+       HashSet<string> outerKeys)
+        {
+            var dict = new Dictionary<string, object>
+            {
+                ["CourseName"] = baseRow.CourseName,
+                ["SubjectName"] = baseRow.SubjectName,
+                ["CatchNo"] = baseRow.CatchNo,
+                ["ExamTime"] = baseRow.ExamTime,
+                ["ExamDate"] = baseRow.ExamDate,
+                ["NodalCode"] = baseRow.NodalCode,
+                ["NRDatas"] = baseRow.NRDatas,
+                ["Quantity"] = extra.Quantity
+            };
+
+            // Set CenterCode
+            switch (extra.ExtraId)
+            {
+                case 1:
+                    dict["CenterCode"] = "Nodal Extra";
+                    break;
+                case 2:
+                    dict["CenterCode"] = "University Extra";
+                 
+                    break;
+                case 3:
+                    dict["CenterCode"] = "Office Extra";
+                 
+                    break;
+                default:
+                    dict["CenterCode"] = "Extra";
+                    break;
+            }
+
+            // Add NRDatas (extra fields)
+            if (!string.IsNullOrEmpty(baseRow.NRDatas))
+            {
+                try
+                {
+                    var extras = JsonSerializer.Deserialize<Dictionary<string, string>>(baseRow.NRDatas);
+                    if (extras != null)
+                    {
+                        foreach (var kvp in extras)
+                        {
+                            dict[kvp.Key] = kvp.Value;
+                            extraKeys.Add(kvp.Key);
+                        }
+                    }
+                }
+                catch { }
+            }
+
+            // ✅ Set InnerEnvelope and OuterEnvelope values in proper columns
+            EnvelopeType envelopeType;
+            try
+            {
+                envelopeType = JsonSerializer.Deserialize<EnvelopeType>(config.EnvelopeType);
+            }
+            catch
+            {
+                envelopeType = new EnvelopeType { Inner = "E1", Outer = "E1" }; // fallback
+            }
+
+            string innerKey = $"Inner_{envelopeType.Inner}";
+            string outerKey = $"Outer_{envelopeType.Outer}";
+
+            dict[innerKey] = extra.InnerEnvelope;
+            dict[outerKey] = extra.OuterEnvelope;
+
+            innerKeys.Add(innerKey);
+            outerKeys.Add(outerKey);
+
+            return dict;
+        }
+
+
         private Dictionary<string, object> NRDataToDictionary(
         Tools.Models.NRData row,
             Dictionary<int, Tools.Models.EnvelopeBreakage> envMap,
@@ -288,8 +387,6 @@ namespace Tools.Controllers
         {
             var dict = new Dictionary<string, object>
             {
-                ["Id"] = row.Id,
-                ["ProjectId"] = row.ProjectId,
                 ["CourseName"] = row.CourseName,
                 ["SubjectName"] = row.SubjectName,
                 ["CatchNo"] = row.CatchNo,

@@ -9,6 +9,9 @@ using System.Drawing;
 using Tools.Models;
 using System.Text.Json;
 using Humanizer;
+using Newtonsoft.Json;
+using Tools.Migrations;
+using NRData = Tools.Models.NRData;
 
 namespace Tools.Controllers
 {
@@ -108,8 +111,7 @@ namespace Tools.Controllers
                     }
                 }
             }
-            else
-            {
+
                 var innerEnv = await _context.ProjectConfigs.
                     Where(s => s.ProjectId == ProjectId).Select(s => s.Envelope)
                     .FirstOrDefaultAsync();
@@ -117,7 +119,7 @@ namespace Tools.Controllers
                 {
                     try
                     {
-                        var envelopeDict = JsonSerializer.Deserialize<Dictionary<string, string>>(innerEnv);
+                        var envelopeDict = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(innerEnv);
                         if (envelopeDict != null && envelopeDict.ContainsKey("Inner"))
                         {
                             var innerSizes = envelopeDict["Inner"]
@@ -147,12 +149,19 @@ namespace Tools.Controllers
 
                 }
 
-            }
+            
             await _context.SaveChangesAsync();
             // Excel Report Path
-            var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "reports");
-            Directory.CreateDirectory(reportPath);
-            var filename = $"DuplicateTool_{ProjectId}.xlsx";
+
+            var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
+            if (!Directory.Exists(reportPath))
+            {
+                // Create the directory if it doesn't exist
+                Directory.CreateDirectory(reportPath);
+            }
+
+            var filename = "DuplicateTool.xlsx";
+
             var filePath = Path.Combine(reportPath, filename);
 
             // Gather static properties (excluding NRDatas)
@@ -171,7 +180,7 @@ namespace Tools.Controllers
                 {
                     try
                     {
-                        extras = JsonSerializer.Deserialize<Dictionary<string, string>>(row.NRDatas);
+                        extras = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(row.NRDatas);
                         if (extras != null)
                         {
                             foreach (var key in extras.Keys)
@@ -248,11 +257,132 @@ namespace Tools.Controllers
                 MergedRows = mergedCount,
                 Consolidated = consolidate
             });
-
         }
 
 
-     
+
+        [HttpGet("MergeData")]
+        public async Task<IActionResult> MergeEnvelope(int ProjectId)
+        {
+            // Helper function to parse JSON and sum the values (same as your existing one)
+            int ParseJsonEnvelope(string value)
+            {
+                if (string.IsNullOrEmpty(value))
+                {
+                    return 0; // Return 0 if the value is null or empty
+                }
+
+                // Try parsing the string to an integer
+                if (int.TryParse(value, out var result))
+                {
+                    return result;
+                }
+                else
+                {
+                    // Log invalid value if it cannot be parsed
+                    Console.WriteLine($"Invalid value for envelope: {value}");
+                    return 0;
+                }
+            }
+
+            // Helper function to parse JSON and sum values for EnvelopeBreakages
+            int ParseJsonEnvBreakage(string value)
+            {
+                if (string.IsNullOrEmpty(value))
+                {
+                    return 0; // Return 0 if the value is null or empty
+                }
+
+                // Sum values from JSON string like {\"E100\":\"1\",\"E50\":\"1\",\"E10\":\"3\"}
+                try
+                {
+                    var envelopeData = Newtonsoft.Json.JsonConvert.DeserializeObject<Dictionary<string, int>>(value);
+                    return envelopeData?.Values.Sum() ?? 0;
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Error parsing envelope data: {ex.Message}");
+                    return 0;
+                }
+            }
+
+            // Step 1: Group NRData by CatchNo and sum the quantity
+            var NRdataGrouped = await _context.NRDatas
+                .Where(p => p.ProjectId == ProjectId)
+                .GroupBy(p => p.CatchNo)
+                .Select(g => new
+                {
+                    CatchNo = g.Key,
+                    TotalQuantity = g.Sum(p => p.Quantity),
+                    NRDataId = g.Select(p => p.Id).ToList()
+                })
+                .ToListAsync();
+
+            // Step 2: Fetch ExtrasEnvelope data and then group/sum in-memory
+            var extraEnvelopeData = await _context.ExtrasEnvelope
+                .Where(p => p.ProjectId == ProjectId)
+                .ToListAsync();
+
+            var ExtraEnvGrouped = extraEnvelopeData
+                .GroupBy(p => p.CatchNo)
+                .Select(g =>
+                {
+                    // Sum the quantities and the envelope values
+                    var totalQuantity = g.Sum(p => p.Quantity);
+                    var innerEnvelopeSum = g.Sum(p => ParseJsonEnvelope(p.InnerEnvelope));
+                    var outerEnvelopeSum = g.Sum(p => ParseJsonEnvelope(p.OuterEnvelope));
+
+                    // Log the summed values
+                    Console.WriteLine($"CatchNo: {g.Key}, TotalQuantity: {totalQuantity}, InnerEnvelopeSum: {innerEnvelopeSum}, OuterEnvelopeSum: {outerEnvelopeSum}");
+
+                    return new
+                    {
+                        CatchNo = g.Key,
+                        TotalQuantity = totalQuantity,
+                        InnerEnvelopeSum = innerEnvelopeSum,
+                        OuterEnvelopeSum = outerEnvelopeSum
+                    };
+                })
+                .ToList();
+
+            // Step 3: Fetch EnvelopeBreakages data and group by NRDataIds, then sum in-memory
+            var innerEnvData = await _context.EnvelopeBreakages
+                .Where(p => p.ProjectId == ProjectId)
+                .ToListAsync();
+
+            var processedInnerEnv = innerEnvData
+                .GroupBy(p => p.NrDataId) // Grouping by NrDataId
+                .Select(g => new
+                {
+                    NRDataId = g.Key,
+                    TotalInnerEnvelopes = g.Sum(p => ParseJsonEnvBreakage(p.InnerEnvelope)),
+                    TotalOuterEnvelopes = g.Sum(p => ParseJsonEnvBreakage(p.OuterEnvelope))
+                })
+                .ToList();
+
+            // Step 4: Merge NRDataGrouped and processedInnerEnv in-memory
+            var mergedResult = from nr in NRdataGrouped
+                               join ee in ExtraEnvGrouped on nr.CatchNo equals ee.CatchNo into extraEnvGroup
+                               from extraEnv in extraEnvGroup.DefaultIfEmpty()
+                               select new
+                               {
+                                   CatchNo = nr.CatchNo,
+                                   NRDataIds = nr.NRDataId,
+                                   TotalNRDataQuantity = nr.TotalQuantity + (extraEnv?.TotalQuantity ?? 0),
+                                   TotalInnerEnvEnvelopes = processedInnerEnv
+                               .Where(env => nr.NRDataId.Contains(env.NRDataId))
+                               .Sum(env => env.TotalInnerEnvelopes)
+                               + (extraEnv?.InnerEnvelopeSum ?? 0),  // Add ExtraEnv inner envelope
+
+                                   TotalOuterEnvEnvelopes = processedInnerEnv
+                               .Where(env => nr.NRDataId.Contains(env.NRDataId))
+                               .Sum(env => env.TotalOuterEnvelopes)
+                               + (extraEnv?.OuterEnvelopeSum ?? 0)
+                               };
+
+            return Ok(mergedResult);
+        }
+
 
 
 
