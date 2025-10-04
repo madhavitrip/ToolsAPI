@@ -1,7 +1,12 @@
-﻿namespace Tools.Models
+﻿using System.ComponentModel.DataAnnotations.Schema;
+using System.ComponentModel.DataAnnotations;
+
+namespace Tools.Models
 {
     public class EventLog
     {
+        [Key]
+        [DatabaseGenerated(DatabaseGeneratedOption.Identity)]
         public int EventId { get; set; }
         public string Event { get; set; }
         public string Category { get; set; }
