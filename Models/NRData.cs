@@ -12,7 +12,7 @@ namespace Tools.Models
         public string? CourseName {  get; set; }
         public string? SubjectName { get; set; }
         public string? CenterCode { get; set; }
-        public int? Quantity { get; set; }
+        public int Quantity { get; set; }
         public string? CatchNo { get; set; }
         public string? ExamDate { get; set; }
         public string? ExamTime { get; set; }

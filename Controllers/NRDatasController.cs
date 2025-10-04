@@ -9,6 +9,8 @@ using ERPToolsAPI.Data;
 using Tools.Models;
 using System.Text.Json;
 using System.Reflection;
+using Tools.Services;
+using Microsoft.CodeAnalysis;
 
 namespace Tools.Controllers
 {
@@ -17,10 +19,12 @@ namespace Tools.Controllers
     public class NRDatasController : ControllerBase
     {
         private readonly ERPToolsDbContext _context;
+        private readonly ILoggerService _loggerService;
 
-        public NRDatasController(ERPToolsDbContext context)
+        public NRDatasController(ERPToolsDbContext context, ILoggerService loggerService)
         {
             _context = context;
+            _loggerService = loggerService;
         }
 
         // GET: api/NRDatas
@@ -78,16 +82,19 @@ namespace Tools.Controllers
             try
             {
                 await _context.SaveChangesAsync();
+                _loggerService.LogEvent($"Updated NrData for {id}", "NRData", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
             }
-            catch (DbUpdateConcurrencyException)
+            catch (Exception ex)
             {
                 if (!NRDataExists(id))
                 {
+                    _loggerService.LogEvent($"Nrdata with ID {id} not found", "NRData", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
                     return NotFound();
                 }
                 else
                 {
-                    throw;
+                    _loggerService.LogError("Error updating NRData", ex.Message, nameof(NRDatasController));
+                    return StatusCode(500, "Internal server error");
                 }
             }
 
@@ -99,47 +106,56 @@ namespace Tools.Controllers
         [HttpPost]
         public async Task<ActionResult> PostNRData([FromBody] JsonElement inputData)
         {
-            int projectId = inputData.GetProperty("projectId").GetInt32();
-            var dataArray = inputData.GetProperty("data").EnumerateArray();
-
-            foreach (var item in dataArray)
+            try
             {
-                var nRData = new NRData();
-                nRData.ProjectId = projectId;
+                int projectId = inputData.GetProperty("projectId").GetInt32();
+                var dataArray = inputData.GetProperty("data").EnumerateArray();
 
-                var extraData = new Dictionary<string, string>();
-                var nRDataType = typeof(NRData);
-
-                foreach (var prop in item.EnumerateObject())
+                foreach (var item in dataArray)
                 {
-                    string key = prop.Name;
-                    string value = prop.Value.ToString();
+                    var nRData = new NRData();
+                    nRData.ProjectId = projectId;
 
-                    var propInfo = nRDataType.GetProperty(key.Replace(" ", ""),
-                                        System.Reflection.BindingFlags.IgnoreCase |
-                                        System.Reflection.BindingFlags.Public |
-                                        System.Reflection.BindingFlags.Instance);
+                    var extraData = new Dictionary<string, string>();
+                    var nRDataType = typeof(NRData);
 
-                    if (propInfo != null)
+                    foreach (var prop in item.EnumerateObject())
                     {
-                        var targetType = Nullable.GetUnderlyingType(propInfo.PropertyType) ?? propInfo.PropertyType;
-                        object convertedValue = string.IsNullOrEmpty(value) ? null : Convert.ChangeType(value, targetType);
-                        propInfo.SetValue(nRData, convertedValue);
+                        string key = prop.Name;
+                        string value = prop.Value.ToString();
+
+                        var propInfo = nRDataType.GetProperty(key.Replace(" ", ""),
+                                            System.Reflection.BindingFlags.IgnoreCase |
+                                            System.Reflection.BindingFlags.Public |
+                                            System.Reflection.BindingFlags.Instance);
+
+                        if (propInfo != null)
+                        {
+                            var targetType = Nullable.GetUnderlyingType(propInfo.PropertyType) ?? propInfo.PropertyType;
+                            object convertedValue = string.IsNullOrEmpty(value) ? null : Convert.ChangeType(value, targetType);
+                            propInfo.SetValue(nRData, convertedValue);
+                        }
+                        else
+                        {
+                            extraData[key] = value;
+                        }
                     }
-                    else
-                    {
-                        extraData[key] = value;
-                    }
+
+                    if (extraData.Count > 0)
+                        nRData.NRDatas = System.Text.Json.JsonSerializer.Serialize(extraData);
+
+                    _context.NRDatas.Add(nRData);
                 }
 
-                if (extraData.Count > 0)
-                    nRData.NRDatas = System.Text.Json.JsonSerializer.Serialize(extraData);
-
-                _context.NRDatas.Add(nRData);
+                await _context.SaveChangesAsync();
+                _loggerService.LogEvent($"Created new NRadat with ID {projectId}", "NRData", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
+                return Ok("Data inserted successfully");
             }
-
-            await _context.SaveChangesAsync();
-            return Ok("Data inserted successfully");
+            catch (Exception ex)
+            {
+                _loggerService.LogError("Error saving Nrdata", ex.Message, nameof(NRDatasController));
+                return StatusCode(500, "Internal Server Error");
+            }
         }
 
 
@@ -217,22 +233,30 @@ namespace Tools.Controllers
         [HttpPut]
         public async Task<ActionResult> ResolveConflicts(int ProjectId, [FromBody] ConflictResolutionDto payload)
         {
-         var NRdata = await _context.NRDatas.Where(a=>a.CatchNo == payload.CatchNo && a.ProjectId == ProjectId).ToListAsync();
-           if (!NRdata.Any())
-                return NotFound("No matching records found");
-
-            // Use reflection to update the dynamic conflicting field
-            foreach (var item in NRdata)
+            try
             {
-                var property = item.GetType().GetProperty(payload.UniqueField);
-                if (property != null && property.CanWrite)
-                {
-                    property.SetValue(item, payload.SelectedValue);
-                }
-            }
-            await _context.SaveChangesAsync();
+                var NRdata = await _context.NRDatas.Where(a => a.CatchNo == payload.CatchNo && a.ProjectId == ProjectId).ToListAsync();
+                if (!NRdata.Any())
+                    return NotFound("No matching records found");
 
-            return Ok("Conflict resolved successfully");
+                // Use reflection to update the dynamic conflicting field
+                foreach (var item in NRdata)
+                {
+                    var property = item.GetType().GetProperty(payload.UniqueField);
+                    if (property != null && property.CanWrite)
+                    {
+                        property.SetValue(item, payload.SelectedValue);
+                    }
+                }
+                await _context.SaveChangesAsync();
+                _loggerService.LogEvent($"Updated NRdata for CatchNo {payload.CatchNo} and ProjectId {ProjectId}", "NRData", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
+                return Ok("Conflict resolved successfully");
+            }
+            catch (Exception ex)
+            {
+                _loggerService.LogError("Error saving Nrdata", ex.Message, nameof(NRDatasController));
+                return StatusCode(500, "Internal Server Error");
+            }
         }
 
         public class ConflictResolutionDto
@@ -246,16 +270,24 @@ namespace Tools.Controllers
         [HttpDelete("{id}")]
         public async Task<IActionResult> DeleteNRData(int id)
         {
-            var nRData = await _context.NRDatas.FindAsync(id);
-            if (nRData == null)
+            try
             {
-                return NotFound();
+                var nRData = await _context.NRDatas.FindAsync(id);
+                if (nRData == null)
+                {
+                    return NotFound();
+                }
+
+                _context.NRDatas.Remove(nRData);
+                await _context.SaveChangesAsync();
+                _loggerService.LogEvent($"Deleted NRdata of {id}", "NRData", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
+                return NoContent();
             }
-
-            _context.NRDatas.Remove(nRData);
-            await _context.SaveChangesAsync();
-
-            return NoContent();
+            catch (Exception ex)
+            {
+                _loggerService.LogError("Error deleting Nrdata", ex.Message, nameof(NRDatasController));
+                return StatusCode(500, "Internal Server Error");
+            }
         }
 
         private bool NRDataExists(int id)
