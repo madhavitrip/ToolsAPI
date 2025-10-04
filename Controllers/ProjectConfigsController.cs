@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using ERPToolsAPI.Data;
 using Tools.Models;
+using Tools.Services;
 
 namespace Tools.Controllers
 {
@@ -15,10 +16,11 @@ namespace Tools.Controllers
     public class ProjectConfigsController : ControllerBase
     {
         private readonly ERPToolsDbContext _context;
-
-        public ProjectConfigsController(ERPToolsDbContext context)
+        private readonly ILoggerService _loggerService;
+        public ProjectConfigsController(ERPToolsDbContext context, ILoggerService loggerService)
         {
             _context = context;
+            _loggerService = loggerService;
         }
 
         // GET: api/ProjectConfigs
@@ -73,16 +75,20 @@ namespace Tools.Controllers
             try
             {
                 await _context.SaveChangesAsync();
+                _loggerService.LogEvent($"Updated ProjectConfig for {projectConfig.ProjectId}", "ProjectConfig", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
             }
-            catch (DbUpdateConcurrencyException)
+            catch (Exception ex)
             {
                 if (!ProjectConfigExists(id))
                 {
+                    _loggerService.LogEvent($"ProjectConfig with ID {id} not found", "ProjectConfig", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
                     return NotFound();
                 }
                 else
                 {
-                    throw;
+                    _loggerService.LogError("Error updating ProjectConfigs", ex.Message, nameof(ProjectConfigsController));
+                    return StatusCode(500, "Internal server error");
+
                 }
             }
 
@@ -94,31 +100,49 @@ namespace Tools.Controllers
         [HttpPost]
         public async Task<ActionResult<ProjectConfig>> PostProjectConfig(ProjectConfig projectConfig)
         {
-            var config = await _context.ProjectConfigs.Where(p=>p.ProjectId == projectConfig.ProjectId).FirstOrDefaultAsync();
-            if (config!= null)
+            try
             {
-                return Conflict(new { message = "A configuration already exists for this project." });
+                var config = await _context.ProjectConfigs.Where(p => p.ProjectId == projectConfig.ProjectId).FirstOrDefaultAsync();
+                if (config != null)
+                {
+                    _loggerService.LogEvent($"ProjectConfig for {config.ProjectId} already exists", "ProjectConfig", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
+                    return Conflict(new { message = "A configuration already exists for this project." });
+                }
+                _context.ProjectConfigs.Add(projectConfig);
+                await _context.SaveChangesAsync();
+                _loggerService.LogEvent($"Created a new ProjectConfig with ID {projectConfig.ProjectId}", "ProjectConfig", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
+                return CreatedAtAction("GetProjectConfig", new { id = projectConfig.Id }, projectConfig);
             }
-            _context.ProjectConfigs.Add(projectConfig);
-            await _context.SaveChangesAsync();
-
-            return CreatedAtAction("GetProjectConfig", new { id = projectConfig.Id }, projectConfig);
+            catch (Exception ex)
+            {
+                _loggerService.LogError("Error creating ProjectConfigs", ex.Message, nameof(ProjectConfigsController));
+                return StatusCode(500, "Internal server error");
+            }
         }
 
         // DELETE: api/ProjectConfigs/5
         [HttpDelete("{id}")]
         public async Task<IActionResult> DeleteProjectConfig(int id)
         {
-            var projectConfig = await _context.ProjectConfigs.FindAsync(id);
-            if (projectConfig == null)
+            try
             {
-                return NotFound();
+                var projectConfig = await _context.ProjectConfigs.FindAsync(id);
+                if (projectConfig == null)
+                {
+                    _loggerService.LogEvent($"ProjectConfig with ID {id} not found during delete", "ProjectConfig", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
+                    return NotFound();
+                }
+
+                _context.ProjectConfigs.Remove(projectConfig);
+                await _context.SaveChangesAsync();
+                _loggerService.LogEvent($"Deleted a ProjectConfig with ID {projectConfig.ProjectId}", "ProjectConfig", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
+                return NoContent();
             }
-
-            _context.ProjectConfigs.Remove(projectConfig);
-            await _context.SaveChangesAsync();
-
-            return NoContent();
+            catch (Exception ex)
+            {
+                _loggerService.LogError("Error deleting ProjectConfigs", ex.Message, nameof(ProjectConfigsController));
+                return StatusCode(500, "Internal server error");
+            }
         }
 
         private bool ProjectConfigExists(int id)

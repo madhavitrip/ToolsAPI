@@ -7,6 +7,8 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using ERPToolsAPI.Data;
 using Tools.Models;
+using static Tools.Controllers.ExtraEnvelopesController;
+using Tools.Services;
 
 namespace Tools.Controllers
 {
@@ -15,10 +17,11 @@ namespace Tools.Controllers
     public class ExtrasConfigurationsController : ControllerBase
     {
         private readonly ERPToolsDbContext _context;
-
-        public ExtrasConfigurationsController(ERPToolsDbContext context)
+        private readonly ILoggerService _loggerService;
+        public ExtrasConfigurationsController(ERPToolsDbContext context, ILoggerService loggerService)
         {
             _context = context;
+            _loggerService = loggerService;
         }
 
         // GET: api/ExtrasConfigurations
@@ -75,16 +78,21 @@ namespace Tools.Controllers
             try
             {
                 await _context.SaveChangesAsync();
+                _loggerService.LogEvent($"Updated ExtrasConfiguration with ID {id}", "ExtrasConfiguration", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
+
             }
-            catch (DbUpdateConcurrencyException)
+            catch (Exception ex)
             {
                 if (!ExtrasConfigurationExists(id))
                 {
+                    _loggerService.LogEvent($"ExtrasConfiguration with ID {id} not found during updating", "ExtrasConfiguration", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
+
                     return NotFound();
                 }
                 else
                 {
-                    throw;
+                    _loggerService.LogError("Error updating ExtrasConfiguration", ex.Message, nameof(ExtrasConfigurationsController));
+                    return StatusCode(500, "Internal server error");
                 }
             }
 
@@ -96,31 +104,50 @@ namespace Tools.Controllers
         [HttpPost]
         public async Task<ActionResult<ExtrasConfiguration>> PostExtrasConfiguration(ExtrasConfiguration extrasConfiguration)
         {
-            var extra = await _context.ExtraConfigurations.FindAsync(extrasConfiguration.ProjectId);
-            if (extra!= null)
+            try
             {
-                return Conflict(new { message = "A configuration already exists for this project." });
-            }
-            _context.ExtraConfigurations.Add(extrasConfiguration);
-            await _context.SaveChangesAsync();
+                var extra = await _context.ExtraConfigurations.FindAsync(extrasConfiguration.ProjectId);
+                if (extra != null)
+                {
+                    return Conflict(new { message = "A configuration already exists for this project." });
+                }
+                _context.ExtraConfigurations.Add(extrasConfiguration);
+                await _context.SaveChangesAsync();
+                _loggerService.LogEvent($"Created new ExtrasConfiguration with ProjectID {extrasConfiguration.ProjectId}", "ExtrasConfiguration", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
 
-            return CreatedAtAction("GetExtrasConfiguration", new { id = extrasConfiguration.Id }, extrasConfiguration);
+                return CreatedAtAction("GetExtrasConfiguration", new { id = extrasConfiguration.Id }, extrasConfiguration);
+            }
+            catch (Exception ex)
+            {
+                _loggerService.LogError("Error creating ExtrasConfiguration", ex.Message, nameof(ExtrasConfigurationsController));
+                return StatusCode(500, "Internal server error");
+            }
         }
 
         // DELETE: api/ExtrasConfigurations/5
         [HttpDelete("{id}")]
         public async Task<IActionResult> DeleteExtrasConfiguration(int id)
         {
-            var extrasConfiguration = await _context.ExtraConfigurations.FindAsync(id);
-            if (extrasConfiguration == null)
+            try
             {
-                return NotFound();
+                var extrasConfiguration = await _context.ExtraConfigurations.FindAsync(id);
+                if (extrasConfiguration == null)
+                {
+                    return NotFound();
+                }
+
+                _context.ExtraConfigurations.Remove(extrasConfiguration);
+                await _context.SaveChangesAsync();
+                _loggerService.LogEvent($"Deleted a ExtrasConfiguration with ID {id}", "ExtrasConfiguration", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
+
+                return NoContent();
+            }
+            catch (Exception ex)
+            {
+                _loggerService.LogError("Error deleting ExtrasConfiguration", ex.Message, nameof(ExtrasConfigurationsController));
+                return StatusCode(500, "Internal server error");
             }
 
-            _context.ExtraConfigurations.Remove(extrasConfiguration);
-            await _context.SaveChangesAsync();
-
-            return NoContent();
         }
 
         private bool ExtrasConfigurationExists(int id)

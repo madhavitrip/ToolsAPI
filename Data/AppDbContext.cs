@@ -7,8 +7,6 @@ namespace ERPToolsAPI.Data
     public class ERPToolsDbContext : DbContext
     {
         public ERPToolsDbContext(DbContextOptions<ERPToolsDbContext> options) : base(options) { }
-
-       // public DbSet<ToolRecord> ToolRecords { get; set; }
         public DbSet<UserLoginLog> UserLoginLogs { get; set; }
         public DbSet<ExcelUpload> ExcelUploads { get; set; }
         public DbSet <BoxCapacity> BoxCapacity { get; set; }
@@ -24,7 +22,8 @@ namespace ERPToolsAPI.Data
         public DbSet<ExtraType> ExtraType { get; set; }
         public DbSet<EnvelopeBreakage> EnvelopeBreakages { get; set; }
         public DbSet<Project> Projects { get; set; }
-
+        public DbSet<ErrorLog> ErrorLogs { get; set; }
+        public DbSet<EventLog> EventLogs { get; set; }
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);

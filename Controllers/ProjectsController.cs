@@ -10,6 +10,8 @@ using Tools.Models;
 using Microsoft.IdentityModel.Tokens;
 using System.IdentityModel.Tokens.Jwt;
 using Microsoft.AspNetCore.Authorization;
+using Tools.Services;
+using System.Data;
 
 namespace Tools.Controllers
 {
@@ -18,10 +20,11 @@ namespace Tools.Controllers
     public class ProjectsController : ControllerBase
     {
         private readonly ERPToolsDbContext _context;
-
-        public ProjectsController(ERPToolsDbContext context)
+        private readonly ILoggerService _loggerService;
+        public ProjectsController(ERPToolsDbContext context, ILoggerService loggerService)
         {
             _context = context;
+            _loggerService = loggerService;
         }
 
         // GET: api/Projects
@@ -116,15 +119,18 @@ namespace Tools.Controllers
             try
             {
                 await _context.SaveChangesAsync();
+                _loggerService.LogEvent($"Updated Project with ID {project.ProjectId}", "Projects", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
             }
-            catch (DbUpdateConcurrencyException)
+            catch (Exception ex)
             {
                 if (!ProjectExists(id))
                 {
+                    _loggerService.LogEvent($"Project with ID {id} not found during updating", "Projects", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
                     return NotFound();
                 }
                 else
                 {
+                    _loggerService.LogError("Error creating Project", ex.Message, nameof(ProjectsController));
                     throw;
                 }
             }
@@ -137,26 +143,43 @@ namespace Tools.Controllers
         [HttpPost]
         public async Task<ActionResult<Project>> PostProject(Project project)
         {
-            _context.Projects.Add(project);
-            await _context.SaveChangesAsync();
-
-            return CreatedAtAction("GetProject", new { id = project.ProjectId }, project);
+            try
+            {
+                _context.Projects.Add(project);
+                await _context.SaveChangesAsync();
+                _loggerService.LogEvent($"Created a new Project with ID {project.ProjectId}", "Projects", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
+                return CreatedAtAction("GetProject", new { id = project.ProjectId }, project);
+            }
+            catch (Exception ex)
+            {
+                _loggerService.LogError("Error creating Project", ex.Message, nameof(ProjectsController));
+                return StatusCode(500, "Internal server error");
+            }
         }
 
         // DELETE: api/Projects/5
         [HttpDelete("{id}")]
         public async Task<IActionResult> DeleteProject(int id)
         {
-            var project = await _context.Projects.FindAsync(id);
-            if (project == null)
+            try
             {
-                return NotFound();
+                var project = await _context.Projects.FindAsync(id);
+                if (project == null)
+                {
+                    _loggerService.LogEvent($"Project with ID {id} not found during delete", "Projects", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
+                    return NotFound();
+                }
+
+                _context.Projects.Remove(project);
+                await _context.SaveChangesAsync();
+                _loggerService.LogEvent($"Deleted a Project with ID {project.ProjectId}", "Projects", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
+                return NoContent();
             }
-
-            _context.Projects.Remove(project);
-            await _context.SaveChangesAsync();
-
-            return NoContent();
+            catch (Exception ex)
+            {
+                _loggerService.LogError("Error deleting Project", ex.Message, nameof(ProjectsController));
+                return StatusCode(500, "Internal server error");
+            }
         }
 
         private bool ProjectExists(int id)

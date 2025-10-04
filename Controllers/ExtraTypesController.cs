@@ -7,6 +7,9 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using ERPToolsAPI.Data;
 using Tools.Models;
+using Tools.Services;
+using Microsoft.CodeAnalysis;
+using static Tools.Controllers.ExtraEnvelopesController;
 
 namespace Tools.Controllers
 {
@@ -15,10 +18,11 @@ namespace Tools.Controllers
     public class ExtraTypesController : ControllerBase
     {
         private readonly ERPToolsDbContext _context;
-
-        public ExtraTypesController(ERPToolsDbContext context)
+        private readonly ILoggerService _loggerService;
+        public ExtraTypesController(ERPToolsDbContext context, ILoggerService loggerService)
         {
             _context = context;
+            _loggerService = loggerService;
         }
 
         // GET: api/ExtraTypes
@@ -57,16 +61,20 @@ namespace Tools.Controllers
             try
             {
                 await _context.SaveChangesAsync();
+                _loggerService.LogEvent($"Updated ExtraType for {id} ", "NRData", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
+
             }
-            catch (DbUpdateConcurrencyException)
+            catch (Exception ex)
             {
                 if (!ExtraTypeExists(id))
                 {
+                    _loggerService.LogEvent($"ExtraType with ID {id} not found during updating", "ExtraType", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
                     return NotFound();
                 }
                 else
                 {
-                    throw;
+                    _loggerService.LogError("Error updating ExtraType", ex.Message, nameof(ExtraTypesController));
+                    return StatusCode(500, "Internal server error");
                 }
             }
 
@@ -78,26 +86,43 @@ namespace Tools.Controllers
         [HttpPost]
         public async Task<ActionResult<ExtraType>> PostExtraType(ExtraType extraType)
         {
-            _context.ExtraType.Add(extraType);
-            await _context.SaveChangesAsync();
-
-            return CreatedAtAction("GetExtraType", new { id = extraType.ExtraTypeId }, extraType);
+            try
+            {
+                _context.ExtraType.Add(extraType);
+                await _context.SaveChangesAsync();
+                _loggerService.LogEvent($"Created a new ExtraType with ID {extraType.ExtraTypeId}", "ExtraType", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
+                return CreatedAtAction("GetExtraType", new { id = extraType.ExtraTypeId }, extraType);
+            }
+            catch (Exception ex)
+            {
+                _loggerService.LogError("Error creating ExtraTypes", ex.Message, nameof(ExtraTypesController));
+                return StatusCode(500, "Internal server error");
+            }
         }
 
         // DELETE: api/ExtraTypes/5
         [HttpDelete("{id}")]
         public async Task<IActionResult> DeleteExtraType(int id)
         {
-            var extraType = await _context.ExtraType.FindAsync(id);
-            if (extraType == null)
+            try
             {
-                return NotFound();
+                var extraType = await _context.ExtraType.FindAsync(id);
+                if (extraType == null)
+                {
+                    return NotFound();
+                }
+
+                _context.ExtraType.Remove(extraType);
+                await _context.SaveChangesAsync();
+                _loggerService.LogEvent($"Deleted a ExtraTypes with ID {id}", "ExtraTypes", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
+
+                return NoContent();
             }
-
-            _context.ExtraType.Remove(extraType);
-            await _context.SaveChangesAsync();
-
-            return NoContent();
+            catch (Exception ex)
+            {
+                _loggerService.LogError("Error creating ExtraTypes", ex.Message, nameof(ExtraTypesController));
+                return StatusCode(500, "Internal server error");
+            }
         }
 
         private bool ExtraTypeExists(int id)

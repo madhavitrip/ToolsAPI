@@ -12,6 +12,7 @@ using Humanizer;
 using Newtonsoft.Json;
 using Tools.Migrations;
 using NRData = Tools.Models.NRData;
+using Tools.Services;
 
 namespace Tools.Controllers
 {
@@ -20,97 +21,102 @@ namespace Tools.Controllers
     public class DuplicateController : ControllerBase
     {
         private readonly ERPToolsDbContext _context;
+        private readonly ILoggerService _logger;
 
-        public DuplicateController(ERPToolsDbContext context)
+        public DuplicateController(ERPToolsDbContext context,ILoggerService loggerService)
         {
             _context = context;
+            _logger = loggerService;
         }
 
         [HttpPost]
         public async Task<IActionResult> MergeFields(int ProjectId, string mergefields, bool consolidate, bool enhancement, double Percent)
         {
-            var mergeFields = mergefields.Split(',', StringSplitOptions.RemoveEmptyEntries)
-                                          .Select(f => f.Trim().ToLower()).ToList();
-
-
-            if (mergeFields.Count == 0)
-                return BadRequest("No merge fields provided.");
-
-            // Get project data
-            var data = await _context.NRDatas
-                .Where(p => p.ProjectId == ProjectId)
-                .ToListAsync();
-
-            if (!data.Any())
-                return NotFound("No data found for this project.");
-
-            // Group the data based on the merge fields
-            var grouped = data.GroupBy(d =>
+            try
             {
-                var key = new List<string>();
-                foreach (var field in mergeFields)
+                var mergeFields = mergefields.Split(',', StringSplitOptions.RemoveEmptyEntries)
+                                              .Select(f => f.Trim().ToLower()).ToList();
+
+
+                if (mergeFields.Count == 0)
+                    return BadRequest("No merge fields provided.");
+
+                // Get project data
+                var data = await _context.NRDatas
+                    .Where(p => p.ProjectId == ProjectId)
+                    .ToListAsync();
+
+                if (!data.Any())
+                    return NotFound("No data found for this project.");
+
+                // Group the data based on the merge fields
+                var grouped = data.GroupBy(d =>
                 {
-                    var value = d.GetType().GetProperty(field, BindingFlags.IgnoreCase | BindingFlags.Public | BindingFlags.Instance)
-                                 ?.GetValue(d)?.ToString()?.Trim() ?? "";
-                    key.Add(value);
-                }
-                return string.Join("|", key); // Composite key
-            });
-
-            int mergedCount = 0;
-            var deletedRows = new List<NRData>();
-            var reportRows = new List<NRData>();
-
-            foreach (var group in grouped)
-            {
-                reportRows.AddRange(group); // Include all rows for reporting
-
-                if (group.Count() <= 1)
-                    continue;
-
-                var keep = group.First();
-                if (consolidate)
-                {
-                    keep.Quantity = group.Sum(x => x.Quantity);
-
-                    var subjectValues = group.Select(x => x.SubjectName?.Trim())
-                                 .Where(v => !string.IsNullOrEmpty(v))
-                                 .Distinct(StringComparer.OrdinalIgnoreCase)
-                                 .ToList();
-
-                    keep.SubjectName = subjectValues.Any()
-                        ? string.Join(" / ", subjectValues)
-                        : keep.SubjectName;
-
-                    var courseValues = group.Select(x => x.CourseName?.Trim())
-                                            .Where(v => !string.IsNullOrEmpty(v))
-                                            .Distinct(StringComparer.OrdinalIgnoreCase)
-                                            .ToList();
-
-                    keep.CourseName = courseValues.Any()
-                        ? string.Join(" / ", courseValues)
-                        : keep.CourseName;
-                }
-
-
-                var duplicates = group.Skip(1).ToList();
-                _context.NRDatas.RemoveRange(duplicates);
-
-                mergedCount += duplicates.Count;
-                deletedRows.AddRange(duplicates);
-            }
-
-
-            if (enhancement)
-            {
-                foreach (var d in data)
-                {
-                    if (d.Quantity.HasValue)
+                    var key = new List<string>();
+                    foreach (var field in mergeFields)
                     {
-                        d.Quantity = (int?)Math.Round(Percent * d.Quantity.Value);
+                        var value = d.GetType().GetProperty(field, BindingFlags.IgnoreCase | BindingFlags.Public | BindingFlags.Instance)
+                                     ?.GetValue(d)?.ToString()?.Trim() ?? "";
+                        key.Add(value);
+                    }
+                    return string.Join("|", key); // Composite key
+                });
+
+                int mergedCount = 0;
+                var deletedRows = new List<NRData>();
+                var reportRows = new List<NRData>();
+
+                foreach (var group in grouped)
+                {
+                    reportRows.AddRange(group); // Include all rows for reporting
+
+                    if (group.Count() <= 1)
+                        continue;
+
+                    var keep = group.First();
+                    if (consolidate)
+                    {
+                        keep.Quantity = group.Sum(x => x.Quantity);
+                        var subjectValues = group.Select(x => x.SubjectName?.Trim())
+                                     .Where(v => !string.IsNullOrEmpty(v))
+                                     .Distinct(StringComparer.OrdinalIgnoreCase)
+                                     .ToList();
+
+                    if (subjectValues.Count > 1)
+                        keep.SubjectName = string.Join(" / ", subjectValues);
+                    else if (subjectValues.Count == 1)
+                        keep.SubjectName = subjectValues.First();
+
+                        var courseValues = group.Select(x => x.CourseName?.Trim())
+                                                .Where(v => !string.IsNullOrEmpty(v))
+                                                .Distinct(StringComparer.OrdinalIgnoreCase)
+                                                .ToList();
+
+                    if (courseValues.Count > 1)
+                        keep.CourseName = string.Join(" / ", courseValues);
+                    else if (courseValues.Count == 1)
+                        keep.CourseName = courseValues.First();
+                }
+
+
+                    var duplicates = group.Skip(1).ToList();
+                    _context.NRDatas.RemoveRange(duplicates);
+
+                    mergedCount += duplicates.Count;
+                    deletedRows.AddRange(duplicates);
+                }
+
+
+                if (enhancement)
+                {
+                    foreach (var d in data)
+                    {
+                        if (d.Quantity > 0)
+                        {
+                            d.Quantity = (int)Math.Round(Percent * d.Quantity);
+                        }
                     }
                 }
-            }
 
                 var innerEnv = await _context.ProjectConfigs.
                     Where(s => s.ProjectId == ProjectId).Select(s => s.Envelope)
@@ -152,7 +158,6 @@ namespace Tools.Controllers
             
             await _context.SaveChangesAsync();
             // Excel Report Path
-
             var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
             if (!Directory.Exists(reportPath))
             {
@@ -161,102 +166,108 @@ namespace Tools.Controllers
             }
 
             var filename = "DuplicateTool.xlsx";
-
             var filePath = Path.Combine(reportPath, filename);
 
-            // Gather static properties (excluding NRDatas)
-            var baseProperties = typeof(NRData).GetProperties(BindingFlags.Public | BindingFlags.Instance)
-                                               .Where(p => p.Name != "NRDatas")
-                                               .ToList();
+                // Gather static properties (excluding NRDatas)
+                var baseProperties = typeof(NRData).GetProperties(BindingFlags.Public | BindingFlags.Instance)
+                                                   .Where(p => p.Name != "NRDatas")
+                                                   .ToList();
 
-            var extraHeaders = new HashSet<string>();
-            var parsedRows = new List<(NRData row, Dictionary<string, string> extras)>();
+                var extraHeaders = new HashSet<string>();
+                var parsedRows = new List<(NRData row, Dictionary<string, string> extras)>();
 
-            foreach (var row in reportRows)
-            {
-                var extras = new Dictionary<string, string>();
-
-                if (!string.IsNullOrEmpty(row.NRDatas))
+                foreach (var row in reportRows)
                 {
-                    try
+                    var extras = new Dictionary<string, string>();
+
+                    if (!string.IsNullOrEmpty(row.NRDatas))
                     {
-                        extras = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(row.NRDatas);
-                        if (extras != null)
+                        try
                         {
-                            foreach (var key in extras.Keys)
-                                extraHeaders.Add(key);
+                            extras = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(row.NRDatas);
+                            if (extras != null)
+                            {
+                                foreach (var key in extras.Keys)
+                                    extraHeaders.Add(key);
+                            }
+                        }
+                        catch
+                        {
+                            // Optionally log parsing error
                         }
                     }
-                    catch
-                    {
-                        // Optionally log parsing error
-                    }
+
+                    parsedRows.Add((row, extras));
                 }
 
-                parsedRows.Add((row, extras));
-            }
-
-            using (var package = new ExcelPackage())
-            {
-                var ws = package.Workbook.Worksheets.Add("Merge Report");
-
-                // Write Headers
-                int col = 1;
-                foreach (var prop in baseProperties)
+                using (var package = new ExcelPackage())
                 {
-                    ws.Cells[1, col].Value = prop.Name;
-                    ws.Cells[1, col].Style.Font.Bold = true;
-                    col++;
-                }
+                    var ws = package.Workbook.Worksheets.Add("Merge Report");
 
-                var extraHeaderList = extraHeaders.OrderBy(k => k).ToList();
-                foreach (var key in extraHeaderList)
-                {
-                    ws.Cells[1, col].Value = key;
-                    ws.Cells[1, col].Style.Font.Bold = true;
-                    col++;
-                }
-
-                // Write Rows
-                int rowIdx = 2;
-                foreach (var (item, extras) in parsedRows)
-                {
-                    col = 1;
-
+                    // Write Headers
+                    int col = 1;
                     foreach (var prop in baseProperties)
                     {
-                        var value = prop.GetValue(item);
-                        ws.Cells[rowIdx, col++].Value = value?.ToString() ?? "";
+                        ws.Cells[1, col].Value = prop.Name;
+                        ws.Cells[1, col].Style.Font.Bold = true;
+                        col++;
                     }
 
+                    var extraHeaderList = extraHeaders.OrderBy(k => k).ToList();
                     foreach (var key in extraHeaderList)
                     {
-                        extras.TryGetValue(key, out var val);
-                        ws.Cells[rowIdx, col++].Value = val ?? "";
+                        ws.Cells[1, col].Value = key;
+                        ws.Cells[1, col].Style.Font.Bold = true;
+                        col++;
                     }
 
-                    // Highlight deleted rows
-                    if (deletedRows.Any(x => x.Id == item.Id))
+                    // Write Rows
+                    int rowIdx = 2;
+                    foreach (var (item, extras) in parsedRows)
                     {
-                        using (var range = ws.Cells[rowIdx, 1, rowIdx, col - 1])
+                        col = 1;
+
+                        foreach (var prop in baseProperties)
                         {
-                            range.Style.Fill.PatternType = ExcelFillStyle.Solid;
-                            range.Style.Fill.BackgroundColor.SetColor(Color.Red);
+                            var value = prop.GetValue(item);
+                            ws.Cells[rowIdx, col++].Value = value?.ToString() ?? "";
                         }
+
+                        foreach (var key in extraHeaderList)
+                        {
+                            extras.TryGetValue(key, out var val);
+                            ws.Cells[rowIdx, col++].Value = val ?? "";
+                        }
+
+                        // Highlight deleted rows
+                        if (deletedRows.Any(x => x.Id == item.Id))
+                        {
+                            using (var range = ws.Cells[rowIdx, 1, rowIdx, col - 1])
+                            {
+                                range.Style.Fill.PatternType = ExcelFillStyle.Solid;
+                                range.Style.Fill.BackgroundColor.SetColor(Color.Red);
+                            }
+                        }
+
+                        rowIdx++;
                     }
 
-                    rowIdx++;
+                    ws.Cells[ws.Dimension.Address].AutoFitColumns();
+                    package.SaveAs(new FileInfo(filePath));
+                  
                 }
 
-                ws.Cells[ws.Dimension.Address].AutoFitColumns();
-                package.SaveAs(new FileInfo(filePath));
+                return Ok(new
+                {
+                    MergedRows = mergedCount,
+                    Consolidated = consolidate
+                });
             }
-
-            return Ok(new
+            catch (Exception ex)
             {
-                MergedRows = mergedCount,
-                Consolidated = consolidate
-            });
+                _logger.LogError("Error solving duplicates", ex.Message, nameof(DuplicateController));
+                return StatusCode(500, "Internal server error");
+            }
         }
 
 

@@ -7,6 +7,8 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using ERPToolsAPI.Data;
 using Tools.Models;
+using Tools.Services;
+using Microsoft.CodeAnalysis;
 
 namespace Tools.Controllers
 {
@@ -15,10 +17,12 @@ namespace Tools.Controllers
     public class EnvelopeTypesController : ControllerBase
     {
         private readonly ERPToolsDbContext _context;
+        private readonly ILoggerService _loggerService;
 
-        public EnvelopeTypesController(ERPToolsDbContext context)
+        public EnvelopeTypesController(ERPToolsDbContext context, ILoggerService loggerService)
         {
             _context = context;
+            _loggerService = loggerService;
         }
 
         // GET: api/EnvelopeTypes
@@ -56,17 +60,22 @@ namespace Tools.Controllers
 
             try
             {
+
                 await _context.SaveChangesAsync();
+                _loggerService.LogEvent($"Updated EnvelopeType with {id}", "EnvelopeType", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
+
             }
-            catch (DbUpdateConcurrencyException)
+            catch (Exception ex)
             {
                 if (!EnvelopeTypeExists(id))
                 {
+                    _loggerService.LogEvent($"EnvelopeType with ID {id} not found during updating", "EnvelopeType", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
                     return NotFound();
                 }
                 else
                 {
-                    throw;
+                    _loggerService.LogError("Error updating EnvelopeType", ex.Message, nameof(EnvelopeTypesController));
+                    return StatusCode(500, "Internal Server Error");
                 }
             }
 
@@ -78,26 +87,42 @@ namespace Tools.Controllers
         [HttpPost]
         public async Task<ActionResult<EnvelopeType>> PostEnvelopeType(EnvelopeType envelopeType)
         {
-            _context.EnvelopesTypes.Add(envelopeType);
-            await _context.SaveChangesAsync();
-
-            return CreatedAtAction("GetEnvelopeType", new { id = envelopeType.EnvelopeId }, envelopeType);
+            try
+            {
+                _context.EnvelopesTypes.Add(envelopeType);
+                await _context.SaveChangesAsync();
+                _loggerService.LogEvent($"Created a new EnvelopeType with ID {envelopeType.EnvelopeId}", "EnvelopeType", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
+                return CreatedAtAction("GetEnvelopeType", new { id = envelopeType.EnvelopeId }, envelopeType);
+            }
+            catch (Exception ex)
+            {
+                _loggerService.LogError("Error creating EnvelopeType", ex.Message, nameof(EnvelopeTypesController));
+                return StatusCode(500, "Internal Server Error");
+            }
         }
 
         // DELETE: api/EnvelopeTypes/5
         [HttpDelete("{id}")]
         public async Task<IActionResult> DeleteEnvelopeType(int id)
         {
-            var envelopeType = await _context.EnvelopesTypes.FindAsync(id);
-            if (envelopeType == null)
+            try
             {
-                return NotFound();
+                var envelopeType = await _context.EnvelopesTypes.FindAsync(id);
+                if (envelopeType == null)
+                {
+                    return NotFound();
+                }
+
+                _context.EnvelopesTypes.Remove(envelopeType);
+                await _context.SaveChangesAsync();
+                _loggerService.LogEvent($"Deleted a EnvelopeType with ID {id}", "EnvelopeType", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
+                return NoContent();
             }
-
-            _context.EnvelopesTypes.Remove(envelopeType);
-            await _context.SaveChangesAsync();
-
-            return NoContent();
+            catch (Exception ex)
+            {
+                _loggerService.LogError($"Error deleting EnvelopeType with Id{id}", ex.Message, nameof(EnvelopeTypesController));
+                return StatusCode(500, "Internal Server Error");
+            }
         }
 
         private bool EnvelopeTypeExists(int id)
