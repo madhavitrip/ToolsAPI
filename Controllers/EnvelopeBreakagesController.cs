@@ -606,7 +606,7 @@ namespace Tools.Controllers
             // 📁 Skip generation if file already exists
             if (System.IO.File.Exists(filePath))
             {
-                return Ok(new { message = "File already exists", filePath }); // Still return data for UI
+                System.IO.File.Delete(filePath);
             }
 
             // Step 1: Remove duplicates (CatchNo + CenterCode), preserving first occurrence
@@ -1215,7 +1215,10 @@ namespace Tools.Controllers
 
                 var fileName = $"BreakingReport.xlsx";
                 var filePath = Path.Combine(reportPath, fileName);
-
+                if (System.IO.File.Exists(filePath))
+                {
+                    System.IO.File.Delete(filePath);
+                }
                 var fileInfo = new FileInfo(filePath);
                 package.SaveAs(fileInfo);
 

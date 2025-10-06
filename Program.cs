@@ -6,13 +6,14 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using OfficeOpenXml;
 using System.Reflection;
+using Tools.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddDbContext<ERPToolsDbContext>(options =>
     options.UseMySql(builder.Configuration.GetConnectionString("ERPToolsDb"),
         ServerVersion.AutoDetect(builder.Configuration.GetConnectionString("ERPToolsDb"))));
-
+builder.Services.AddScoped<ILoggerService, LoggerService>();
 // Add JWT Auth
 
 
