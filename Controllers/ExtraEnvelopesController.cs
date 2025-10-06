@@ -173,17 +173,18 @@ namespace Tools.Controllers
                     .Select(e => new { e.ProjectId, e.CatchNo, e.ExtraId })
                     .ToListAsync();
 
-                var duplicates = envelopesToAdd
-                    .Where(e => existingCombinations.Any(existing =>
-                        existing.ProjectId == e.ProjectId &&
-                        existing.CatchNo == e.CatchNo &&
-                        existing.ExtraId == e.ExtraId))
-                    .ToList();
+                var duplicatesInDb = _context.ExtrasEnvelope
+    .Where(e => e.ProjectId == ProjectId)
+    .AsEnumerable() // Move evaluation to memory
+    .Where(e => envelopesToAdd.Any(newE =>
+        newE.CatchNo == e.CatchNo && newE.ExtraId == e.ExtraId))
+    .ToList();
 
-                if (duplicates.Any())
+                if (duplicatesInDb.Any())
                 {
-                    var duplicateList = string.Join(", ", duplicates.Select(d => $"CatchNo: {d.CatchNo}, ExtraId: {d.ExtraId}"));
-                    return BadRequest($"Duplicate ExtraEnvelopes detected for: {duplicateList}");
+                    // Remove existing duplicates
+                    _context.ExtrasEnvelope.RemoveRange(duplicatesInDb);
+                    await _context.SaveChangesAsync();
                 }
 
                 await _context.ExtrasEnvelope.AddRangeAsync(envelopesToAdd);
@@ -275,7 +276,7 @@ namespace Tools.Controllers
                 // 📁 Skip generation if file already exists
                 if (System.IO.File.Exists(filePath))
                 {
-                    return Ok(new { message = "File already exists", filePath }); // Still return data for UI
+                    System.IO.File.Delete(filePath);
                 }
 
                 using (var package = new ExcelPackage())
@@ -308,7 +309,7 @@ namespace Tools.Controllers
             }
             catch (Exception ex)
             {
-                _loggerService.LogError("Error creating ExtraEnvelope", ex.Message, nameof(ExtraEnvelopesController));
+               // _loggerService.LogError("Error creating ExtraEnvelope", ex.Message, nameof(ExtraEnvelopesController));
                 return StatusCode(500, "Internal server error");
             }
         }

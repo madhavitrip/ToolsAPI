@@ -110,12 +110,12 @@ namespace Tools.Controllers
                 }
                 _context.ProjectConfigs.Add(projectConfig);
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Created a new ProjectConfig with ID {projectConfig.ProjectId}", "ProjectConfig", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
+              //  _loggerService.LogEvent($"Created a new ProjectConfig with ID {projectConfig.ProjectId}", "ProjectConfig", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
                 return CreatedAtAction("GetProjectConfig", new { id = projectConfig.Id }, projectConfig);
             }
             catch (Exception ex)
             {
-                _loggerService.LogError("Error creating ProjectConfigs", ex.Message, nameof(ProjectConfigsController));
+              //  _loggerService.LogError("Error creating ProjectConfigs", ex.Message, nameof(ProjectConfigsController));
                 return StatusCode(500, "Internal server error");
             }
         }

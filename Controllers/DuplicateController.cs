@@ -23,7 +23,7 @@ namespace Tools.Controllers
         private readonly ERPToolsDbContext _context;
         private readonly ILoggerService _logger;
 
-        public DuplicateController(ERPToolsDbContext context,ILoggerService loggerService)
+        public DuplicateController(ERPToolsDbContext context, ILoggerService loggerService)
         {
             _context = context;
             _logger = loggerService;
@@ -82,21 +82,21 @@ namespace Tools.Controllers
                                      .Distinct(StringComparer.OrdinalIgnoreCase)
                                      .ToList();
 
-                    if (subjectValues.Count > 1)
-                        keep.SubjectName = string.Join(" / ", subjectValues);
-                    else if (subjectValues.Count == 1)
-                        keep.SubjectName = subjectValues.First();
+                        if (subjectValues.Count > 1)
+                            keep.SubjectName = string.Join(" / ", subjectValues);
+                        else if (subjectValues.Count == 1)
+                            keep.SubjectName = subjectValues.First();
 
                         var courseValues = group.Select(x => x.CourseName?.Trim())
                                                 .Where(v => !string.IsNullOrEmpty(v))
                                                 .Distinct(StringComparer.OrdinalIgnoreCase)
                                                 .ToList();
 
-                    if (courseValues.Count > 1)
-                        keep.CourseName = string.Join(" / ", courseValues);
-                    else if (courseValues.Count == 1)
-                        keep.CourseName = courseValues.First();
-                }
+                        if (courseValues.Count > 1)
+                            keep.CourseName = string.Join(" / ", courseValues);
+                        else if (courseValues.Count == 1)
+                            keep.CourseName = courseValues.First();
+                    }
 
 
                     var duplicates = group.Skip(1).ToList();
@@ -155,19 +155,22 @@ namespace Tools.Controllers
 
                 }
 
-            
-            await _context.SaveChangesAsync();
-            // Excel Report Path
-            var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
-            if (!Directory.Exists(reportPath))
-            {
-                // Create the directory if it doesn't exist
-                Directory.CreateDirectory(reportPath);
-            }
 
-            var filename = "DuplicateTool.xlsx";
-            var filePath = Path.Combine(reportPath, filename);
+                await _context.SaveChangesAsync();
+                // Excel Report Path
+                var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
+                if (!Directory.Exists(reportPath))
+                {
+                    // Create the directory if it doesn't exist
+                    Directory.CreateDirectory(reportPath);
+                }
 
+                var filename = "DuplicateTool.xlsx";
+                var filePath = Path.Combine(reportPath, filename);
+                if (System.IO.File.Exists(filePath))
+                {
+                    System.IO.File.Delete(filePath);
+                }
                 // Gather static properties (excluding NRDatas)
                 var baseProperties = typeof(NRData).GetProperties(BindingFlags.Public | BindingFlags.Instance)
                                                    .Where(p => p.Name != "NRDatas")
@@ -254,7 +257,7 @@ namespace Tools.Controllers
 
                     ws.Cells[ws.Dimension.Address].AutoFitColumns();
                     package.SaveAs(new FileInfo(filePath));
-                  
+
                 }
 
                 return Ok(new
