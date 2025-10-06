@@ -103,10 +103,12 @@ namespace Tools.Controllers
             try
             {
                 var config = await _context.ProjectConfigs.Where(p => p.ProjectId == projectConfig.ProjectId).FirstOrDefaultAsync();
+                
                 if (config != null)
                 {
                     _loggerService.LogEvent($"ProjectConfig for {config.ProjectId} already exists", "ProjectConfig", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
-                    return Conflict(new { message = "A configuration already exists for this project." });
+                   _context.ProjectConfigs.Remove(config);
+                    await _context.SaveChangesAsync();
                 }
                 _context.ProjectConfigs.Add(projectConfig);
                 await _context.SaveChangesAsync();
