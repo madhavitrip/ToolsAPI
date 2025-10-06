@@ -109,17 +109,19 @@ namespace Tools.Controllers
                 var extra = await _context.ExtraConfigurations.FindAsync(extrasConfiguration.ProjectId);
                 if (extra != null)
                 {
-                    return Conflict(new { message = "A configuration already exists for this project." });
+                    _loggerService.LogEvent($"ProjectConfig for {extra.ProjectId} already exists", "ProjectConfig", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
+                    _context.ExtraConfigurations.Remove(extra);
+                    await _context.SaveChangesAsync();
                 }
                 _context.ExtraConfigurations.Add(extrasConfiguration);
                 await _context.SaveChangesAsync();
-                //_loggerService.LogEvent($"Created new ExtrasConfiguration with ProjectID {extrasConfiguration.ProjectId}", "ExtrasConfiguration", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
+                _loggerService.LogEvent($"Created new ExtrasConfiguration with ProjectID {extrasConfiguration.ProjectId}", "ExtrasConfiguration", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
 
                 return CreatedAtAction("GetExtrasConfiguration", new { id = extrasConfiguration.Id }, extrasConfiguration);
             }
             catch (Exception ex)
             {
-              //  _loggerService.LogError("Error creating ExtrasConfiguration", ex.Message, nameof(ExtrasConfigurationsController));
+               _loggerService.LogError("Error creating ExtrasConfiguration", ex.Message, nameof(ExtrasConfigurationsController));
                 return StatusCode(500, "Internal server error");
             }
         }
