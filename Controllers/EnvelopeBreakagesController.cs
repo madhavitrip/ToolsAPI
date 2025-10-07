@@ -368,6 +368,10 @@ namespace Tools.Controllers
                 .Where(p => p.ProjectId == ProjectId)
                 .Select(p => p.Envelope)
                 .ToListAsync();
+            var capacity = await _context.ProjectConfigs
+                .Where (p => p.ProjectId == ProjectId)
+                .Select (p => p.BoxCapacity)
+                .FirstOrDefaultAsync();
 
             var envelopeIds = await _context.ProjectConfigs
            .Where(p => p.ProjectId == ProjectId)
@@ -725,20 +729,20 @@ namespace Tools.Controllers
                 bool mergeChanged = (prevMergeKey != null && mergeKey != prevMergeKey);
 
                 // ---- Rule 2: page overflow
-                bool overflow = (runningPages + totalPages > 17000);
+                bool overflow = (runningPages + totalPages > capacity);
 
                 if (mergeChanged || overflow)
                 {
                     // case: overflow detected
                     if (overflow)
                     {
-                        int leftover = (runningPages + totalPages) - 17000;
+                        int leftover = (runningPages + totalPages) - capacity;
                         int filled = totalPages - leftover;
 
                         // if leftover < 50% threshold, split into two balanced boxes
-                        if (leftover > 0 && leftover < 8500)
+                        if (leftover > 0 && leftover < capacity/2)
                         {
-                            int combined = 17000 + leftover;
+                            int combined = capacity + leftover;
                             int half = combined / 2;
 
                             // Adjust: previous box gets half, new box gets half

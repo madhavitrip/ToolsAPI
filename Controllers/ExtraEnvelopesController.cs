@@ -35,7 +35,7 @@ namespace Tools.Controllers
         [HttpGet]
         public async Task<ActionResult<IEnumerable<ExtraEnvelopes>>> GetExtrasEnvelope(int ProjectId)
         {
-            var NrData = await _context.NRDatas.Where(p=>p.ProjectId == ProjectId).ToListAsync();
+            var NrData = await _context.NRDatas.Where(p => p.ProjectId == ProjectId).ToListAsync();
 
             return await _context.ExtrasEnvelope.ToListAsync();
         }
@@ -196,15 +196,8 @@ namespace Tools.Controllers
                     .Where(x => x.ProjectId == ProjectId)
                     .ToListAsync();
 
-                var envelopeBreakages = await _context.EnvelopeBreakages
-                    .Where(x => x.ProjectId == ProjectId)
-                    .ToListAsync();
-
                 var extraconfig = await _context.ExtraConfigurations
                     .Where(x => x.ProjectId == ProjectId).ToListAsync();
-
-
-                var envelopeDict = envelopeBreakages.ToDictionary(e => e.NrDataId);
 
                 var groupedByNodal = allNRData.GroupBy(x => x.NodalCode).ToList();
 
@@ -216,13 +209,6 @@ namespace Tools.Controllers
 
                 foreach (var nodalGroup in groupedByNodal)
                 {
-                    foreach (var row in nodalGroup)
-                    {
-                        var dict = NRDataToDictionary(row, envelopeDict, extraHeaders, innerKeys, outerKeys);
-                        allRows.Add(dict);
-                    }
-
-                    // ➕ Add ExtraTypeId = 1 for this nodal group
                     var catchNos = nodalGroup.Select(x => x.CatchNo).ToHashSet();
                     var extras1 = envelopesToAdd.Where(e => e.ExtraId == 1 && catchNos.Contains(e.CatchNo)).ToList();
 
@@ -309,7 +295,7 @@ namespace Tools.Controllers
             }
             catch (Exception ex)
             {
-               // _loggerService.LogError("Error creating ExtraEnvelope", ex.Message, nameof(ExtraEnvelopesController));
+                _loggerService.LogError("Error creating ExtraEnvelope", ex.Message, nameof(ExtraEnvelopesController));
                 return StatusCode(500, "Internal server error");
             }
         }
@@ -342,11 +328,11 @@ namespace Tools.Controllers
                     break;
                 case 2:
                     dict["CenterCode"] = "University Extra";
-                 
+
                     break;
                 case 3:
                     dict["CenterCode"] = "Office Extra";
-                 
+
                     break;
                 default:
                     dict["CenterCode"] = "Extra";
@@ -393,75 +379,6 @@ namespace Tools.Controllers
 
             return dict;
         }
-
-
-        private Dictionary<string, object> NRDataToDictionary(
-        Tools.Models.NRData row,
-            Dictionary<int, Tools.Models.EnvelopeBreakage> envMap,
-            HashSet<string> extraKeys,
-            HashSet<string> innerKeys,
-            HashSet<string> outerKeys)
-        {
-            var dict = new Dictionary<string, object>
-            {
-                ["CourseName"] = row.CourseName,
-                ["SubjectName"] = row.SubjectName,
-                ["CatchNo"] = row.CatchNo,
-                ["CenterCode"] = row.CenterCode,
-                ["ExamTime"] = row.ExamTime,
-                ["ExamDate"] = row.ExamDate,
-                ["Quantity"] = row.Quantity,
-                ["NodalCode"] = row.NodalCode,
-                ["NRDatas"] = row.NRDatas
-            };
-
-            if (!string.IsNullOrEmpty(row.NRDatas))
-            {
-                try
-                {
-                    var extras = JsonSerializer.Deserialize<Dictionary<string, string>>(row.NRDatas);
-                    if (extras != null)
-                    {
-                        foreach (var kvp in extras)
-                        {
-                            dict[kvp.Key] = kvp.Value;
-                            extraKeys.Add(kvp.Key);
-                        }
-                    }
-                }
-                catch { }
-            }
-
-            if (envMap.TryGetValue(row.Id, out var env))
-            {
-                void ParseEnv(string? json, HashSet<string> keySet, string prefix)
-                {
-                    if (!string.IsNullOrEmpty(json))
-                    {
-                        try
-                        {
-                            var envDict = JsonSerializer.Deserialize<Dictionary<string, string>>(json);
-                            if (envDict != null)
-                            {
-                                foreach (var kvp in envDict)
-                                {
-                                    string key = $"{prefix}_{kvp.Key}";
-                                    dict[key] = kvp.Value;
-                                    keySet.Add(key);
-                                }
-                            }
-                        }
-                        catch { }
-                    }
-                }
-
-                ParseEnv(env.InnerEnvelope, innerKeys, "Inner");
-                ParseEnv(env.OuterEnvelope, outerKeys, "Outer");
-            }
-
-            return dict;
-        }
-
 
         private int GetEnvelopeCapacity(string envelopeCode)
         {
