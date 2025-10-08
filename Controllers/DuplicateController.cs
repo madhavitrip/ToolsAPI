@@ -78,7 +78,7 @@ namespace Tools.Controllers
 
                     var keep = group.First();
 
-                        keep.Quantity = group.Sum(x => x.Quantity);
+                        keep.Quantity = group.Sum(x => x.NRQuantity);
                         var subjectValues = group.Select(x => x.SubjectName?.Trim())
                                      .Where(v => !string.IsNullOrEmpty(v))
                                      .Distinct(StringComparer.OrdinalIgnoreCase)
