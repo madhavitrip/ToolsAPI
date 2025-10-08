@@ -923,8 +923,6 @@ namespace Tools.Controllers
             int serialnumber = 1;
             string prevNodalCode = null;
             string prevCatchNo = null;
-
-            // For CenterEnv tracking
             string prevMergeField = null; // CatchNo + CenterCode
             string prevExtraMergeField = null;
             int centerEnvCounter = 0;
@@ -953,7 +951,7 @@ namespace Tools.Controllers
             }
 
             // Helper method to add extra envelopes
-            void AddExtraWithEnv(ExtraEnvelopes extra)
+            void AddExtraWithEnv(ExtraEnvelopes extra, string examDate, string examTime, string course, string subject)
             {
                 var extraConfig = extrasconfig.FirstOrDefault(e => e.ExtraType == extra.ExtraId);
                 int envCapacity = 100; // default fallback
@@ -1010,6 +1008,10 @@ namespace Tools.Controllers
                             _ => "Extra"
                         },
                         CenterEnv = extraCenterEnvCounter, 
+                        ExamDate = examDate,
+                        ExamTime = examTime,
+                        CourseName = course,
+                        SubjectName = subject,
                         TotalEnv = totalEnv,
                         Env = $"{j}/{totalEnv}"
                     });
@@ -1018,10 +1020,16 @@ namespace Tools.Controllers
                 }
             }
 
+            bool serialResetFlag = false;
             for (int i = 0; i < nrData.Count; i++)
             {
                 var current = nrData[i];
-
+                if (prevCatchNo != null && current.CatchNo != prevCatchNo)
+                {
+                    // Reset serial number if CatchNo changes
+                    serialnumber = 1;  // Start the serial number from 1 again
+                    serialResetFlag = true; // Indicate that serial number was reset
+                }
                 // ➕ Nodal Extra (1) when NodalCode changes
                 if (prevNodalCode != null && current.NodalCode != prevNodalCode)
                 {
@@ -1030,7 +1038,7 @@ namespace Tools.Controllers
                         var extrasToAdd = extras.Where(e => e.ExtraId == 1 && e.CatchNo == prevCatchNo).ToList();
                         foreach (var extra in extrasToAdd)
                         {
-                            AddExtraWithEnv(extra);
+                            AddExtraWithEnv(extra,current.ExamDate,current.ExamTime,current.SubjectName,current.CourseName);
                         }
                         nodalExtrasAddedForCatchNo.Add(prevCatchNo);
                     }
@@ -1046,7 +1054,7 @@ namespace Tools.Controllers
                             var extrasToAdd = extras.Where(e => e.ExtraId == extraId && e.CatchNo == prevCatchNo).ToList();
                             foreach (var extra in extrasToAdd)
                             {
-                                AddExtraWithEnv(extra);
+                                AddExtraWithEnv(extra, current.ExamDate, current.ExamTime, current.SubjectName, current.CourseName);
                             }
                             catchExtrasAdded.Add((extraId, prevCatchNo));
                         }
@@ -1129,7 +1137,14 @@ namespace Tools.Controllers
                     var extrasToAdd = extras.Where(e => e.ExtraId == 1 && e.CatchNo == prevCatchNo).ToList();
                     foreach (var extra in extrasToAdd)
                     {
-                        AddExtraWithEnv(extra);
+                        var current = nrData.FirstOrDefault(p => p.CatchNo == prevCatchNo);
+
+                        if (current != null)
+                        {
+                            // Pass the required parameters explicitly
+                            AddExtraWithEnv(extra, current.ExamDate, current.ExamTime, current.SubjectName, current.CourseName);
+                        }
+                        
                     }
                 }
 
@@ -1140,7 +1155,12 @@ namespace Tools.Controllers
                         var extrasToAdd = extras.Where(e => e.ExtraId == extraId && e.CatchNo == prevCatchNo).ToList();
                         foreach (var extra in extrasToAdd)
                         {
-                            AddExtraWithEnv(extra);
+                            var current = nrData.FirstOrDefault(p => p.CatchNo == prevCatchNo);
+                            if (current != null)
+                            {
+                                // Pass the required parameters explicitly
+                                AddExtraWithEnv(extra, current.ExamDate, current.ExamTime, current.SubjectName, current.CourseName);
+                            }
                         }
                     }
                 }
