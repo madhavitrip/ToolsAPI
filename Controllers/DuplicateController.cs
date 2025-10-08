@@ -30,21 +30,24 @@ namespace Tools.Controllers
         }
 
         [HttpPost]
-        public async Task<IActionResult> MergeFields(int ProjectId, string mergefields, bool consolidate, bool enhancement, double Percent)
+        public async Task<IActionResult> MergeFields(int ProjectId)
         {
             try
             {
-                var mergeFields = mergefields.Split(',', StringSplitOptions.RemoveEmptyEntries)
-                                              .Select(f => f.Trim().ToLower()).ToList();
-
-
-                if (mergeFields.Count == 0)
-                    return BadRequest("No merge fields provided.");
-
                 // Get project data
                 var data = await _context.NRDatas
                     .Where(p => p.ProjectId == ProjectId)
                     .ToListAsync();
+
+                var projectconfig = await _context.ProjectConfigs
+                    .Where(p => p.ProjectId == ProjectId).FirstOrDefaultAsync();
+
+                var mergeFieldIds = projectconfig.DuplicateCriteria.ToList();
+
+                var fieldNames = await _context.Fields
+              .Where(f => mergeFieldIds.Contains(f.FieldId)) // Match with the field IDs
+             .Select(f => f.Name) // Get the field names
+             .ToListAsync();
 
                 if (!data.Any())
                     return NotFound("No data found for this project.");
@@ -53,7 +56,7 @@ namespace Tools.Controllers
                 var grouped = data.GroupBy(d =>
                 {
                     var key = new List<string>();
-                    foreach (var field in mergeFields)
+                    foreach (var field in fieldNames)
                     {
                         var value = d.GetType().GetProperty(field, BindingFlags.IgnoreCase | BindingFlags.Public | BindingFlags.Instance)
                                      ?.GetValue(d)?.ToString()?.Trim() ?? "";
@@ -74,8 +77,7 @@ namespace Tools.Controllers
                         continue;
 
                     var keep = group.First();
-                    if (consolidate)
-                    {
+
                         keep.Quantity = group.Sum(x => x.Quantity);
                         var subjectValues = group.Select(x => x.SubjectName?.Trim())
                                      .Where(v => !string.IsNullOrEmpty(v))
@@ -96,7 +98,7 @@ namespace Tools.Controllers
                             keep.CourseName = string.Join(" / ", courseValues);
                         else if (courseValues.Count == 1)
                             keep.CourseName = courseValues.First();
-                    }
+                    
 
 
                     var duplicates = group.Skip(1).ToList();
@@ -107,13 +109,13 @@ namespace Tools.Controllers
                 }
 
 
-                if (enhancement)
+                if (projectconfig.Enhancement>0)
                 {
                     foreach (var d in data)
                     {
                         if (d.Quantity > 0)
                         {
-                            d.Quantity = (int)Math.Round(Percent * d.Quantity);
+                            d.Quantity = (int)Math.Round(projectconfig.Enhancement * d.Quantity);
                         }
                     }
                 }
@@ -262,8 +264,7 @@ namespace Tools.Controllers
 
                 return Ok(new
                 {
-                    MergedRows = mergedCount,
-                    Consolidated = consolidate
+                    MergedRows = mergedCount
                 });
             }
             catch (Exception ex)
