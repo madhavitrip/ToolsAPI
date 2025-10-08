@@ -326,7 +326,7 @@ namespace Tools.Controllers
             await _context.SaveChangesAsync();
 
             using var client = new HttpClient();
-            var response = await client.GetAsync($"http://192.168.10.208:81/API/api/EnvelopeBreakages/EnvelopeBreakage?ProjectId={ProjectId}");
+            var response = await client.GetAsync($"https://localhost:7276/api/EnvelopeBreakages/EnvelopeBreakage?ProjectId={ProjectId}");
 
             if (!response.IsSuccessStatusCode)
             {
@@ -339,6 +339,17 @@ namespace Tools.Controllers
 
             return Ok("Envelope breakdown successfully saved to EnvelopeBreakage table.");
         }
+
+        [HttpGet("Reports/Exists")]
+        public IActionResult CheckReportExists(int projectId, string moduleName)
+        {
+            var rootFolder = Path.Combine("D:\\ERPTools\\Tools\\wwwroot", projectId.ToString());
+            var fileName = moduleName + ".xlsx";
+            var filePath = Path.Combine(rootFolder, fileName);
+
+            return Ok(new { exists = System.IO.File.Exists(filePath) });
+        }
+
 
 
         [HttpGet("Replication")]
