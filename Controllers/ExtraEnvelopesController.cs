@@ -174,11 +174,11 @@ namespace Tools.Controllers
                     .ToListAsync();
 
                 var duplicatesInDb = _context.ExtrasEnvelope
-    .Where(e => e.ProjectId == ProjectId)
-    .AsEnumerable() // Move evaluation to memory
-    .Where(e => envelopesToAdd.Any(newE =>
-        newE.CatchNo == e.CatchNo && newE.ExtraId == e.ExtraId))
-    .ToList();
+             .Where(e => e.ProjectId == ProjectId)
+             .AsEnumerable() // Move evaluation to memory
+               .Where(e => envelopesToAdd.Any(newE =>
+              newE.CatchNo == e.CatchNo && newE.ExtraId == e.ExtraId))
+             .ToList();
 
                 if (duplicatesInDb.Any())
                 {
