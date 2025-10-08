@@ -951,7 +951,7 @@ namespace Tools.Controllers
             }
 
             // Helper method to add extra envelopes
-            void AddExtraWithEnv(ExtraEnvelopes extra, string examDate, string examTime, string course, string subject)
+            void AddExtraWithEnv(ExtraEnvelopes extra, string examDate, string examTime, string course, string subject, int NrQuantity)
             {
                 var extraConfig = extrasconfig.FirstOrDefault(e => e.ExtraType == extra.ExtraId);
                 int envCapacity = 100; // default fallback
@@ -1012,6 +1012,7 @@ namespace Tools.Controllers
                         ExamTime = examTime,
                         CourseName = course,
                         SubjectName = subject,
+                        NRQuantity = NrQuantity,
                         TotalEnv = totalEnv,
                         Env = $"{j}/{totalEnv}"
                     });
@@ -1038,7 +1039,7 @@ namespace Tools.Controllers
                         var extrasToAdd = extras.Where(e => e.ExtraId == 1 && e.CatchNo == prevCatchNo).ToList();
                         foreach (var extra in extrasToAdd)
                         {
-                            AddExtraWithEnv(extra,current.ExamDate,current.ExamTime,current.SubjectName,current.CourseName);
+                            AddExtraWithEnv(extra,current.ExamDate,current.ExamTime,current.SubjectName,current.CourseName, current.NRQuantity);
                         }
                         nodalExtrasAddedForCatchNo.Add(prevCatchNo);
                     }
@@ -1054,7 +1055,7 @@ namespace Tools.Controllers
                             var extrasToAdd = extras.Where(e => e.ExtraId == extraId && e.CatchNo == prevCatchNo).ToList();
                             foreach (var extra in extrasToAdd)
                             {
-                                AddExtraWithEnv(extra, current.ExamDate, current.ExamTime, current.SubjectName, current.CourseName);
+                                AddExtraWithEnv(extra, current.ExamDate, current.ExamTime, current.SubjectName, current.CourseName,current.NRQuantity);
                             }
                             catchExtrasAdded.Add((extraId, prevCatchNo));
                         }
@@ -1142,7 +1143,7 @@ namespace Tools.Controllers
                         if (current != null)
                         {
                             // Pass the required parameters explicitly
-                            AddExtraWithEnv(extra, current.ExamDate, current.ExamTime, current.SubjectName, current.CourseName);
+                            AddExtraWithEnv(extra, current.ExamDate, current.ExamTime, current.SubjectName, current.CourseName, current.NRQuantity);
                         }
                         
                     }
@@ -1159,7 +1160,7 @@ namespace Tools.Controllers
                             if (current != null)
                             {
                                 // Pass the required parameters explicitly
-                                AddExtraWithEnv(extra, current.ExamDate, current.ExamTime, current.SubjectName, current.CourseName);
+                                AddExtraWithEnv(extra, current.ExamDate, current.ExamTime, current.SubjectName, current.CourseName, current.NRQuantity);
                             }
                         }
                     }
