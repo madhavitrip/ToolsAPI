@@ -246,7 +246,7 @@ namespace Tools.Controllers
                 }
 
                 // Create Excel
-                var allHeaders = typeof(Tools.Models.NRData).GetProperties().Select(p => p.Name).ToList();
+                var allHeaders = typeof(Tools.Models.NRData).GetProperties().Select(p => p.Name).Where(p=>p!="Id" && p!="ProjectId").ToList();
                 allHeaders.AddRange(extraHeaders.OrderBy(x => x));
                 allHeaders.AddRange(innerKeys.OrderBy(x => x));
                 allHeaders.AddRange(outerKeys.OrderBy(x => x));
@@ -264,23 +264,53 @@ namespace Tools.Controllers
                 {
                     System.IO.File.Delete(filePath);
                 }
+                var nonEmptyColumns = new List<string>();
 
+                // List to hold all rows after removing empty columns
+                var filteredRows = new List<Dictionary<string, object>>();
+
+                // Iterate over allRows to check for non-empty columns
+                foreach (var row in allRows)
+                {
+                    var filteredRow = new Dictionary<string, object>();
+
+                    foreach (var header in allHeaders)
+                    {
+                        if (row.ContainsKey(header))
+                        {
+                            var value = row[header];
+                            if (value != null && !string.IsNullOrEmpty(value.ToString()))
+                            {
+                                filteredRow[header] = value;
+                                if (!nonEmptyColumns.Contains(header))
+                                {
+                                    nonEmptyColumns.Add(header);  // Mark the column as non-empty
+                                }
+                            }
+                        }
+                    }
+
+                    if (filteredRow.Any())  // Add row only if it has any data
+                    {
+                        filteredRows.Add(filteredRow);
+                    }
+                }
                 using (var package = new ExcelPackage())
                 {
                     var ws = package.Workbook.Worksheets.Add("Extra Envelope");
-
-                    for (int i = 0; i < allHeaders.Count; i++)
+                    var validHeaders = nonEmptyColumns;
+                    for (int i = 0; i < validHeaders.Count; i++)
                     {
-                        ws.Cells[1, i + 1].Value = allHeaders[i];
+                        ws.Cells[1, i + 1].Value = validHeaders[i];
                         ws.Cells[1, i + 1].Style.Font.Bold = true;
                     }
-
+                  
                     int rowIdx = 2;
-                    foreach (var row in allRows)
+                    foreach (var row in filteredRows)
                     {
-                        for (int colIdx = 0; colIdx < allHeaders.Count; colIdx++)
+                        for (int colIdx = 0; colIdx < validHeaders.Count; colIdx++)
                         {
-                            var key = allHeaders[colIdx];
+                            var key = validHeaders[colIdx];
                             row.TryGetValue(key, out object value);
                             ws.Cells[rowIdx, colIdx + 1].Value = value?.ToString() ?? "";
                         }
@@ -317,7 +347,9 @@ namespace Tools.Controllers
                 ["ExamDate"] = baseRow.ExamDate,
                 ["NodalCode"] = baseRow.NodalCode,
                 ["NRDatas"] = baseRow.NRDatas,
-                ["Quantity"] = extra.Quantity
+                ["Quantity"] = extra.Quantity,
+                ["NRQuantity"] = baseRow.NRQuantity
+
             };
 
             // Set CenterCode

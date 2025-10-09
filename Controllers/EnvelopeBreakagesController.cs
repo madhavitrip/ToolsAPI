@@ -274,14 +274,20 @@ namespace Tools.Controllers
                 .OrderByDescending(x => x)
                 .ToList();
 
+            var env = await _context.EnvelopeBreakages.Where(p => p.ProjectId == ProjectId).ToListAsync();
+            if (env.Any()) // Check if any records were found
+            {
+                _context.EnvelopeBreakages.RemoveRange(env);  // Use RemoveRange without Async
+                await _context.SaveChangesAsync();  // Save changes asynchronously
+            }
+            else
+            {
+                // Handle the case where no records were found
+                Console.WriteLine("No breakages found for the specified project.");
+            }
+
             foreach (var row in nrDataList)
             {
-                bool exists = await _context.EnvelopeBreakages
-              .AnyAsync(e => e.NrDataId == row.Id);
-
-                if (exists)
-                    continue; // Skip adding this entry because it already exists
-
                 int quantity = row.Quantity;
                 int remaining = quantity;
 
@@ -341,11 +347,10 @@ namespace Tools.Controllers
         }
 
         [HttpGet("Reports/Exists")]
-        public IActionResult CheckReportExists(int projectId, string moduleName)
+        public IActionResult CheckReportExists(int projectId)
         {
             var rootFolder = Path.Combine("D:\\ERPTools\\Tools\\wwwroot", projectId.ToString());
-            var fileName = moduleName + ".xlsx";
-            var filePath = Path.Combine(rootFolder, fileName);
+            var filePath = Path.Combine(rootFolder);
 
             return Ok(new { exists = System.IO.File.Exists(filePath) });
         }
@@ -883,16 +888,13 @@ namespace Tools.Controllers
 
         }
 
-
         [HttpGet("EnvelopeBreakage")]
         public async Task<IActionResult> BreakageConfiguration(int ProjectId)
         {
-            // Envelope capacities map (can be pulled from DB if needed)
+            // Fetch all data sequentially
             var envCaps = await _context.EnvelopesTypes
                 .Select(e => new { e.EnvelopeName, e.Capacity })
                 .ToListAsync();
-            Dictionary<string, int> envelopeCapacities = envCaps
-                .ToDictionary(x => x.EnvelopeName, x => x.Capacity);
 
             var nrData = await _context.NRDatas
                 .Where(p => p.ProjectId == ProjectId)
@@ -906,51 +908,43 @@ namespace Tools.Controllers
                 .Where(p => p.ProjectId == ProjectId)
                 .ToListAsync();
 
-            var projectconfig = await _context.ProjectConfigs
+            var outerEnvJson = await _context.ProjectConfigs
                 .Where(p => p.ProjectId == ProjectId)
                 .Select(p => p.Envelope)
-                .ToListAsync();
+                .FirstOrDefaultAsync();
 
             var extrasconfig = await _context.ExtraConfigurations
                 .Where(p => p.ProjectId == ProjectId)
                 .ToListAsync();
-           
 
-            // Build dictionary for fast lookup of TotalEnv by NrDataId
+            // Build dictionaries for fast lookup
+            var envelopeCapacities = envCaps.ToDictionary(x => x.EnvelopeName, x => x.Capacity);
             var envDict = envBreaking.ToDictionary(e => e.NrDataId, e => e.TotalEnvelope);
 
             var resultList = new List<object>();
-            int serialnumber = 0;
+            int globalSerialNumber = 1; // Global serial number that only resets on CatchNo change
             string prevNodalCode = null;
             string prevCatchNo = null;
-            string prevMergeField = null; // CatchNo + CenterCode
+            string prevMergeField = null;
             string prevExtraMergeField = null;
             int centerEnvCounter = 0;
             int extraCenterEnvCounter = 0;
             var nodalExtrasAddedForCatchNo = new HashSet<string>();
             var catchExtrasAdded = new HashSet<(int ExtraId, string CatchNo)>();
 
-            // Extract outer envelope config from project config
+            // Extract outer envelope config
             int nrOuterCapacity = 100; // default
-            string outerEnvJson = projectconfig.FirstOrDefault();
-            Console.WriteLine(outerEnvJson);
             if (!string.IsNullOrEmpty(outerEnvJson))
             {
                 var outerEnvDict = JsonSerializer.Deserialize<Dictionary<string, string>>(outerEnvJson);
-                Console.WriteLine(outerEnvDict);
-
-                // Explicitly check for the "Outer" key
-                var outerKey = outerEnvDict.FirstOrDefault(kvp => kvp.Key == "Outer").Key;
-                Console.WriteLine(outerKey);
-
-                if (outerKey != null && envelopeCapacities.ContainsKey(outerEnvDict[outerKey]))
+                if (outerEnvDict != null && outerEnvDict.TryGetValue("Outer", out string outerType)
+                    && envelopeCapacities.TryGetValue(outerType, out int capacity))
                 {
-                    nrOuterCapacity = envelopeCapacities[outerEnvDict[outerKey]];
-                    Console.WriteLine(nrOuterCapacity);
+                    nrOuterCapacity = capacity;
                 }
             }
 
-            // Helper method to add extra envelopes
+            // Helper method to add extra envelopes - removed serialnumber++ from here
             void AddExtraWithEnv(ExtraEnvelopes extra, string examDate, string examTime, string course, string subject, int NrQuantity)
             {
                 var extraConfig = extrasconfig.FirstOrDefault(e => e.ExtraType == extra.ExtraId);
@@ -959,16 +953,16 @@ namespace Tools.Controllers
                 if (extraConfig != null && !string.IsNullOrEmpty(extraConfig.EnvelopeType))
                 {
                     var envType = JsonSerializer.Deserialize<Dictionary<string, string>>(extraConfig.EnvelopeType);
-                    if (envType.TryGetValue("Outer", out string outerType))
+                    if (envType != null && envType.TryGetValue("Outer", out string outerType)
+                        && envelopeCapacities.TryGetValue(outerType, out int cap))
                     {
-                        if (envelopeCapacities.TryGetValue(outerType, out int cap))
-                            envCapacity = cap;
+                        envCapacity = cap;
                     }
                 }
 
                 int totalEnv = (int)Math.Ceiling((double)extra.Quantity / envCapacity);
-                int quantityLeft = extra.Quantity;
                 string currentMergeField = $"{extra.CatchNo}-{extra.ExtraId}";
+
                 if (currentMergeField != prevExtraMergeField)
                 {
                     extraCenterEnvCounter = 0;
@@ -980,19 +974,17 @@ namespace Tools.Controllers
                     int envQuantity;
                     if (j == 1 && totalEnv > 1)
                     {
-                        int filledCapacity = envCapacity * (totalEnv - 1);
-                        envQuantity = extra.Quantity - filledCapacity;
+                        envQuantity = extra.Quantity - (envCapacity * (totalEnv - 1));
                     }
                     else
                     {
-                        envQuantity = Math.Min(quantityLeft, envCapacity);
+                        envQuantity = Math.Min(extra.Quantity - (envCapacity * (j - 1)), envCapacity);
                     }
                     extraCenterEnvCounter++;
 
                     resultList.Add(new
                     {
-                        
-                        SerialNumber = serialnumber++,
+                        SerialNumber = globalSerialNumber++, // Use global serial number
                         ExtraAttached = true,
                         extra.ExtraId,
                         extra.CatchNo,
@@ -1007,108 +999,106 @@ namespace Tools.Controllers
                             3 => "Office Extra",
                             _ => "Extra"
                         },
-                        CenterEnv = extraCenterEnvCounter, 
+                        CenterEnv = extraCenterEnvCounter,
                         ExamDate = examDate,
                         ExamTime = examTime,
                         CourseName = course,
                         SubjectName = subject,
-                       
                         TotalEnv = totalEnv,
                         Env = $"{j}/{totalEnv}",
                         NRQuantity = NrQuantity,
                     });
-
-                    quantityLeft -= envQuantity;
                 }
             }
 
-            bool serialResetFlag = false;
             for (int i = 0; i < nrData.Count; i++)
             {
                 var current = nrData[i];
-                if (prevCatchNo != null && current.CatchNo != prevCatchNo)
+
+                // Check if CatchNo changed BEFORE processing extras
+                bool catchNoChanged = prevCatchNo != null && current.CatchNo != prevCatchNo;
+
+                if (catchNoChanged)
                 {
-                    // Reset serial number if CatchNo changes
-                    serialnumber = 1;  // Start the serial number from 1 again
-                    serialResetFlag = true; // Indicate that serial number was reset
-                }
-                // ➕ Nodal Extra (1) when NodalCode changes
-                if (prevNodalCode != null && current.NodalCode != prevNodalCode)
-                {
+                    // ➕ Add final extras for previous CatchNo before resetting serial
                     if (!nodalExtrasAddedForCatchNo.Contains(prevCatchNo))
                     {
                         var extrasToAdd = extras.Where(e => e.ExtraId == 1 && e.CatchNo == prevCatchNo).ToList();
+                        var prevNrData = nrData[i - 1]; // Get previous record for metadata
                         foreach (var extra in extrasToAdd)
                         {
-                            AddExtraWithEnv(extra,current.ExamDate,current.ExamTime,current.SubjectName,current.CourseName, current.NRQuantity);
+                            AddExtraWithEnv(extra, prevNrData.ExamDate, prevNrData.ExamTime,
+                                          prevNrData.SubjectName, prevNrData.CourseName, prevNrData.NRQuantity);
                         }
                         nodalExtrasAddedForCatchNo.Add(prevCatchNo);
                     }
-                }
 
-                // ➕ Catch Extras (2, 3) when CatchNo changes
-                if (prevCatchNo != null && current.CatchNo != prevCatchNo)
-                {
                     foreach (var extraId in new[] { 2, 3 })
                     {
                         if (!catchExtrasAdded.Contains((extraId, prevCatchNo)))
                         {
                             var extrasToAdd = extras.Where(e => e.ExtraId == extraId && e.CatchNo == prevCatchNo).ToList();
+                            var prevNrData = nrData[i - 1];
                             foreach (var extra in extrasToAdd)
                             {
-                                AddExtraWithEnv(extra, current.ExamDate, current.ExamTime, current.SubjectName, current.CourseName,current.NRQuantity);
+                                AddExtraWithEnv(extra, prevNrData.ExamDate, prevNrData.ExamTime,
+                                              prevNrData.SubjectName, prevNrData.CourseName, prevNrData.NRQuantity);
                             }
                             catchExtrasAdded.Add((extraId, prevCatchNo));
                         }
                     }
+
+                    // NOW reset serial number after extras are added
+                    globalSerialNumber = 1;
+                }
+
+                // ➕ Nodal Extra when NodalCode changes (but not CatchNo)
+                if (!catchNoChanged && prevNodalCode != null && current.NodalCode != prevNodalCode)
+                {
+                    if (!nodalExtrasAddedForCatchNo.Contains(current.CatchNo))
+                    {
+                        var extrasToAdd = extras.Where(e => e.ExtraId == 1 && e.CatchNo == current.CatchNo).ToList();
+                        foreach (var extra in extrasToAdd)
+                        {
+                            AddExtraWithEnv(extra, current.ExamDate, current.ExamTime,
+                                          current.SubjectName, current.CourseName, current.NRQuantity);
+                        }
+                        nodalExtrasAddedForCatchNo.Add(current.CatchNo);
+                    }
                 }
 
                 // ➕ Add current NRData row with TotalEnv replication
-                envDict.TryGetValue(current.Id, out int totalEnv);
-                if (totalEnv <= 0) totalEnv = 1;
+                int totalEnv = envDict.TryGetValue(current.Id, out int envCount) && envCount > 0 ? envCount : 1;
 
-                int quantityLeft = current?.Quantity ?? 0;
-                Console.WriteLine(quantityLeft);
-                // Calculate CenterEnv based on merge field (CatchNo + CenterCode)
+                // Calculate CenterEnv
                 string currentMergeField = $"{current.CatchNo}-{current.CenterCode}";
-                Console.WriteLine(currentMergeField);
                 if (currentMergeField != prevMergeField)
                 {
-                    centerEnvCounter = 0; // Reset counter for new merge group
-                    Console.WriteLine(centerEnvCounter);
+                    centerEnvCounter = 0;
                     prevMergeField = currentMergeField;
-                }
-                else
-                {
-                    centerEnvCounter++; // Increment for same merge group
-                    Console.WriteLine(centerEnvCounter);
                 }
 
                 for (int j = 1; j <= totalEnv; j++)
                 {
-                    int envQuantity;
                     centerEnvCounter++;
+                    int envQuantity;
+
                     if (current.Quantity > nrOuterCapacity && j == 1)
                     {
-                        
                         envQuantity = current.Quantity - (totalEnv - 1) * nrOuterCapacity;
-                        Console.WriteLine(envQuantity);
                     }
                     else if (current.Quantity <= nrOuterCapacity)
                     {
-                        // Total quantity fits in one envelope
-                        envQuantity = current?.Quantity??0;
+                        envQuantity = current.Quantity;
                     }
                     else
                     {
-                        // Subsequent envelopes get full capacity
                         envQuantity = nrOuterCapacity;
-                        Console.WriteLine(envQuantity);
                     }
 
                     resultList.Add(new
                     {
-                        SerialNumber = serialnumber++,
+                        SerialNumber = globalSerialNumber++,
                         current.CourseName,
                         current.SubjectName,
                         current.CatchNo,
@@ -1119,50 +1109,43 @@ namespace Tools.Controllers
                         EnvQuantity = envQuantity,
                         current.NodalCode,
                         current.NRDatas,
-                        CenterEnv = centerEnvCounter, // Sequential number within same CatchNo+CenterCode
+                        CenterEnv = centerEnvCounter,
                         TotalEnv = totalEnv,
-                        Env = $"{centerEnvCounter}/{totalEnv}", // Using CenterEnv for display
+                        Env = $"{centerEnvCounter}/{totalEnv}",
                         current.NRQuantity,
                     });
-
-                    quantityLeft -= envQuantity;
                 }
 
                 prevNodalCode = current.NodalCode;
                 prevCatchNo = current.CatchNo;
             }
 
-            // 🔁 Final extras for the last CatchNo and NodalCode
+            // 🔁 Final extras for the last CatchNo
             if (prevCatchNo != null)
             {
-                if (!nodalExtrasAddedForCatchNo.Contains(prevCatchNo))
-                {
-                    var extrasToAdd = extras.Where(e => e.ExtraId == 1 && e.CatchNo == prevCatchNo).ToList();
-                    foreach (var extra in extrasToAdd)
-                    {
-                        var current = nrData.FirstOrDefault(p => p.CatchNo == prevCatchNo);
+                var lastNrData = nrData.LastOrDefault();
 
-                        if (current != null)
-                        {
-                            // Pass the required parameters explicitly
-                            AddExtraWithEnv(extra, current.ExamDate, current.ExamTime, current.SubjectName, current.CourseName, current.NRQuantity);
-                        }
-                        
-                    }
-                }
-
-                foreach (var extraId in new[] { 2, 3 })
+                if (lastNrData != null)
                 {
-                    if (!catchExtrasAdded.Contains((extraId, prevCatchNo)))
+                    if (!nodalExtrasAddedForCatchNo.Contains(prevCatchNo))
                     {
-                        var extrasToAdd = extras.Where(e => e.ExtraId == extraId && e.CatchNo == prevCatchNo).ToList();
+                        var extrasToAdd = extras.Where(e => e.ExtraId == 1 && e.CatchNo == prevCatchNo).ToList();
                         foreach (var extra in extrasToAdd)
                         {
-                            var current = nrData.FirstOrDefault(p => p.CatchNo == prevCatchNo);
-                            if (current != null)
+                            AddExtraWithEnv(extra, lastNrData.ExamDate, lastNrData.ExamTime,
+                                          lastNrData.SubjectName, lastNrData.CourseName, lastNrData.NRQuantity);
+                        }
+                    }
+
+                    foreach (var extraId in new[] { 2, 3 })
+                    {
+                        if (!catchExtrasAdded.Contains((extraId, prevCatchNo)))
+                        {
+                            var extrasToAdd = extras.Where(e => e.ExtraId == extraId && e.CatchNo == prevCatchNo).ToList();
+                            foreach (var extra in extrasToAdd)
                             {
-                                // Pass the required parameters explicitly
-                                AddExtraWithEnv(extra, current.ExamDate, current.ExamTime, current.SubjectName, current.CourseName, current.NRQuantity);
+                                AddExtraWithEnv(extra, lastNrData.ExamDate, lastNrData.ExamTime,
+                                              lastNrData.SubjectName, lastNrData.CourseName, lastNrData.NRQuantity);
                             }
                         }
                     }
@@ -1175,24 +1158,45 @@ namespace Tools.Controllers
                 var worksheet = package.Workbook.Worksheets.Add("BreakingResult");
 
                 // Add headers
-                worksheet.Cells[1, 1].Value = "Serial Number";
-                worksheet.Cells[1, 2].Value = "Course Name";
-                worksheet.Cells[1, 3].Value = "Subject Name";
-                worksheet.Cells[1, 4].Value = "Catch No";
-                worksheet.Cells[1, 5].Value = "Center Code";
-                worksheet.Cells[1, 6].Value = "Exam Time";
-                worksheet.Cells[1, 7].Value = "Exam Date";
-                worksheet.Cells[1, 8].Value = "Quantity";
-                worksheet.Cells[1, 9].Value = "EnvQuantity";
-                worksheet.Cells[1, 10].Value = "Nodal Code";
-                worksheet.Cells[1, 11].Value = "NR Datas";
-                worksheet.Cells[1, 12].Value = "Center Env";
-                worksheet.Cells[1, 13].Value = "Total Env";
-                worksheet.Cells[1, 14].Value = "Env";
-                worksheet.Cells[1, 15].Value = "NRQuantity";
+                var headers = new[] { "Serial Number", "Course Name", "Subject Name", "Catch No", "Center Code",
+                          "Exam Time", "Exam Date", "Quantity", "EnvQuantity", "Nodal Code",
+                          "NR Datas", "Center Env", "Total Env", "Env", "NRQuantity" };
+
+                var properties = new[] { "SerialNumber", "CourseName", "SubjectName", "CatchNo", "CenterCode",
+                            "ExamTime", "ExamDate", "Quantity", "EnvQuantity", "NodalCode",
+                            "NRDatas", "CenterEnv", "TotalEnv", "Env", "NRQuantity" };
+
+                // Create a list to track which columns should be included (those that contain data)
+                var columnsToInclude = new List<int>();
+
+                // Check for non-empty columns in any row (resultList) and track their indices
+                foreach (var item in resultList)
+                {
+                    for (int i = 0; i < properties.Length; i++)
+                    {
+                        var value = item.GetType().GetProperty(properties[i])?.GetValue(item);
+                        if (value != null && !string.IsNullOrEmpty(value.ToString()))
+                        {
+                            if (!columnsToInclude.Contains(i))
+                            {
+                                columnsToInclude.Add(i);  // Add column index if it contains data
+                            }
+                        }
+                    }
+                }
+
+                // Filter headers and properties based on the columns that have data
+                var filteredHeaders = columnsToInclude.Select(index => headers[index]).ToArray();
+                var filteredProperties = columnsToInclude.Select(index => properties[index]).ToArray();
+
+                // Add filtered headers to the first row
+                for (int i = 0; i < filteredHeaders.Length; i++)
+                {
+                    worksheet.Cells[1, i + 1].Value = filteredHeaders[i];
+                }
 
                 // Style headers
-                using (var range = worksheet.Cells[1, 1, 1, 18])
+                using (var range = worksheet.Cells[1, 1, 1, filteredHeaders.Length])
                 {
                     range.Style.Font.Bold = true;
                     range.Style.Fill.PatternType = OfficeOpenXml.Style.ExcelFillStyle.Solid;
@@ -1200,73 +1204,420 @@ namespace Tools.Controllers
                     range.Style.HorizontalAlignment = OfficeOpenXml.Style.ExcelHorizontalAlignment.Center;
                 }
 
-                // Add data rows
+                // Add data rows dynamically
                 int row = 2;
                 foreach (var item in resultList)
                 {
-                    var itemType = item.GetType();
-
-                    // Use reflection to get property values
-                    var serialNumber = itemType.GetProperty("SerialNumber")?.GetValue(item);
-                    var courseName = itemType.GetProperty("CourseName")?.GetValue(item);
-                    var subjectName = itemType.GetProperty("SubjectName")?.GetValue(item);
-                    var catchNo = itemType.GetProperty("CatchNo")?.GetValue(item);
-                    var centerCode = itemType.GetProperty("CenterCode")?.GetValue(item);
-                    var examTime = itemType.GetProperty("ExamTime")?.GetValue(item);
-                    var examDate = itemType.GetProperty("ExamDate")?.GetValue(item);
-                    var quantity = itemType.GetProperty("Quantity")?.GetValue(item);
-                    var envquantity = itemType.GetProperty("EnvQuantity")?.GetValue(item);
-                    var nodalCode = itemType.GetProperty("NodalCode")?.GetValue(item);
-                    var nrDatas = itemType.GetProperty("NRDatas")?.GetValue(item);
-                    var centerEnv = itemType.GetProperty("CenterEnv")?.GetValue(item);
-                    var totalEnv = itemType.GetProperty("TotalEnv")?.GetValue(item);
-                    var env = itemType.GetProperty("Env")?.GetValue(item);
-                    var nrQty = itemType.GetProperty("NRQuantity")?.GetValue(item);
-
-                    worksheet.Cells[row, 1].Value = serialNumber;
-                    worksheet.Cells[row, 2].Value = courseName?.ToString();
-                    worksheet.Cells[row, 3].Value = subjectName?.ToString();
-                    worksheet.Cells[row, 4].Value = catchNo?.ToString();
-                    worksheet.Cells[row, 5].Value = centerCode?.ToString();
-                    worksheet.Cells[row, 6].Value = examTime?.ToString();
-                    worksheet.Cells[row, 7].Value = examDate;
-                    worksheet.Cells[row, 8].Value = quantity;
-                    worksheet.Cells[row, 9].Value = envquantity;
-                    worksheet.Cells[row, 10].Value = nodalCode?.ToString();
-                    worksheet.Cells[row, 11].Value = nrDatas?.ToString();
-                    worksheet.Cells[row, 12].Value = centerEnv;
-                    worksheet.Cells[row, 13].Value = totalEnv;
-                    worksheet.Cells[row, 14].Value = env?.ToString();
-                    worksheet.Cells[row, 15].Value = nrQty;
+                    for (int col = 0; col < filteredProperties.Length; col++)
+                    {
+                        var value = item.GetType().GetProperty(filteredProperties[col])?.GetValue(item);
+                        worksheet.Cells[row, col + 1].Value = value;
+                    }
                     row++;
                 }
 
-                // Auto-fit columns
                 worksheet.Cells[worksheet.Dimension.Address].AutoFitColumns();
 
                 // Save the file
                 var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
-                if (!Directory.Exists(reportPath))
-                {
-                    Directory.CreateDirectory(reportPath);
-                }
+                Directory.CreateDirectory(reportPath); // CreateDirectory is idempotent
 
-                var fileName = $"BreakingReport.xlsx";
-                var filePath = Path.Combine(reportPath, fileName);
+                var filePath = Path.Combine(reportPath, "BreakingReport.xlsx");
                 if (System.IO.File.Exists(filePath))
                 {
                     System.IO.File.Delete(filePath);
                 }
-                var fileInfo = new FileInfo(filePath);
-                package.SaveAs(fileInfo);
 
-                // Return both the data and the file path
-                return Ok(new
-                {
-                    Result = resultList,
-                });
+                package.SaveAs(new FileInfo(filePath));
+
+                return Ok(new { Result = resultList });
             }
+
         }
+
+        /*  [HttpGet("EnvelopeBreakage")]
+          public async Task<IActionResult> BreakageConfiguration(int ProjectId)
+          {
+              // Envelope capacities map (can be pulled from DB if needed)
+              var envCaps = await _context.EnvelopesTypes
+                  .Select(e => new { e.EnvelopeName, e.Capacity })
+                  .ToListAsync();
+              Dictionary<string, int> envelopeCapacities = envCaps
+                  .ToDictionary(x => x.EnvelopeName, x => x.Capacity);
+
+              var nrData = await _context.NRDatas
+                  .Where(p => p.ProjectId == ProjectId)
+                  .ToListAsync();
+
+              var envBreaking = await _context.EnvelopeBreakages
+                  .Where(p => p.ProjectId == ProjectId)
+                  .ToListAsync();
+
+              var extras = await _context.ExtrasEnvelope
+                  .Where(p => p.ProjectId == ProjectId)
+                  .ToListAsync();
+
+              var projectconfig = await _context.ProjectConfigs
+                  .Where(p => p.ProjectId == ProjectId)
+                  .Select(p => p.Envelope)
+                  .ToListAsync();
+
+              var extrasconfig = await _context.ExtraConfigurations
+                  .Where(p => p.ProjectId == ProjectId)
+                  .ToListAsync();
+
+
+              // Build dictionary for fast lookup of TotalEnv by NrDataId
+              var envDict = envBreaking.ToDictionary(e => e.NrDataId, e => e.TotalEnvelope);
+
+              var resultList = new List<object>();
+              int serialnumber = 0;
+              string prevNodalCode = null;
+              string prevCatchNo = null;
+              string prevMergeField = null; // CatchNo + CenterCode
+              string prevExtraMergeField = null;
+              int centerEnvCounter = 0;
+              int extraCenterEnvCounter = 0;
+              var nodalExtrasAddedForCatchNo = new HashSet<string>();
+              var catchExtrasAdded = new HashSet<(int ExtraId, string CatchNo)>();
+
+              // Extract outer envelope config from project config
+              int nrOuterCapacity = 100; // default
+              string outerEnvJson = projectconfig.FirstOrDefault();
+              Console.WriteLine(outerEnvJson);
+              if (!string.IsNullOrEmpty(outerEnvJson))
+              {
+                  var outerEnvDict = JsonSerializer.Deserialize<Dictionary<string, string>>(outerEnvJson);
+                  Console.WriteLine(outerEnvDict);
+
+                  // Explicitly check for the "Outer" key
+                  var outerKey = outerEnvDict.FirstOrDefault(kvp => kvp.Key == "Outer").Key;
+                  Console.WriteLine(outerKey);
+
+                  if (outerKey != null && envelopeCapacities.ContainsKey(outerEnvDict[outerKey]))
+                  {
+                      nrOuterCapacity = envelopeCapacities[outerEnvDict[outerKey]];
+                      Console.WriteLine(nrOuterCapacity);
+                  }
+              }
+
+              // Helper method to add extra envelopes
+              void AddExtraWithEnv(ExtraEnvelopes extra, string examDate, string examTime, string course, string subject, int NrQuantity)
+              {
+                  var extraConfig = extrasconfig.FirstOrDefault(e => e.ExtraType == extra.ExtraId);
+                  int envCapacity = 100; // default fallback
+
+                  if (extraConfig != null && !string.IsNullOrEmpty(extraConfig.EnvelopeType))
+                  {
+                      var envType = JsonSerializer.Deserialize<Dictionary<string, string>>(extraConfig.EnvelopeType);
+                      if (envType.TryGetValue("Outer", out string outerType))
+                      {
+                          if (envelopeCapacities.TryGetValue(outerType, out int cap))
+                              envCapacity = cap;
+                      }
+                  }
+
+                  int totalEnv = (int)Math.Ceiling((double)extra.Quantity / envCapacity);
+                  int quantityLeft = extra.Quantity;
+                  string currentMergeField = $"{extra.CatchNo}-{extra.ExtraId}";
+                  if (currentMergeField != prevExtraMergeField)
+                  {
+                      extraCenterEnvCounter = 0;
+                      prevExtraMergeField = currentMergeField;
+                  }
+
+                  for (int j = 1; j <= totalEnv; j++)
+                  {
+                      int envQuantity;
+                      if (j == 1 && totalEnv > 1)
+                      {
+                          int filledCapacity = envCapacity * (totalEnv - 1);
+                          envQuantity = extra.Quantity - filledCapacity;
+                      }
+                      else
+                      {
+                          envQuantity = Math.Min(quantityLeft, envCapacity);
+                      }
+                      extraCenterEnvCounter++;
+
+                      resultList.Add(new
+                      {
+
+                          SerialNumber = serialnumber++,
+                          ExtraAttached = true,
+                          extra.ExtraId,
+                          extra.CatchNo,
+                          extra.Quantity,
+                          EnvQuantity = envQuantity,
+                          extra.InnerEnvelope,
+                          extra.OuterEnvelope,
+                          CenterCode = extra.ExtraId switch
+                          {
+                              1 => "Nodal Extra",
+                              2 => "University Extra",
+                              3 => "Office Extra",
+                              _ => "Extra"
+                          },
+                          CenterEnv = extraCenterEnvCounter, 
+                          ExamDate = examDate,
+                          ExamTime = examTime,
+                          CourseName = course,
+                          SubjectName = subject,
+
+                          TotalEnv = totalEnv,
+                          Env = $"{j}/{totalEnv}",
+                          NRQuantity = NrQuantity,
+                      });
+
+                      quantityLeft -= envQuantity;
+                  }
+              }
+
+              bool serialResetFlag = false;
+              for (int i = 0; i < nrData.Count; i++)
+              {
+                  var current = nrData[i];
+                  if (prevCatchNo != null && current.CatchNo != prevCatchNo)
+                  {
+                      // Reset serial number if CatchNo changes
+                      serialnumber = 1;  // Start the serial number from 1 again
+                      serialResetFlag = true; // Indicate that serial number was reset
+                  }
+                  // ➕ Nodal Extra (1) when NodalCode changes
+                  if (prevNodalCode != null && current.NodalCode != prevNodalCode)
+                  {
+                      if (!nodalExtrasAddedForCatchNo.Contains(prevCatchNo))
+                      {
+                          var extrasToAdd = extras.Where(e => e.ExtraId == 1 && e.CatchNo == prevCatchNo).ToList();
+                          foreach (var extra in extrasToAdd)
+                          {
+                              AddExtraWithEnv(extra,current.ExamDate,current.ExamTime,current.SubjectName,current.CourseName, current.NRQuantity);
+                          }
+                          nodalExtrasAddedForCatchNo.Add(prevCatchNo);
+                      }
+                  }
+
+                  // ➕ Catch Extras (2, 3) when CatchNo changes
+                  if (prevCatchNo != null && current.CatchNo != prevCatchNo)
+                  {
+                      foreach (var extraId in new[] { 2, 3 })
+                      {
+                          if (!catchExtrasAdded.Contains((extraId, prevCatchNo)))
+                          {
+                              var extrasToAdd = extras.Where(e => e.ExtraId == extraId && e.CatchNo == prevCatchNo).ToList();
+                              foreach (var extra in extrasToAdd)
+                              {
+                                  AddExtraWithEnv(extra, current.ExamDate, current.ExamTime, current.SubjectName, current.CourseName,current.NRQuantity);
+                              }
+                              catchExtrasAdded.Add((extraId, prevCatchNo));
+                          }
+                      }
+                  }
+
+                  // ➕ Add current NRData row with TotalEnv replication
+                  envDict.TryGetValue(current.Id, out int totalEnv);
+                  if (totalEnv <= 0) totalEnv = 1;
+
+                  int quantityLeft = current?.Quantity ?? 0;
+                  Console.WriteLine(quantityLeft);
+                  // Calculate CenterEnv based on merge field (CatchNo + CenterCode)
+                  string currentMergeField = $"{current.CatchNo}-{current.CenterCode}";
+                  Console.WriteLine(currentMergeField);
+                  if (currentMergeField != prevMergeField)
+                  {
+                      centerEnvCounter = 0; // Reset counter for new merge group
+                      Console.WriteLine(centerEnvCounter);
+                      prevMergeField = currentMergeField;
+                  }
+                  else
+                  {
+                      centerEnvCounter++; // Increment for same merge group
+                      Console.WriteLine(centerEnvCounter);
+                  }
+
+                  for (int j = 1; j <= totalEnv; j++)
+                  {
+                      int envQuantity;
+                      centerEnvCounter++;
+                      if (current.Quantity > nrOuterCapacity && j == 1)
+                      {
+
+                          envQuantity = current.Quantity - (totalEnv - 1) * nrOuterCapacity;
+                          Console.WriteLine(envQuantity);
+                      }
+                      else if (current.Quantity <= nrOuterCapacity)
+                      {
+                          // Total quantity fits in one envelope
+                          envQuantity = current?.Quantity??0;
+                      }
+                      else
+                      {
+                          // Subsequent envelopes get full capacity
+                          envQuantity = nrOuterCapacity;
+                          Console.WriteLine(envQuantity);
+                      }
+
+                      resultList.Add(new
+                      {
+                          SerialNumber = serialnumber++,
+                          current.CourseName,
+                          current.SubjectName,
+                          current.CatchNo,
+                          current.CenterCode,
+                          current.ExamTime,
+                          current.ExamDate,
+                          current.Quantity,
+                          EnvQuantity = envQuantity,
+                          current.NodalCode,
+                          current.NRDatas,
+                          CenterEnv = centerEnvCounter, // Sequential number within same CatchNo+CenterCode
+                          TotalEnv = totalEnv,
+                          Env = $"{centerEnvCounter}/{totalEnv}", // Using CenterEnv for display
+                          current.NRQuantity,
+                      });
+
+                      quantityLeft -= envQuantity;
+                  }
+
+                  prevNodalCode = current.NodalCode;
+                  prevCatchNo = current.CatchNo;
+              }
+
+              // 🔁 Final extras for the last CatchNo and NodalCode
+              if (prevCatchNo != null)
+              {
+                  if (!nodalExtrasAddedForCatchNo.Contains(prevCatchNo))
+                  {
+                      var extrasToAdd = extras.Where(e => e.ExtraId == 1 && e.CatchNo == prevCatchNo).ToList();
+                      foreach (var extra in extrasToAdd)
+                      {
+                          var current = nrData.FirstOrDefault(p => p.CatchNo == prevCatchNo);
+
+                          if (current != null)
+                          {
+                              // Pass the required parameters explicitly
+                              AddExtraWithEnv(extra, current.ExamDate, current.ExamTime, current.SubjectName, current.CourseName, current.NRQuantity);
+                          }
+
+                      }
+                  }
+
+                  foreach (var extraId in new[] { 2, 3 })
+                  {
+                      if (!catchExtrasAdded.Contains((extraId, prevCatchNo)))
+                      {
+                          var extrasToAdd = extras.Where(e => e.ExtraId == extraId && e.CatchNo == prevCatchNo).ToList();
+                          foreach (var extra in extrasToAdd)
+                          {
+                              var current = nrData.FirstOrDefault(p => p.CatchNo == prevCatchNo);
+                              if (current != null)
+                              {
+                                  // Pass the required parameters explicitly
+                                  AddExtraWithEnv(extra, current.ExamDate, current.ExamTime, current.SubjectName, current.CourseName, current.NRQuantity);
+                              }
+                          }
+                      }
+                  }
+              }
+
+              // Generate Excel Report
+              using (var package = new ExcelPackage())
+              {
+                  var worksheet = package.Workbook.Worksheets.Add("BreakingResult");
+
+                  // Add headers
+                  worksheet.Cells[1, 1].Value = "Serial Number";
+                  worksheet.Cells[1, 2].Value = "Course Name";
+                  worksheet.Cells[1, 3].Value = "Subject Name";
+                  worksheet.Cells[1, 4].Value = "Catch No";
+                  worksheet.Cells[1, 5].Value = "Center Code";
+                  worksheet.Cells[1, 6].Value = "Exam Time";
+                  worksheet.Cells[1, 7].Value = "Exam Date";
+                  worksheet.Cells[1, 8].Value = "Quantity";
+                  worksheet.Cells[1, 9].Value = "EnvQuantity";
+                  worksheet.Cells[1, 10].Value = "Nodal Code";
+                  worksheet.Cells[1, 11].Value = "NR Datas";
+                  worksheet.Cells[1, 12].Value = "Center Env";
+                  worksheet.Cells[1, 13].Value = "Total Env";
+                  worksheet.Cells[1, 14].Value = "Env";
+                  worksheet.Cells[1, 15].Value = "NRQuantity";
+
+                  // Style headers
+                  using (var range = worksheet.Cells[1, 1, 1, 18])
+                  {
+                      range.Style.Font.Bold = true;
+                      range.Style.Fill.PatternType = OfficeOpenXml.Style.ExcelFillStyle.Solid;
+                      range.Style.Fill.BackgroundColor.SetColor(System.Drawing.Color.LightGray);
+                      range.Style.HorizontalAlignment = OfficeOpenXml.Style.ExcelHorizontalAlignment.Center;
+                  }
+
+                  // Add data rows
+                  int row = 2;
+                  foreach (var item in resultList)
+                  {
+                      var itemType = item.GetType();
+
+                      // Use reflection to get property values
+                      var serialNumber = itemType.GetProperty("SerialNumber")?.GetValue(item);
+                      var courseName = itemType.GetProperty("CourseName")?.GetValue(item);
+                      var subjectName = itemType.GetProperty("SubjectName")?.GetValue(item);
+                      var catchNo = itemType.GetProperty("CatchNo")?.GetValue(item);
+                      var centerCode = itemType.GetProperty("CenterCode")?.GetValue(item);
+                      var examTime = itemType.GetProperty("ExamTime")?.GetValue(item);
+                      var examDate = itemType.GetProperty("ExamDate")?.GetValue(item);
+                      var quantity = itemType.GetProperty("Quantity")?.GetValue(item);
+                      var envquantity = itemType.GetProperty("EnvQuantity")?.GetValue(item);
+                      var nodalCode = itemType.GetProperty("NodalCode")?.GetValue(item);
+                      var nrDatas = itemType.GetProperty("NRDatas")?.GetValue(item);
+                      var centerEnv = itemType.GetProperty("CenterEnv")?.GetValue(item);
+                      var totalEnv = itemType.GetProperty("TotalEnv")?.GetValue(item);
+                      var env = itemType.GetProperty("Env")?.GetValue(item);
+                      var nrQty = itemType.GetProperty("NRQuantity")?.GetValue(item);
+
+                      worksheet.Cells[row, 1].Value = serialNumber;
+                      worksheet.Cells[row, 2].Value = courseName?.ToString();
+                      worksheet.Cells[row, 3].Value = subjectName?.ToString();
+                      worksheet.Cells[row, 4].Value = catchNo?.ToString();
+                      worksheet.Cells[row, 5].Value = centerCode?.ToString();
+                      worksheet.Cells[row, 6].Value = examTime?.ToString();
+                      worksheet.Cells[row, 7].Value = examDate;
+                      worksheet.Cells[row, 8].Value = quantity;
+                      worksheet.Cells[row, 9].Value = envquantity;
+                      worksheet.Cells[row, 10].Value = nodalCode?.ToString();
+                      worksheet.Cells[row, 11].Value = nrDatas?.ToString();
+                      worksheet.Cells[row, 12].Value = centerEnv;
+                      worksheet.Cells[row, 13].Value = totalEnv;
+                      worksheet.Cells[row, 14].Value = env?.ToString();
+                      worksheet.Cells[row, 15].Value = nrQty;
+                      row++;
+                  }
+
+                  // Auto-fit columns
+                  worksheet.Cells[worksheet.Dimension.Address].AutoFitColumns();
+
+                  // Save the file
+                  var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
+                  if (!Directory.Exists(reportPath))
+                  {
+                      Directory.CreateDirectory(reportPath);
+                  }
+
+                  var fileName = $"BreakingReport.xlsx";
+                  var filePath = Path.Combine(reportPath, fileName);
+                  if (System.IO.File.Exists(filePath))
+                  {
+                      System.IO.File.Delete(filePath);
+                  }
+                  var fileInfo = new FileInfo(filePath);
+                  package.SaveAs(fileInfo);
+
+                  // Return both the data and the file path
+                  return Ok(new
+                  {
+                      Result = resultList,
+                  });
+              }
+          }*/
 
         // DELETE: api/EnvelopeBreakages/5
         [HttpDelete("{id}")]
