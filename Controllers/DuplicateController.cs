@@ -45,9 +45,9 @@ namespace Tools.Controllers
                 var mergeFieldIds = projectconfig.DuplicateCriteria.ToList();
 
                 var fieldNames = await _context.Fields
-              .Where(f => mergeFieldIds.Contains(f.FieldId)) // Match with the field IDs
-             .Select(f => f.Name) // Get the field names
-             .ToListAsync();
+                .Where(f => mergeFieldIds.Contains(f.FieldId)) // Match with the field IDs
+                .Select(f => f.Name) // Get the field names
+                .ToListAsync();
 
                 if (!data.Any())
                     return NotFound("No data found for this project.");
@@ -77,7 +77,7 @@ namespace Tools.Controllers
                         continue;
 
                     var keep = group.First();
-
+                    Console.WriteLine(keep);
                         keep.Quantity = group.Sum(x => x.NRQuantity);
                         var subjectValues = group.Select(x => x.SubjectName?.Trim())
                                      .Where(v => !string.IsNullOrEmpty(v))
@@ -113,9 +113,12 @@ namespace Tools.Controllers
                 {
                     foreach (var d in data)
                     {
-                        if (d.Quantity > 0)
+                        Console.WriteLine(projectconfig.Enhancement);
+
+                        if (d.NRQuantity > 0)
                         {
-                            d.Quantity = (int)Math.Round(projectconfig.Enhancement * d.Quantity);
+                            Console.WriteLine(d.NRQuantity);
+                            d.Quantity = d.NRQuantity+(int)Math.Round((projectconfig.Enhancement * d.NRQuantity)/100);
                         }
                     }
                 }

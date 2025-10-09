@@ -920,7 +920,7 @@ namespace Tools.Controllers
             var envDict = envBreaking.ToDictionary(e => e.NrDataId, e => e.TotalEnvelope);
 
             var resultList = new List<object>();
-            int serialnumber = 1;
+            int serialnumber = 0;
             string prevNodalCode = null;
             string prevCatchNo = null;
             string prevMergeField = null; // CatchNo + CenterCode
@@ -992,7 +992,7 @@ namespace Tools.Controllers
                     resultList.Add(new
                     {
                         
-                        Serialnumber = serialnumber++,
+                        SerialNumber = serialnumber++,
                         ExtraAttached = true,
                         extra.ExtraId,
                         extra.CatchNo,
@@ -1012,9 +1012,10 @@ namespace Tools.Controllers
                         ExamTime = examTime,
                         CourseName = course,
                         SubjectName = subject,
-                        NRQuantity = NrQuantity,
+                       
                         TotalEnv = totalEnv,
-                        Env = $"{j}/{totalEnv}"
+                        Env = $"{j}/{totalEnv}",
+                        NRQuantity = NrQuantity,
                     });
 
                     quantityLeft -= envQuantity;
@@ -1120,7 +1121,8 @@ namespace Tools.Controllers
                         current.NRDatas,
                         CenterEnv = centerEnvCounter, // Sequential number within same CatchNo+CenterCode
                         TotalEnv = totalEnv,
-                        Env = $"{centerEnvCounter}/{totalEnv}" // Using CenterEnv for display
+                        Env = $"{centerEnvCounter}/{totalEnv}", // Using CenterEnv for display
+                        current.NRQuantity,
                     });
 
                     quantityLeft -= envQuantity;
@@ -1187,7 +1189,7 @@ namespace Tools.Controllers
                 worksheet.Cells[1, 12].Value = "Center Env";
                 worksheet.Cells[1, 13].Value = "Total Env";
                 worksheet.Cells[1, 14].Value = "Env";
-  
+                worksheet.Cells[1, 15].Value = "NRQuantity";
 
                 // Style headers
                 using (var range = worksheet.Cells[1, 1, 1, 18])
@@ -1205,8 +1207,7 @@ namespace Tools.Controllers
                     var itemType = item.GetType();
 
                     // Use reflection to get property values
-                    var serialNumber = itemType.GetProperty("SerialNumber")?.GetValue(item) ??
-                                     itemType.GetProperty("Serialnumber")?.GetValue(item);
+                    var serialNumber = itemType.GetProperty("SerialNumber")?.GetValue(item);
                     var courseName = itemType.GetProperty("CourseName")?.GetValue(item);
                     var subjectName = itemType.GetProperty("SubjectName")?.GetValue(item);
                     var catchNo = itemType.GetProperty("CatchNo")?.GetValue(item);
@@ -1220,6 +1221,7 @@ namespace Tools.Controllers
                     var centerEnv = itemType.GetProperty("CenterEnv")?.GetValue(item);
                     var totalEnv = itemType.GetProperty("TotalEnv")?.GetValue(item);
                     var env = itemType.GetProperty("Env")?.GetValue(item);
+                    var nrQty = itemType.GetProperty("NRQuantity")?.GetValue(item);
 
                     worksheet.Cells[row, 1].Value = serialNumber;
                     worksheet.Cells[row, 2].Value = courseName?.ToString();
@@ -1235,7 +1237,7 @@ namespace Tools.Controllers
                     worksheet.Cells[row, 12].Value = centerEnv;
                     worksheet.Cells[row, 13].Value = totalEnv;
                     worksheet.Cells[row, 14].Value = env?.ToString();
-
+                    worksheet.Cells[row, 15].Value = nrQty;
                     row++;
                 }
 
