@@ -178,7 +178,7 @@ namespace Tools.Controllers
                 }
                 // Gather static properties (excluding NRDatas)
                 var baseProperties = typeof(NRData).GetProperties(BindingFlags.Public | BindingFlags.Instance)
-                                                   .Where(p => p.Name != "NRDatas")
+                                                   .Where(p => p.Name != "NRDatas" && p.Name!="Id" && p.Name!="ProjectId")
                                                    .Where(p => reportRows.Any(row => p.GetValue(row) != null && !string.IsNullOrEmpty(p.GetValue(row)?.ToString())))
                                                    .ToList();
 
