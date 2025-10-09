@@ -290,6 +290,40 @@ namespace Tools.Controllers
             }
         }
 
+        [HttpDelete("DeleteByProject/{ProjectId}")]
+        public async Task<IActionResult> DeleteNR(int ProjectId)
+        {
+            try
+            {
+                // Fetch all NRData records for the given project
+                var nrDataList = await _context.NRDatas
+                    .Where(d => d.ProjectId == ProjectId)
+                    .ToListAsync();
+
+                if (!nrDataList.Any())
+                {
+                    return NotFound($"No NRData found for ProjectId {ProjectId}");
+                }
+
+                // Remove all records
+                _context.NRDatas.RemoveRange(nrDataList);
+                await _context.SaveChangesAsync();
+
+                _loggerService.LogEvent(
+                    $"Deleted all NRData for ProjectId {ProjectId}",
+                    "NRData",
+                    User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0
+                );
+
+                return NoContent();
+            }
+            catch (Exception ex)
+            {
+                _loggerService.LogError("Error deleting NRData", ex.Message, nameof(NRDatasController));
+                return StatusCode(500, "Internal Server Error");
+            }
+        }
+
         private bool NRDataExists(int id)
         {
             return _context.NRDatas.Any(e => e.Id == id);
