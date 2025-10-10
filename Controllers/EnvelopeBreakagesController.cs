@@ -347,13 +347,17 @@ namespace Tools.Controllers
         }
 
         [HttpGet("Reports/Exists")]
-        public IActionResult CheckReportExists(int projectId)
+        public IActionResult CheckReportExists(int projectId, string fileName)
         {
-            var rootFolder = Path.Combine("D:\\ERPTools\\Tools\\wwwroot", projectId.ToString());
-            var filePath = Path.Combine(rootFolder);
-
-            return Ok(new { exists = System.IO.File.Exists(filePath) });
+            var rootFolder = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", projectId.ToString());
+            Console.WriteLine(rootFolder);
+            var filePath = Path.Combine(rootFolder, fileName);  // Add the file name to the path
+            Console.WriteLine(filePath);
+            // Check if the file exists and return the result
+            bool fileExists = System.IO.File.Exists(filePath);
+            return Ok(new { exists = fileExists });
         }
+
 
 
 
