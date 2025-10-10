@@ -42,6 +42,9 @@ namespace Tools.Controllers
                 var projectconfig = await _context.ProjectConfigs
                     .Where(p => p.ProjectId == ProjectId).FirstOrDefaultAsync();
 
+                if (projectconfig == null) {
+                return NotFound("Project config not exists for this project");
+                }
                 var mergeFieldIds = projectconfig.DuplicateCriteria.ToList();
 
                 var fieldNames = await _context.Fields
@@ -50,7 +53,7 @@ namespace Tools.Controllers
                 .ToListAsync();
 
                 if (!data.Any())
-                    return NotFound("No data found for this project.");
+                    return NotFound("Nr data not found for this project.");
 
                 // Group the data based on the merge fields
                 var grouped = data.GroupBy(d =>
