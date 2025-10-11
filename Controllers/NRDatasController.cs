@@ -254,6 +254,14 @@ namespace Tools.Controllers
             });
         }
 
+        [HttpGet]
+        public async Task<ActionResult> GetCount(int ProjectId)
+        {
+            int Conflict = await _context.ConflictingFields.Where(p=>p.ProjectId == ProjectId).CountAsync();
+            int NrData = await _context.NRDatas.Where(p => p.ProjectId == ProjectId).CountAsync();
+            return Ok(new { Conflict, NrData });
+        }
+
         [HttpPut]
         public async Task<ActionResult> ResolveConflicts(int ProjectId, [FromBody] ConflictResolutionDto payload)
         {
