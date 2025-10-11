@@ -54,6 +54,19 @@ namespace Tools.Controllers
         {
             var nrData = await _context.NRDatas
                 .Where(d => d.ProjectId == projectId)
+                .Select(d=>new
+                {
+                    d.CatchNo,
+                    d.CenterCode,
+                    d.ExamDate,
+                    d.ExamTime,
+                    d.SubjectName,
+                    d.CourseName,
+                    d.NodalCode,
+                    d.NRQuantity,
+                    d.Quantity,
+                    d.Pages,
+                })
                 .ToListAsync();
 
             if (!nrData.Any())
