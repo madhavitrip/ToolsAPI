@@ -254,7 +254,7 @@ namespace Tools.Controllers
             });
         }
 
-        [HttpGet]
+        [HttpGet("Counts")]
         public async Task<ActionResult> GetCount(int ProjectId)
         {
             int Conflict = await _context.ConflictingFields.Where(p=>p.ProjectId == ProjectId).CountAsync();
