@@ -332,7 +332,7 @@ namespace Tools.Controllers
             await _context.SaveChangesAsync();
 
             using var client = new HttpClient();
-            var response = await client.GetAsync($"https://localhost:7276/api/EnvelopeBreakages/EnvelopeBreakage?ProjectId={ProjectId}");
+            var response = await client.GetAsync($"http://192.168.10.208:81/API/api/EnvelopeBreakages/EnvelopeBreakage?ProjectId={ProjectId}");
 
             if (!response.IsSuccessStatusCode)
             {

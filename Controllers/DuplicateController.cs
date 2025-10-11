@@ -111,26 +111,13 @@ namespace Tools.Controllers
                     deletedRows.AddRange(duplicates);
                 }
 
-
-                if (projectconfig.Enhancement>0)
-                {
-                    foreach (var d in data)
-                    {
-                        Console.WriteLine(projectconfig.Enhancement);
-
-                        if (d.NRQuantity > 0)
-                        {
-                            Console.WriteLine(d.NRQuantity);
-                            d.Quantity = d.NRQuantity+(int)Math.Round((projectconfig.Enhancement * d.NRQuantity)/100);
-                        }
-                    }
-                }
-
+                int smallestInner = 0;
                 var innerEnv = await _context.ProjectConfigs.
                     Where(s => s.ProjectId == ProjectId).Select(s => s.Envelope)
                     .FirstOrDefaultAsync();
                 if (!string.IsNullOrEmpty(innerEnv))
                 {
+                    Console.WriteLine(innerEnv);
                     try
                     {
                         var envelopeDict = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(innerEnv);
@@ -146,13 +133,7 @@ namespace Tools.Controllers
 
                             if (innerSizes.Any())
                             {
-                                int smallestInner = innerSizes.First();
-
-                                foreach (var d in data)
-                                {
-                                    // Round down to nearest multiple of smallestInner
-                                    d.Quantity = ((d.Quantity + smallestInner - 1) / smallestInner) * smallestInner;
-                                }
+                                smallestInner = innerSizes.First();
                             }
                         }
                     }
@@ -160,8 +141,37 @@ namespace Tools.Controllers
                     {
                         // Log or handle invalid JSON
                     }
-
                 }
+                    if (smallestInner > 0)
+                    {
+                    Console.WriteLine(smallestInner);
+                        if (projectconfig.Enhancement > 0)
+                        {
+                            foreach (var d in data)
+                            {
+                                if (d.NRQuantity > 0)
+                                {
+                                    d.Quantity = d.NRQuantity + (int)Math.Round((projectconfig.Enhancement * d.NRQuantity) / 100.0);
+
+                                    // Round up to nearest multiple of smallestInner
+                                    d.Quantity = (int)Math.Ceiling(d.Quantity / (double)smallestInner) * smallestInner;
+                                }
+                            }
+                        }
+                        else
+                        {
+                            foreach (var d in data)
+                            {
+                                if (d.NRQuantity > 0)
+                                {
+                                    Console.WriteLine(d.NRQuantity);
+                                    d.Quantity = (int)Math.Ceiling(d.NRQuantity / (double)smallestInner) * smallestInner;
+                                }
+                            }
+                        }
+                    }
+
+                
 
 
                 await _context.SaveChangesAsync();
