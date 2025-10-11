@@ -80,7 +80,6 @@ namespace Tools.Controllers
                         continue;
 
                     var keep = group.First();
-                    Console.WriteLine(keep);
                         keep.Quantity = group.Sum(x => x.NRQuantity);
                         var subjectValues = group.Select(x => x.SubjectName?.Trim())
                                      .Where(v => !string.IsNullOrEmpty(v))

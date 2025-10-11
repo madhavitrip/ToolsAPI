@@ -24,6 +24,7 @@ namespace ERPToolsAPI.Data
         public DbSet<Project> Projects { get; set; }
         public DbSet<ErrorLog> ErrorLogs { get; set; }
         public DbSet<EventLog> EventLogs { get; set; }
+        public DbSet<ConflictingFields> ConflictingFields { get; set; }
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);

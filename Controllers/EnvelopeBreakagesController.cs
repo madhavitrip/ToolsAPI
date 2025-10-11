@@ -376,12 +376,15 @@ namespace Tools.Controllers
                 .Where(p => p.ProjectId == ProjectId)
                 .ToListAsync();
 
-            var capacity = await _context.ProjectConfigs
+            var Boxcapacity = await _context.ProjectConfigs
                 .Where (p => p.ProjectId == ProjectId)
                 .Select (p => p.BoxCapacity)
                 .FirstOrDefaultAsync();
+            var capacity = await _context.BoxCapacity
+           .Where(c => c.BoxCapacityId == Boxcapacity)
+             .Select(c => c.Capacity) // assuming the column is named 'Value'
+          .FirstOrDefaultAsync();
 
- 
             var boxIds = await _context.ProjectConfigs
                 .Where (p => p.ProjectId == ProjectId)
                 .Select (p => p.BoxBreakingCriteria) .FirstOrDefaultAsync();
@@ -553,25 +556,45 @@ namespace Tools.Controllers
                 {
                     mergeKey = string.Join("_", boxIds.Select(fieldId =>
                     {
-                        // Fetch the field name from Fields table (assumes fieldId is a valid FieldId)
+                        Console.WriteLine($"Looking up field name for FieldId: {fieldId}");
+
+                        // Fetch field name from list of fields
                         var fieldName = fields.FirstOrDefault(f => f.FieldId == fieldId)?.Name;
 
-                        // If the field exists in fields, get the corresponding value from nrRow
+                        Console.WriteLine($"Resolved field name: {fieldName}");
+
                         if (fieldName != null)
                         {
-                            var prop = nrRow?.GetType().GetProperty(fieldName);
-                            return prop?.GetValue(nrRow)?.ToString() ?? "";
+                            var prop = item?.GetType().GetProperty(fieldName, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+
+                            if (prop != null)
+                            {
+                                var value = prop.GetValue(item)?.ToString() ?? "";
+                                Console.WriteLine($"Value from nrRow for {fieldName}: {value}");
+                                return value;
+                            }
+                            else
+                            {
+                                Console.WriteLine($"Property '{fieldName}' not found on nrRow");
+                            }
+                        }
+                        else
+                        {
+                            Console.WriteLine($"Field name not found for fieldId: {fieldId}");
                         }
 
-                        return "";
+                        return ""; // fallback if field name or property not found
                     }));
+                    Console.WriteLine(mergeKey);
                 }
 
                 // ---- Rule 1: merge fields change → force new box
                 bool mergeChanged = (prevMergeKey != null && mergeKey != prevMergeKey);
-
+                Console.WriteLine(mergeChanged);
                 // ---- Rule 2: page overflow
                 bool overflow = (runningPages + totalPages > capacity);
+                Console.WriteLine($"Box #{boxNo} | runningPages: {runningPages} | totalPages: {totalPages} | capacity: {capacity}");
+                Console.WriteLine($"overflow: {overflow} | mergeChanged: {mergeChanged} | mergeKey: {mergeKey}");
 
                 if (mergeChanged || overflow)
                 {

@@ -219,6 +219,8 @@ namespace Tools.Controllers
                         .Distinct()
                         .Where(val => !string.IsNullOrEmpty(val))
                         .ToList();
+                    var json = JsonSerializer.Serialize(uniqueValues);
+                  
 
                     if (uniqueValues.Count > 1)
                     {
@@ -230,6 +232,15 @@ namespace Tools.Controllers
                             ConflictingValues = uniqueValues
                         });
                     }
+                    var conflictRecord = new ConflictingFields
+                    {
+                        CatchNo = catchNo,
+                        ProjectId = ProjectId, // set this from your current context
+                        UniqueField = uniqueField,
+                        ConflictingField = json
+                    };
+
+                    _context.ConflictingFields.Add(conflictRecord);
                 }
             }
 
