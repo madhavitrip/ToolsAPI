@@ -13,7 +13,7 @@ namespace Tools.Models
         public int EventTriggeredBy { get; set; }
 
         public int ProjectId { get; set; }
-        public DateTime LoggedAt { get; set; }
+        public DateTime LoggedAt { get; set; } = DateTime.Now;
         public string? OldValue { get; set; }
         public string? NewValue { get; set; }
     }
