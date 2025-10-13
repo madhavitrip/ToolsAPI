@@ -114,6 +114,10 @@ namespace Tools.Controllers
                         Quantity = g.Sum(x => x.Quantity)
                     })
                     .ToList();
+                if (!groupedNR.Any())
+                {
+                    return BadRequest("No grouping found");
+                }
 
                 var extraConfig = await _context.ExtraConfigurations
                     .Where(c => c.ProjectId == ProjectId)
@@ -192,143 +196,191 @@ namespace Tools.Controllers
                 _loggerService.LogEvent($"Created ExtraEnvelopes for Project {ProjectId}", "ExtraEnvelopes", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
 
                 // ------------------- 📊 Generate Excel Report -------------------
-                var allNRData = await _context.NRDatas
-                    .Where(x => x.ProjectId == ProjectId)
-                    .ToListAsync();
 
-                var extraconfig = await _context.ExtraConfigurations
-                    .Where(x => x.ProjectId == ProjectId).ToListAsync();
+                    var allNRData = await _context.NRDatas
+                        .Where(x => x.ProjectId == ProjectId)
+                        .ToListAsync();
 
-                var groupedByNodal = allNRData.GroupBy(x => x.NodalCode).ToList();
-
-                var extraHeaders = new HashSet<string>();
-                var innerKeys = new HashSet<string>();
-                var outerKeys = new HashSet<string>();
-
-                var allRows = new List<Dictionary<string, object>>();
-
-                foreach (var nodalGroup in groupedByNodal)
-                {
-                    var catchNos = nodalGroup.Select(x => x.CatchNo).ToHashSet();
-                    var extras1 = envelopesToAdd.Where(e => e.ExtraId == 1 && catchNos.Contains(e.CatchNo)).ToList();
-
-                    foreach (var extra in extras1)
+                    var extraconfig = await _context.ExtraConfigurations
+                        .Where(x => x.ProjectId == ProjectId).ToListAsync();
+                    if (extraConfig == null || !extraConfig.Any())
                     {
-                        var baseRow = allNRData.FirstOrDefault(x => x.CatchNo == extra.CatchNo);
-                        if (baseRow == null) continue;
-
-                        var config = extraConfig.FirstOrDefault(c => c.ExtraType == extra.ExtraId);
-                        if (config == null) continue;
-
-                        var dict = ExtraEnvelopeToDictionary(baseRow, extra, config, extraHeaders, innerKeys, outerKeys);
-                        allRows.Add(dict);
-
+                        _loggerService.LogError($"No ExtraConfiguration found for ProjectId: {ProjectId}", "", "ExtraEnvelopes");
+                        return BadRequest("No ExtraConfiguration found for the project.");
                     }
-                }
 
-                // ➕ Add ExtraTypeId = 2 (University) and 3 (Office) at the end
-                foreach (var extraType in new[] { 2, 3 })
-                {
-                    var extras = envelopesToAdd.Where(e => e.ExtraId == extraType).ToList();
+                    var groupedByNodal = allNRData.GroupBy(x => x.NodalCode).ToList();
 
-                    foreach (var extra in extras)
+                    var extraHeaders = new HashSet<string>();
+                    var innerKeys = new HashSet<string>();
+                    var outerKeys = new HashSet<string>();
+
+                    var allRows = new List<Dictionary<string, object>>();
+
+                    foreach (var nodalGroup in groupedByNodal)
                     {
-                        var baseRow = allNRData.FirstOrDefault(x => x.CatchNo == extra.CatchNo);
-                        if (baseRow == null) continue;
-                        var config = extraConfig.FirstOrDefault(c => c.ExtraType == extra.ExtraId);
-                        if (config == null) continue;
+                        var catchNos = nodalGroup.Select(x => x.CatchNo).ToHashSet();
+                        var extras1 = envelopesToAdd.Where(e => e.ExtraId == 1 && catchNos.Contains(e.CatchNo)).ToList();
 
-                        var dict = ExtraEnvelopeToDictionary(baseRow, extra, config, extraHeaders, innerKeys, outerKeys);
-                        allRows.Add(dict);
-
-
-                    }
-                }
-
-                // Create Excel
-                var allHeaders = typeof(Tools.Models.NRData).GetProperties().Select(p => p.Name).Where(p=>p!="Id" && p!="ProjectId").ToList();
-                allHeaders.AddRange(extraHeaders.OrderBy(x => x));
-                allHeaders.AddRange(innerKeys.OrderBy(x => x));
-                allHeaders.AddRange(outerKeys.OrderBy(x => x));
-
-                var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
-                if (!Directory.Exists(reportPath))
-                {
-                    Directory.CreateDirectory(reportPath);
-                }
-                var filename = "ExtrasCalculation.xlsx";
-                var filePath = Path.Combine(reportPath, filename);
-
-                // 📁 Skip generation if file already exists
-                if (System.IO.File.Exists(filePath))
-                {
-                    System.IO.File.Delete(filePath);
-                }
-                var nonEmptyColumns = new List<string>();
-
-                // List to hold all rows after removing empty columns
-                var filteredRows = new List<Dictionary<string, object>>();
-
-                // Iterate over allRows to check for non-empty columns
-                foreach (var row in allRows)
-                {
-                    var filteredRow = new Dictionary<string, object>();
-
-                    foreach (var header in allHeaders)
-                    {
-                        if (row.ContainsKey(header))
+                        foreach (var extra in extras1)
                         {
-                            var value = row[header];
-                            if (value != null && !string.IsNullOrEmpty(value.ToString()))
+                            var baseRow = allNRData.FirstOrDefault(x => x.CatchNo == extra.CatchNo);
+                            if (baseRow == null)
                             {
-                                filteredRow[header] = value;
-                                if (!nonEmptyColumns.Contains(header))
+                                _loggerService.LogError($"Base row not found for CatchNo: {extra.CatchNo} in NRData", "", "ExtraEnvelopes");
+                                continue; // Skip to the next entry
+                            }
+
+
+                            var config = extraConfig.FirstOrDefault(c => c.ExtraType == extra.ExtraId);
+                            if (config == null) continue;
+
+                            var dict = ExtraEnvelopeToDictionary(baseRow, extra, config, extraHeaders, innerKeys, outerKeys);
+                            allRows.Add(dict);
+
+                        }
+                    }
+
+                    // ➕ Add ExtraTypeId = 2 (University) and 3 (Office) at the end
+                    foreach (var extraType in new[] { 2, 3 })
+                    {
+                        var extras = envelopesToAdd.Where(e => e.ExtraId == extraType).ToList();
+
+                        foreach (var extra in extras)
+                        {
+                            var baseRow = allNRData.FirstOrDefault(x => x.CatchNo == extra.CatchNo);
+                            if (baseRow == null)
+                            {
+                                _loggerService.LogError($"Base row not found for CatchNo: {extra.CatchNo} in NRData", "", "ExtraEnvelopes");
+                                continue;
+                            }
+                            var config = extraConfig.FirstOrDefault(c => c.ExtraType == extra.ExtraId);
+                            if (config == null) continue;
+
+                            var dict = ExtraEnvelopeToDictionary(baseRow, extra, config, extraHeaders, innerKeys, outerKeys);
+                            allRows.Add(dict);
+
+
+                        }
+                    }
+                    if (!allRows.Any())
+                    {
+                        _loggerService.LogError("No valid rows found for Excel generation", "", "ExtraEnvelopes");
+                        return BadRequest("No valid data to generate Excel report.");
+                    }
+
+                    // Create Excel
+                    var allHeaders = typeof(Tools.Models.NRData).GetProperties().Select(p => p.Name).Where(p => p != "Id" && p != "ProjectId").ToList();
+                    allHeaders.AddRange(extraHeaders.OrderBy(x => x));
+                    allHeaders.AddRange(innerKeys.OrderBy(x => x));
+                    allHeaders.AddRange(outerKeys.OrderBy(x => x));
+
+                    var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
+                    if (!Directory.Exists(reportPath))
+                    {
+                        Directory.CreateDirectory(reportPath);
+                    }
+                    var filename = "ExtrasCalculation.xlsx";
+                    var filePath = Path.Combine(reportPath, filename);
+
+                    // 📁 Skip generation if file already exists
+                    if (System.IO.File.Exists(filePath))
+                    {
+                        System.IO.File.Delete(filePath);
+                    }
+                    var nonEmptyColumns = new List<string>();
+
+                    // List to hold all rows after removing empty columns
+                    var filteredRows = new List<Dictionary<string, object>>();
+
+                    // Iterate over allRows to check for non-empty columns
+                    try
+                    {
+                        foreach (var row in allRows)
+                        {
+                            var filteredRow = new Dictionary<string, object>();
+
+                            foreach (var header in allHeaders)
+                            {
+                                if (row.ContainsKey(header))
                                 {
-                                    nonEmptyColumns.Add(header);  // Mark the column as non-empty
+                                    var value = row[header];
+                                    if (value != null && !string.IsNullOrEmpty(value.ToString()))
+                                    {
+                                        filteredRow[header] = value;
+                                        if (!nonEmptyColumns.Contains(header))
+                                        {
+                                            nonEmptyColumns.Add(header);  // Mark the column as non-empty
+                                        }
+                                    }
                                 }
+                            }
+
+                            if (filteredRow.Any())  // Add row only if it has any data
+                            {
+                                filteredRows.Add(filteredRow);
                             }
                         }
                     }
+                    catch (Exception ex)
+                    {
+                        _loggerService.LogError("Error processing rows for Excel file", ex.ToString(), "ExtraEnvelopesController");
+                        throw new Exception("Error generating Excel report", ex); // Rethrow after logging
+                    }
 
-                    if (filteredRow.Any())  // Add row only if it has any data
+                    if (!filteredRows.Any())
                     {
-                        filteredRows.Add(filteredRow);
+                        _loggerService.LogError("No valid rows found after filtering", "", "ExtraEnvelopes");
+                        return BadRequest("No valid data to save in the Excel file.");
                     }
-                }
-                using (var package = new ExcelPackage())
-                {
-                    var ws = package.Workbook.Worksheets.Add("Extra Envelope");
-                    var validHeaders = nonEmptyColumns;
-                    for (int i = 0; i < validHeaders.Count; i++)
+                    try
                     {
-                        ws.Cells[1, i + 1].Value = validHeaders[i];
-                        ws.Cells[1, i + 1].Style.Font.Bold = true;
-                    }
-                  
-                    int rowIdx = 2;
-                    foreach (var row in filteredRows)
-                    {
-                        for (int colIdx = 0; colIdx < validHeaders.Count; colIdx++)
+                        using (var package = new ExcelPackage())
                         {
-                            var key = validHeaders[colIdx];
-                            row.TryGetValue(key, out object value);
-                            ws.Cells[rowIdx, colIdx + 1].Value = value?.ToString() ?? "";
+                            var ws = package.Workbook.Worksheets.Add("Extra Envelope");
+                            if (!nonEmptyColumns.Any())
+                            {
+                                _loggerService.LogError("No non-empty columns found for Excel report", "", "ExtraEnvelopes");
+                                return BadRequest("No data to write to Excel.");
+                            }
+
+                            var validHeaders = nonEmptyColumns;
+                            for (int i = 0; i < validHeaders.Count; i++)
+                            {
+                                ws.Cells[1, i + 1].Value = validHeaders[i];
+                                ws.Cells[1, i + 1].Style.Font.Bold = true;
+                            }
+
+                            int rowIdx = 2;
+                            foreach (var row in filteredRows)
+                            {
+                                for (int colIdx = 0; colIdx < validHeaders.Count; colIdx++)
+                                {
+                                    var key = validHeaders[colIdx];
+                                    row.TryGetValue(key, out object value);
+                                    ws.Cells[rowIdx, colIdx + 1].Value = value?.ToString() ?? "";
+                                }
+                                rowIdx++;
+                            }
+
+                            ws.Cells[ws.Dimension.Address].AutoFitColumns();
+                            package.SaveAs(new FileInfo(filePath));
                         }
-                        rowIdx++;
+                    }
+                    catch (Exception ex)
+                    {
+                        _loggerService.LogError("Error saving Excel file", ex.ToString(), "ExtraEnvelopesController");
+                        throw new Exception("Error generating Excel report", ex); // Rethrow after logging
                     }
 
-                    ws.Cells[ws.Dimension.Address].AutoFitColumns();
-                    package.SaveAs(new FileInfo(filePath));
+                    return Ok(envelopesToAdd);
                 }
-
-                return Ok(envelopesToAdd);
+                catch (Exception ex)
+                {
+                    _loggerService.LogError("Error creating ExtraEnvelope", ex.Message, nameof(ExtraEnvelopesController));
+                    return StatusCode(500, "Internal server error");
+                }
             }
-            catch (Exception ex)
-            {
-                _loggerService.LogError("Error creating ExtraEnvelope", ex.Message, nameof(ExtraEnvelopesController));
-                return StatusCode(500, "Internal server error");
-            }
-        }
 
         private Dictionary<string, object> ExtraEnvelopeToDictionary(
        Tools.Models.NRData baseRow,
@@ -337,120 +389,119 @@ namespace Tools.Controllers
        HashSet<string> extraKeys,
        HashSet<string> innerKeys,
        HashSet<string> outerKeys)
-        {
-            var dict = new Dictionary<string, object>
             {
-                ["CourseName"] = baseRow.CourseName,
-                ["SubjectName"] = baseRow.SubjectName,
-                ["CatchNo"] = baseRow.CatchNo,
-                ["ExamTime"] = baseRow.ExamTime,
-                ["ExamDate"] = baseRow.ExamDate,
-                ["NodalCode"] = baseRow.NodalCode,
-                ["NRDatas"] = baseRow.NRDatas,
-                ["Quantity"] = extra.Quantity,
-                ["NRQuantity"] = baseRow.NRQuantity
+                var dict = new Dictionary<string, object>
+                {
+                    ["CourseName"] = baseRow.CourseName,
+                    ["SubjectName"] = baseRow.SubjectName,
+                    ["CatchNo"] = baseRow.CatchNo,
+                    ["ExamTime"] = baseRow.ExamTime,
+                    ["ExamDate"] = baseRow.ExamDate,
+                    ["NodalCode"] = baseRow.NodalCode,
+                    ["NRDatas"] = baseRow.NRDatas,
+                    ["Quantity"] = extra.Quantity,
 
-            };
+                };
 
-            // Set CenterCode
-            switch (extra.ExtraId)
-            {
-                case 1:
-                    dict["CenterCode"] = "Nodal Extra";
-                    break;
-                case 2:
-                    dict["CenterCode"] = "University Extra";
+                // Set CenterCode
+                switch (extra.ExtraId)
+                {
+                    case 1:
+                        dict["CenterCode"] = "Nodal Extra";
+                        break;
+                    case 2:
+                        dict["CenterCode"] = "University Extra";
 
-                    break;
-                case 3:
-                    dict["CenterCode"] = "Office Extra";
+                        break;
+                    case 3:
+                        dict["CenterCode"] = "Office Extra";
 
-                    break;
-                default:
-                    dict["CenterCode"] = "Extra";
-                    break;
+                        break;
+                    default:
+                        dict["CenterCode"] = "Extra";
+                        break;
+                }
+
+                // Add NRDatas (extra fields)
+                if (!string.IsNullOrEmpty(baseRow.NRDatas))
+                {
+                    try
+                    {
+                        var extras = JsonSerializer.Deserialize<Dictionary<string, string>>(baseRow.NRDatas);
+                        if (extras != null)
+                        {
+                            foreach (var kvp in extras)
+                            {
+                                dict[kvp.Key] = kvp.Value;
+                                extraKeys.Add(kvp.Key);
+                            }
+                        }
+                    }
+                    catch { }
+                }
+
+                // ✅ Set InnerEnvelope and OuterEnvelope values in proper columns
+                EnvelopeType envelopeType;
+                try
+                {
+                    envelopeType = JsonSerializer.Deserialize<EnvelopeType>(config.EnvelopeType);
+                }
+                catch
+                {
+                    envelopeType = new EnvelopeType { Inner = "E1", Outer = "E1" }; // fallback
+                }
+
+                string innerKey = $"Inner_{envelopeType.Inner}";
+                string outerKey = $"Outer_{envelopeType.Outer}";
+
+                dict[innerKey] = extra.InnerEnvelope;
+                dict[outerKey] = extra.OuterEnvelope;
+
+                innerKeys.Add(innerKey);
+                outerKeys.Add(outerKey);
+
+                return dict;
             }
 
-            // Add NRDatas (extra fields)
-            if (!string.IsNullOrEmpty(baseRow.NRDatas))
+            private int GetEnvelopeCapacity(string envelopeCode)
+            {
+                if (string.IsNullOrWhiteSpace(envelopeCode))
+                    return 1; // default to 1 if null or invalid
+
+                // Expecting format like "E10", "E25", etc.
+                var numberPart = new string(envelopeCode.Where(char.IsDigit).ToArray());
+
+                return int.TryParse(numberPart, out var capacity) ? capacity : 1;
+            }
+
+
+            // DELETE: api/ExtraEnvelopes/5
+            [HttpDelete("{id}")]
+            public async Task<IActionResult> DeleteExtraEnvelopes(int id)
             {
                 try
                 {
-                    var extras = JsonSerializer.Deserialize<Dictionary<string, string>>(baseRow.NRDatas);
-                    if (extras != null)
+                    var extraEnvelopes = await _context.ExtrasEnvelope.FindAsync(id);
+                    if (extraEnvelopes == null)
                     {
-                        foreach (var kvp in extras)
-                        {
-                            dict[kvp.Key] = kvp.Value;
-                            extraKeys.Add(kvp.Key);
-                        }
+                        return NotFound();
                     }
+
+                    _context.ExtrasEnvelope.Remove(extraEnvelopes);
+                    await _context.SaveChangesAsync();
+                    _loggerService.LogEvent($"ExtraEnvelope with ID {id} is deleted", "ExtraEnvelope", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
+                    return NoContent();
                 }
-                catch { }
-            }
-
-            // ✅ Set InnerEnvelope and OuterEnvelope values in proper columns
-            EnvelopeType envelopeType;
-            try
-            {
-                envelopeType = JsonSerializer.Deserialize<EnvelopeType>(config.EnvelopeType);
-            }
-            catch
-            {
-                envelopeType = new EnvelopeType { Inner = "E1", Outer = "E1" }; // fallback
-            }
-
-            string innerKey = $"Inner_{envelopeType.Inner}";
-            string outerKey = $"Outer_{envelopeType.Outer}";
-
-            dict[innerKey] = extra.InnerEnvelope;
-            dict[outerKey] = extra.OuterEnvelope;
-
-            innerKeys.Add(innerKey);
-            outerKeys.Add(outerKey);
-
-            return dict;
-        }
-
-        private int GetEnvelopeCapacity(string envelopeCode)
-        {
-            if (string.IsNullOrWhiteSpace(envelopeCode))
-                return 1; // default to 1 if null or invalid
-
-            // Expecting format like "E10", "E25", etc.
-            var numberPart = new string(envelopeCode.Where(char.IsDigit).ToArray());
-
-            return int.TryParse(numberPart, out var capacity) ? capacity : 1;
-        }
-
-
-        // DELETE: api/ExtraEnvelopes/5
-        [HttpDelete("{id}")]
-        public async Task<IActionResult> DeleteExtraEnvelopes(int id)
-        {
-            try
-            {
-                var extraEnvelopes = await _context.ExtrasEnvelope.FindAsync(id);
-                if (extraEnvelopes == null)
+                catch (Exception ex)
                 {
-                    return NotFound();
+                    _loggerService.LogError($"Error deleting ExtraEnvelope with ID {id}", ex.Message, nameof(ExtraEnvelopesController));
+                    return StatusCode(500, "Internal Server Error");
                 }
-
-                _context.ExtrasEnvelope.Remove(extraEnvelopes);
-                await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"ExtraEnvelope with ID {id} is deleted", "ExtraEnvelope", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
-                return NoContent();
             }
-            catch (Exception ex)
+
+            private bool ExtraEnvelopesExists(int id)
             {
-                _loggerService.LogError($"Error deleting ExtraEnvelope with ID {id}", ex.Message, nameof(ExtraEnvelopesController));
-                return StatusCode(500, "Internal Server Error");
+                return _context.ExtrasEnvelope.Any(e => e.Id == id);
             }
-        }
-
-        private bool ExtraEnvelopesExists(int id)
-        {
-            return _context.ExtrasEnvelope.Any(e => e.Id == id);
         }
     }
-}
