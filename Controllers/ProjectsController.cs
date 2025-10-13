@@ -91,10 +91,44 @@ namespace Tools.Controllers
 
         [HttpGet("RecentProjects")]
 
-        public async Task<ActionResult> GetRecentProject(int UserId)
+        public async Task<ActionResult> GetRecentProject()
         {
-           var RecentActivity = _context.EventLogs.Where(s=>s.EventTriggeredBy == UserId).Select(s=>s.ProjectId).Distinct();
-            return Ok(RecentActivity);
+            var token = Request.Headers["Authorization"].ToString()?.Replace("Bearer ", "");
+
+            if (string.IsNullOrEmpty(token))
+            {
+                return Unauthorized("Token is required.");
+            }
+
+            try
+            {
+                // Decode the JWT token and extract userId
+                var handler = new JwtSecurityTokenHandler();
+                var jsonToken = handler.ReadToken(token) as JwtSecurityToken;
+
+                // Extract the userId from the correct claim (adjusting based on your token structure)
+                var userIdClaim = jsonToken?.Claims.FirstOrDefault(c => c.Type == "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name");
+                var userId = userIdClaim?.Value;
+
+                if (string.IsNullOrEmpty(userId))
+                {
+                    return Unauthorized("User ID not found in token.");
+                }
+
+                // Convert userId to integer (if necessary)
+                if (!int.TryParse(userId, out int userIntId))
+                {
+                    return Unauthorized("Invalid User ID format.");
+                }
+                var RecentActivity = _context.EventLogs.Where(s => s.EventTriggeredBy == userIntId).Select(s => new { s.ProjectId, s.LoggedAt, s.EventId }).OrderByDescending(s => s.EventId).Distinct().Take(3);
+                return Ok(RecentActivity);
+            }
+            catch (Exception ex)
+            {
+                _loggerService.LogError("Error decoding token",ex.Message,nameof(ProjectsController));
+                return BadRequest($"Error decoding token: {ex.Message}");
+            }
+
 
         }
         // GET: api/Projects/5
