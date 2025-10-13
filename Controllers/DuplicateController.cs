@@ -42,8 +42,9 @@ namespace Tools.Controllers
                 var projectconfig = await _context.ProjectConfigs
                     .Where(p => p.ProjectId == ProjectId).FirstOrDefaultAsync();
 
-                if (projectconfig == null) {
-                return NotFound("Project config not exists for this project");
+                if (projectconfig == null)
+                {
+                    return NotFound("Project config not exists for this project");
                 }
                 var mergeFieldIds = projectconfig.DuplicateCriteria.ToList();
 
@@ -80,27 +81,27 @@ namespace Tools.Controllers
                         continue;
 
                     var keep = group.First();
-                        keep.Quantity = group.Sum(x => x.NRQuantity);
-                        var subjectValues = group.Select(x => x.SubjectName?.Trim())
-                                     .Where(v => !string.IsNullOrEmpty(v))
-                                     .Distinct(StringComparer.OrdinalIgnoreCase)
-                                     .ToList();
+                    keep.Quantity = group.Sum(x => x.NRQuantity);
+                    var subjectValues = group.Select(x => x.SubjectName?.Trim())
+                                 .Where(v => !string.IsNullOrEmpty(v))
+                                 .Distinct(StringComparer.OrdinalIgnoreCase)
+                                 .ToList();
 
-                        if (subjectValues.Count > 1)
-                            keep.SubjectName = string.Join(" / ", subjectValues);
-                        else if (subjectValues.Count == 1)
-                            keep.SubjectName = subjectValues.First();
+                    if (subjectValues.Count > 1)
+                        keep.SubjectName = string.Join(" / ", subjectValues);
+                    else if (subjectValues.Count == 1)
+                        keep.SubjectName = subjectValues.First();
 
-                        var courseValues = group.Select(x => x.CourseName?.Trim())
-                                                .Where(v => !string.IsNullOrEmpty(v))
-                                                .Distinct(StringComparer.OrdinalIgnoreCase)
-                                                .ToList();
+                    var courseValues = group.Select(x => x.CourseName?.Trim())
+                                            .Where(v => !string.IsNullOrEmpty(v))
+                                            .Distinct(StringComparer.OrdinalIgnoreCase)
+                                            .ToList();
 
-                        if (courseValues.Count > 1)
-                            keep.CourseName = string.Join(" / ", courseValues);
-                        else if (courseValues.Count == 1)
-                            keep.CourseName = courseValues.First();
-                    
+                    if (courseValues.Count > 1)
+                        keep.CourseName = string.Join(" / ", courseValues);
+                    else if (courseValues.Count == 1)
+                        keep.CourseName = courseValues.First();
+
 
 
                     var duplicates = group.Skip(1).ToList();
@@ -136,43 +137,41 @@ namespace Tools.Controllers
                             }
                         }
                     }
-                    catch
+                    catch (Exception ex)
                     {
-                        // Log or handle invalid JSON
+                        _logger.LogError("Error in serializing Envelope", ex.Message, nameof(DuplicateController));
+                        return StatusCode(500, "Internal server error");
                     }
                 }
-                    if (smallestInner > 0)
-                    {
+                if (smallestInner > 0)
+                {
                     Console.WriteLine(smallestInner);
-                        if (projectconfig.Enhancement > 0)
+                    if (projectconfig.Enhancement > 0)
+                    {
+                        foreach (var d in data)
                         {
-                            foreach (var d in data)
+                            if (d.NRQuantity > 0)
                             {
-                                if (d.NRQuantity > 0)
-                                {
-                                    d.Quantity = d.NRQuantity + (int)Math.Round((projectconfig.Enhancement * d.NRQuantity) / 100.0);
+                                d.Quantity = d.NRQuantity + (int)Math.Round((projectconfig.Enhancement * d.NRQuantity) / 100.0);
 
-                                    // Round up to nearest multiple of smallestInner
-                                    d.Quantity = (int)Math.Ceiling(d.Quantity / (double)smallestInner) * smallestInner;
-                                }
-                            }
-                        }
-                        else
-                        {
-                            foreach (var d in data)
-                            {
-                                if (d.NRQuantity > 0)
-                                {
-                                    Console.WriteLine(d.NRQuantity);
-                                    d.Quantity = (int)Math.Ceiling(d.NRQuantity / (double)smallestInner) * smallestInner;
-                                }
+                                // Round up to nearest multiple of smallestInner
+                                d.Quantity = (int)Math.Ceiling(d.Quantity / (double)smallestInner) * smallestInner;
                             }
                         }
                     }
-
-                
-
-
+                    else
+                    {
+                        foreach (var d in data)
+                        {
+                            if (d.NRQuantity > 0)
+                            {
+                                Console.WriteLine(d.NRQuantity);
+                                d.Quantity = (int)Math.Ceiling(d.NRQuantity / (double)smallestInner) * smallestInner;
+                            }
+                        }
+                    }
+                }
+                _logger.LogEvent($"Duplicates has been deleted", "Duplicates", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, ProjectId);
                 await _context.SaveChangesAsync();
                 // Excel Report Path
                 var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
@@ -190,37 +189,45 @@ namespace Tools.Controllers
                 }
                 // Gather static properties (excluding NRDatas)
                 var baseProperties = typeof(NRData).GetProperties(BindingFlags.Public | BindingFlags.Instance)
-                                                   .Where(p => p.Name != "NRDatas" && p.Name!="Id" && p.Name!="ProjectId")
+                                                   .Where(p => p.Name != "NRDatas" && p.Name != "Id" && p.Name != "ProjectId")
                                                    .Where(p => reportRows.Any(row => p.GetValue(row) != null && !string.IsNullOrEmpty(p.GetValue(row)?.ToString())))
                                                    .ToList();
 
                 var extraHeaders = new HashSet<string>();
                 var parsedRows = new List<(NRData row, Dictionary<string, string> extras)>();
-
-                foreach (var row in reportRows)
+                try
                 {
-                    var extras = new Dictionary<string, string>();
-
-                    if (!string.IsNullOrEmpty(row.NRDatas))
+                    foreach (var row in reportRows)
                     {
-                        try
+                        var extras = new Dictionary<string, string>();
+
+                        if (!string.IsNullOrEmpty(row.NRDatas))
                         {
-                            extras = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(row.NRDatas);
-                            if (extras != null)
+                            try
                             {
-                                foreach (var key in extras.Keys)
-                                    extraHeaders.Add(key);
+                                extras = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(row.NRDatas);
+                                if (extras != null)
+                                {
+                                    foreach (var key in extras.Keys)
+                                        extraHeaders.Add(key);
+                                }
+                            }
+                            catch(Exception ex) 
+                            {
+                                _logger.LogError("Error in deserializing NRData", ex.Message, nameof(DuplicateController));
+                                return StatusCode(500, "Internal server error");
                             }
                         }
-                        catch
-                        {
-                            // Optionally log parsing error
-                        }
+
+                        parsedRows.Add((row, extras));
                     }
-
-                    parsedRows.Add((row, extras));
                 }
+                catch (Exception ex)
+                {
+                    _logger.LogError("Error in reportrows", ex.Message, nameof(DuplicateController));
+                    return StatusCode(500, "Internal server error");
 
+                }
                 using (var package = new ExcelPackage())
                 {
                     var ws = package.Workbook.Worksheets.Add("Merge Report");
@@ -275,12 +282,12 @@ namespace Tools.Controllers
 
                     ws.Cells[ws.Dimension.Address].AutoFitColumns();
                     package.SaveAs(new FileInfo(filePath));
-
+                    _logger.LogEvent($"Duplicates report has been created", "Duplicates", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, ProjectId);
                 }
 
                 return Ok(new
                 {
-                    MergedRows = mergedCount
+                MergedRows = mergedCount
                 });
             }
             catch (Exception ex)

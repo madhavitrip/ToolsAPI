@@ -60,14 +60,14 @@ namespace Tools.Controllers
             try
             {
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Updated ExtraType for {id} ", "NRData", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
+                _loggerService.LogEvent($"Updated ExtraType for {id} ", "NRData", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,0);
 
             }
             catch (Exception ex)
             {
                 if (!ExtraTypeExists(id))
                 {
-                    _loggerService.LogEvent($"ExtraType with ID {id} not found during updating", "ExtraType", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
+                    _loggerService.LogEvent($"ExtraType with ID {id} not found during updating", "ExtraType", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,0);
                     return NotFound();
                 }
                 else
@@ -89,7 +89,7 @@ namespace Tools.Controllers
             {
                 _context.ExtraType.Add(extraType);
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Created a new ExtraType with ID {extraType.ExtraTypeId}", "ExtraType", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
+                _loggerService.LogEvent($"Created a new ExtraType with ID {extraType.ExtraTypeId}", "ExtraType", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,0);
                 return CreatedAtAction("GetExtraType", new { id = extraType.ExtraTypeId }, extraType);
             }
             catch (Exception ex)
@@ -113,7 +113,7 @@ namespace Tools.Controllers
 
                 _context.ExtraType.Remove(extraType);
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Deleted a ExtraTypes with ID {id}", "ExtraTypes", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
+                _loggerService.LogEvent($"Deleted a ExtraTypes with ID {id}", "ExtraTypes", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,0);
 
                 return NoContent();
             }

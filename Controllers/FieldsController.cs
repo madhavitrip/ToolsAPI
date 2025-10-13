@@ -61,14 +61,14 @@ namespace Tools.Controllers
             try
             {
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Updated Field for Id {id}", "Field", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
+                _loggerService.LogEvent($"Updated Field for Id {id}", "Field", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,0);
 
             }
             catch (Exception ex)
             {
                 if (!FieldExists(id))
                 {
-                    _loggerService.LogEvent($"Field with ID {id} not found during updating", "Field", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
+                    _loggerService.LogEvent($"Field with ID {id} not found during updating", "Field", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,0);
 
                     return NotFound();
                 }
@@ -92,7 +92,7 @@ namespace Tools.Controllers
             {
                 _context.Fields.Add(@field);
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Created a new Field with ID {field.FieldId}", "Field", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
+                _loggerService.LogEvent($"Created a new Field with ID {field.FieldId}", "Field", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,0);
 
                 return CreatedAtAction("GetField", new { id = @field.FieldId }, @field);
             }
@@ -117,7 +117,7 @@ namespace Tools.Controllers
 
                 _context.Fields.Remove(@field);
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Deleted a Field with ID {id}", "Field", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
+                _loggerService.LogEvent($"Deleted a Field with ID {id}", "Field", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,0);
 
                 return NoContent();
             }
