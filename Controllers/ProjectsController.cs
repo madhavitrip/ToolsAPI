@@ -81,7 +81,28 @@ namespace Tools.Controllers
                     return NotFound("No projects found for this user.");
                 }
 
-                return Ok(userProjects);
+                var projectIds = userProjects.Select(p => p.ProjectId).ToList();
+
+                // Perform the join and grouping
+                var projectWithLastLoggedAt = await _context.EventLogs
+                    .Where(e => projectIds.Contains(e.ProjectId))  // Filter EventLogs for the user's projects
+                    .GroupBy(e => e.ProjectId)  // Group by ProjectId to get distinct projects
+                    .Select(g => new
+                    {
+                        ProjectId = g.Key,
+                        LatestLoggedAt = g.Max(e => e.LoggedAt),  // Get the most recent LoggedAt for each ProjectId
+                    })
+                    .ToListAsync();
+
+                // Join the result with userProjects to get the project name and latest log time
+                var result = userProjects
+                    .Join(projectWithLastLoggedAt, p => p.ProjectId, l => l.ProjectId, (p, l) => new
+                    {
+                        p.ProjectId,
+                       TimeAgo = GetTimeAgo(l.LatestLoggedAt) 
+                    })
+                    .ToList();
+                return Ok(result);
             }
             catch (Exception ex)
             {
@@ -112,7 +133,7 @@ namespace Tools.Controllers
 
                 if (string.IsNullOrEmpty(userId))
                 {
-                    _loggerService.LogEvent($"User with ID not found in token. ", "Projects", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, 0);
+                    _loggerService.LogEvent($"User with ID not found in token. ", "Projects", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,0);
                     return Unauthorized("User ID not found in token.");
                 }
 
@@ -145,14 +166,14 @@ namespace Tools.Controllers
      .ToList();
 
                 // Helper method to format time difference
-
+              
 
 
                 return Ok(recentProjects);
             }
             catch (Exception ex)
             {
-                _loggerService.LogError("Error decoding token", ex.Message, nameof(ProjectsController));
+                _loggerService.LogError("Error decoding token",ex.Message,nameof(ProjectsController));
                 return BadRequest($"Error decoding token: {ex.Message}");
             }
 
@@ -206,7 +227,7 @@ namespace Tools.Controllers
             try
             {
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Updated Project with ID {project.ProjectId}", "Projects", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, project.ProjectId);
+                _loggerService.LogEvent($"Updated Project with ID {project.ProjectId}", "Projects", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,project.ProjectId);
             }
             catch (Exception ex)
             {
