@@ -89,7 +89,14 @@ namespace Tools.Controllers
             }
         }
 
+        [HttpGet("RecentProjects")]
 
+        public async Task<ActionResult> GetRecentProject(int UserId)
+        {
+           var RecentActivity = _context.EventLogs.Where(s=>s.EventTriggeredBy == UserId).Select(s=>s.ProjectId).Distinct();
+            return Ok(RecentActivity);
+
+        }
         // GET: api/Projects/5
         [HttpGet("{id}")]
         public async Task<ActionResult<Project>> GetProject(int id)
@@ -119,13 +126,13 @@ namespace Tools.Controllers
             try
             {
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Updated Project with ID {project.ProjectId}", "Projects", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
+                _loggerService.LogEvent($"Updated Project with ID {project.ProjectId}", "Projects", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,project.ProjectId);
             }
             catch (Exception ex)
             {
                 if (!ProjectExists(id))
                 {
-                    _loggerService.LogEvent($"Project with ID {id} not found during updating", "Projects", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
+                    _loggerService.LogEvent($"Project with ID {id} not found during updating", "Projects", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, project.ProjectId);
                     return NotFound();
                 }
                 else
@@ -147,7 +154,7 @@ namespace Tools.Controllers
             {
                 _context.Projects.Add(project);
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Created a new Project with ID {project.ProjectId}", "Projects", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
+                _loggerService.LogEvent($"Created a new Project with ID {project.ProjectId}", "Projects", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, project.ProjectId);
                 return CreatedAtAction("GetProject", new { id = project.ProjectId }, project);
             }
             catch (Exception ex)
@@ -166,13 +173,13 @@ namespace Tools.Controllers
                 var project = await _context.Projects.FindAsync(id);
                 if (project == null)
                 {
-                    _loggerService.LogEvent($"Project with ID {id} not found during delete", "Projects", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
+                    _loggerService.LogEvent($"Project with ID {id} not found during delete", "Projects", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, project.ProjectId);
                     return NotFound();
                 }
 
                 _context.Projects.Remove(project);
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Deleted a Project with ID {project.ProjectId}", "Projects", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
+                _loggerService.LogEvent($"Deleted a Project with ID {project.ProjectId}", "Projects", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, project.ProjectId);
                 return NoContent();
             }
             catch (Exception ex)

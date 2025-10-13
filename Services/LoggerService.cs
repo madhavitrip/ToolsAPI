@@ -13,12 +13,13 @@ namespace Tools.Services
             _context = context;
         }
 
-        public void LogEvent(string message, string category, int triggeredBy, string oldValue = null, string newValue = null)
+        public void LogEvent(string message, string category, int triggeredBy,int ProjectId, string oldValue = null, string newValue = null)
         {
             var log = new EventLog
             {
                 Event = message,
                 EventTriggeredBy = triggeredBy,
+                ProjectId = ProjectId,
                 Category = category,
                 OldValue = oldValue,  // Log the old value if available
                 NewValue = newValue   // Log the new value if available

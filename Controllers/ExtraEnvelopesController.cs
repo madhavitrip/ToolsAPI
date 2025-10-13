@@ -68,14 +68,14 @@ namespace Tools.Controllers
 
             try
             {
-                _loggerService.LogEvent($"Updated ExtraEnvelope with id {id}", "ExtraEnvelopes", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
+                _loggerService.LogEvent($"Updated ExtraEnvelope with id {id}", "ExtraEnvelopes", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,extraEnvelopes.ProjectId);
                 await _context.SaveChangesAsync();
             }
             catch (Exception ex)
             {
                 if (!ExtraEnvelopesExists(id))
                 {
-                    _loggerService.LogEvent($"ExtraEnvelopes with ID {id} not found during updating", "ExtraEnvelopes", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
+                    _loggerService.LogEvent($"ExtraEnvelopes with ID {id} not found during updating", "ExtraEnvelopes", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, extraEnvelopes.ProjectId);
                     return NotFound();
                 }
                 else
@@ -193,7 +193,7 @@ namespace Tools.Controllers
 
                 await _context.ExtrasEnvelope.AddRangeAsync(envelopesToAdd);
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Created ExtraEnvelopes for Project {ProjectId}", "ExtraEnvelopes", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
+                _loggerService.LogEvent($"Created ExtraEnvelopes for Project {ProjectId}", "ExtraEnvelopes", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,ProjectId);
 
                 // ------------------- 📊 Generate Excel Report -------------------
 
@@ -489,7 +489,7 @@ namespace Tools.Controllers
 
                     _context.ExtrasEnvelope.Remove(extraEnvelopes);
                     await _context.SaveChangesAsync();
-                    _loggerService.LogEvent($"ExtraEnvelope with ID {id} is deleted", "ExtraEnvelope", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
+                    _loggerService.LogEvent($"ExtraEnvelope with ID {id} is deleted", "ExtraEnvelope", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,extraEnvelopes.ProjectId);
                     return NoContent();
                 }
                 catch (Exception ex)

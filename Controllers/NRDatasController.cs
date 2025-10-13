@@ -95,13 +95,13 @@ namespace Tools.Controllers
             try
             {
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Updated NrData for {id}", "NRData", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
+                _loggerService.LogEvent($"Updated NrData for {id}", "NRData", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,nRData.ProjectId);
             }
             catch (Exception ex)
             {
                 if (!NRDataExists(id))
                 {
-                    _loggerService.LogEvent($"Nrdata with ID {id} not found", "NRData", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
+                    _loggerService.LogEvent($"Nrdata with ID {id} not found", "NRData", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,nRData.ProjectId);
                     return NotFound();
                 }
                 else
@@ -161,7 +161,7 @@ namespace Tools.Controllers
                 }
 
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Created new NRadat with ID {projectId}", "NRData", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
+                _loggerService.LogEvent($"Created new NRadat with ID {projectId}", "NRData", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,projectId);
                 return Ok("Data inserted successfully");
             }
             catch (Exception ex)
@@ -281,7 +281,7 @@ namespace Tools.Controllers
                     }
                 }
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Updated NRdata for CatchNo {payload.CatchNo} and ProjectId {ProjectId}", "NRData", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
+                _loggerService.LogEvent($"Updated NRdata for CatchNo {payload.CatchNo} and ProjectId {ProjectId}", "NRData", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,ProjectId);
                 return Ok("Conflict resolved successfully");
             }
             catch (Exception ex)
@@ -312,7 +312,7 @@ namespace Tools.Controllers
 
                 _context.NRDatas.Remove(nRData);
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Deleted NRdata of {id}", "NRData", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
+                _loggerService.LogEvent($"Deleted NRdata of {id}", "NRData", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,nRData.ProjectId);
                 return NoContent();
             }
             catch (Exception ex)
@@ -344,7 +344,7 @@ namespace Tools.Controllers
                 _loggerService.LogEvent(
                     $"Deleted all NRData for ProjectId {ProjectId}",
                     "NRData",
-                    User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0
+                    User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,ProjectId
                 );
 
                 return NoContent();

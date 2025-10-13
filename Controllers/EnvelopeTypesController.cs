@@ -62,14 +62,14 @@ namespace Tools.Controllers
             {
 
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Updated EnvelopeType with {id}", "EnvelopeType", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
+                _loggerService.LogEvent($"Updated EnvelopeType with {id}", "EnvelopeType", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,0);
 
             }
             catch (Exception ex)
             {
                 if (!EnvelopeTypeExists(id))
                 {
-                    _loggerService.LogEvent($"EnvelopeType with ID {id} not found during updating", "EnvelopeType", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
+                    _loggerService.LogEvent($"EnvelopeType with ID {id} not found during updating", "EnvelopeType", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,0);
                     return NotFound();
                 }
                 else
@@ -91,7 +91,7 @@ namespace Tools.Controllers
             {
                 _context.EnvelopesTypes.Add(envelopeType);
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Created a new EnvelopeType with ID {envelopeType.EnvelopeId}", "EnvelopeType", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
+                _loggerService.LogEvent($"Created a new EnvelopeType with ID {envelopeType.EnvelopeId}", "EnvelopeType", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,0);
                 return CreatedAtAction("GetEnvelopeType", new { id = envelopeType.EnvelopeId }, envelopeType);
             }
             catch (Exception ex)
@@ -115,7 +115,7 @@ namespace Tools.Controllers
 
                 _context.EnvelopesTypes.Remove(envelopeType);
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Deleted a EnvelopeType with ID {id}", "EnvelopeType", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0);
+                _loggerService.LogEvent($"Deleted a EnvelopeType with ID {id}", "EnvelopeType", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,0);
                 return NoContent();
             }
             catch (Exception ex)
