@@ -112,24 +112,70 @@ namespace Tools.Controllers
 
                 if (string.IsNullOrEmpty(userId))
                 {
+                    _loggerService.LogEvent($"User with ID not found in token. ", "Projects", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, 0);
                     return Unauthorized("User ID not found in token.");
                 }
 
                 // Convert userId to integer (if necessary)
                 if (!int.TryParse(userId, out int userIntId))
                 {
+                    _loggerService.LogEvent($"Invalid User ID format. ", "Projects", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, 0);
+
                     return Unauthorized("Invalid User ID format.");
                 }
-                var RecentActivity = _context.EventLogs.Where(s => s.EventTriggeredBy == userIntId).Select(s => new { s.ProjectId, s.LoggedAt, s.EventId }).OrderByDescending(s => s.EventId).Distinct().Take(3);
-                return Ok(RecentActivity);
+                Console.WriteLine(userIntId);
+                var recentProjects = _context.EventLogs
+     .Where(s => s.EventTriggeredBy == userIntId)  // Filter by user
+     .GroupBy(s => s.ProjectId)  // Group by ProjectId
+     .Select(g => new
+     {
+         ProjectId = g.Key,
+         LatestEventId = g.Max(s => s.EventId),  // Get the max EventId for each Project
+         LatestLoggedAt = g.Max(s => s.LoggedAt),  // Get the most recent LoggedAt for each Project
+     })
+     .OrderByDescending(p => p.LatestEventId)  // Order by the latest EventId (desc)
+     .Take(3)  // Take the top 3 results
+     .ToList()
+     .Select(p => new
+     {
+         p.ProjectId,
+         p.LatestEventId,
+         TimeAgo = GetTimeAgo(p.LatestLoggedAt)  // Call the helper method to format the time difference
+     })
+     .ToList();
+
+                // Helper method to format time difference
+
+
+
+                return Ok(recentProjects);
             }
             catch (Exception ex)
             {
-                _loggerService.LogError("Error decoding token",ex.Message,nameof(ProjectsController));
+                _loggerService.LogError("Error decoding token", ex.Message, nameof(ProjectsController));
                 return BadRequest($"Error decoding token: {ex.Message}");
             }
 
 
+        }
+
+        private string GetTimeAgo(DateTime loggedAt)
+        {
+            var timeDifference = DateTime.Now - loggedAt;
+
+            if (timeDifference.TotalDays >= 1)
+            {
+                return $"{(int)timeDifference.TotalDays} day{(timeDifference.TotalDays > 1 ? "s" : "")} ago";
+            }
+            if (timeDifference.TotalHours >= 1)
+            {
+                return $"{(int)timeDifference.TotalHours} hour{(timeDifference.TotalHours > 1 ? "s" : "")} ago";
+            }
+            if (timeDifference.TotalMinutes >= 1)
+            {
+                return $"{(int)timeDifference.TotalMinutes} minute{(timeDifference.TotalMinutes > 1 ? "s" : "")} ago";
+            }
+            return "Just now";  // If it's less than a minute ago
         }
         // GET: api/Projects/5
         [HttpGet("{id}")]
@@ -160,7 +206,7 @@ namespace Tools.Controllers
             try
             {
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Updated Project with ID {project.ProjectId}", "Projects", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,project.ProjectId);
+                _loggerService.LogEvent($"Updated Project with ID {project.ProjectId}", "Projects", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, project.ProjectId);
             }
             catch (Exception ex)
             {
