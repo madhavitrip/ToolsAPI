@@ -323,15 +323,26 @@ namespace Tools.Controllers
                 var env = await _context.EnvelopeBreakages.Where(p => p.ProjectId == ProjectId).ToListAsync();
                 if (env.Any()) // Check if any records were found
                 {
-                    _context.EnvelopeBreakages.RemoveRange(env);
-                    _loggerService.LogEvent($"Deleted Envelope Breaking of ProjectID {ProjectId}", "EnvelopeBreakages", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, ProjectId);
-                    await _context.SaveChangesAsync();
+                    // Determine the chunk size, adjust this based on your performance testing
+                    var chunkSize = 1000; // Change this as necessary
+
+                    // Loop through the list and remove in chunks
+                    for (int i = 0; i < env.Count; i += chunkSize)
+                    {
+                        var chunk = env.Skip(i).Take(chunkSize).ToList();  // Get a chunk of the list
+                        _context.EnvelopeBreakages.RemoveRange(chunk);  // Remove the chunk
+                        await _context.SaveChangesAsync();  // Save changes after each chunk
+                        _loggerService.LogEvent($"Deleted {chunk.Count} Envelope Breaking entries for ProjectID {ProjectId}", "EnvelopeBreakages", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, ProjectId);
+                    }
+
+                    _loggerService.LogEvent($"Successfully deleted all Envelope Breaking entries for ProjectID {ProjectId}", "EnvelopeBreakages", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, ProjectId);
                 }
                 else
                 {
                     // Handle the case where no records were found
                     Console.WriteLine("No breakages found for the specified project.");
                 }
+                var breakagesToAdd = new List<EnvelopeBreakage>();
 
                 foreach (var row in nrDataList)
                 {
@@ -374,15 +385,20 @@ namespace Tools.Controllers
 
                     // ✅ Add to database
 
-                    _context.EnvelopeBreakages.Add(envelope);
-                    _loggerService.LogEvent($"Created Envelope Breaking of ProjectID {ProjectId}", "EnvelopeBreakages", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, ProjectId);
+                    breakagesToAdd.Add(envelope);
 
                 }
 
-                await _context.SaveChangesAsync();
+                if (breakagesToAdd.Any())
+                {
+                    _context.EnvelopeBreakages.AddRange(breakagesToAdd);
+                    await _context.SaveChangesAsync();
+                    _loggerService.LogEvent($"Created Envelope Breaking of ProjectID {ProjectId}", "EnvelopeBreakages", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, ProjectId);
+                }
+
 
                 using var client = new HttpClient();
-                var response = await client.GetAsync($"http://192.168.10.208:81/API/api/EnvelopeBreakages/EnvelopeBreakage?ProjectId={ProjectId}");
+                var response = await client.GetAsync($"https://localhost:7276/api/EnvelopeBreakages/EnvelopeBreakage?ProjectId={ProjectId}");
 
                 if (!response.IsSuccessStatusCode)
                 {
