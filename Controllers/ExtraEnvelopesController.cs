@@ -163,8 +163,18 @@ namespace Tools.Controllers
                                 break;
                             case "Percentage":
                                 if (decimal.TryParse(config.Value, out var percentValue))
-                                    calculatedQuantity = (int)Math.Ceiling((double)(data.Quantity * percentValue) / 100);
+                                {
+                                    // Step 1: Calculate raw percent of quantity
+                                    var rawQuantity = (double)(data.Quantity * percentValue) / 100;
+                                    // Step 3: Round up to next multiple of innerCapacity
+                                    calculatedQuantity = (int)Math.Ceiling(rawQuantity / (double)innerCapacity) * innerCapacity;
+                                }
+                                else
+                                {
+                                    calculatedQuantity = 0; // Or apply fallback logic
+                                }
                                 break;
+                        
                         }
 
                         int innerCount = (int)Math.Ceiling((double)calculatedQuantity / innerCapacity);
