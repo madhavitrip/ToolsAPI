@@ -126,6 +126,17 @@ namespace Tools.Controllers
                 if (!extraConfig.Any())
                     return BadRequest("No ExtraConfiguration found for the project.");
 
+                var existingCombinations = await _context.ExtrasEnvelope
+                  .Where(e => e.ProjectId == ProjectId)
+                  .ToListAsync();
+
+
+                if (existingCombinations.Any())
+                {
+                    // Remove existing duplicates
+                    _context.ExtrasEnvelope.RemoveRange(existingCombinations);
+                    await _context.SaveChangesAsync();
+                }
                 var envelopesToAdd = new List<ExtraEnvelopes>();
                 foreach (var config in extraConfig)
                 {
@@ -152,8 +163,18 @@ namespace Tools.Controllers
                                 break;
                             case "Percentage":
                                 if (decimal.TryParse(config.Value, out var percentValue))
-                                    calculatedQuantity = (int)Math.Ceiling((double)(data.Quantity * percentValue) / 100);
+                                {
+                                    // Step 1: Calculate raw percent of quantity
+                                    var rawQuantity = (double)(data.Quantity * percentValue) / 100;
+                                    // Step 3: Round up to next multiple of innerCapacity
+                                    calculatedQuantity = (int)Math.Ceiling(rawQuantity / (double)innerCapacity) * innerCapacity;
+                                }
+                                else
+                                {
+                                    calculatedQuantity = 0; // Or apply fallback logic
+                                }
                                 break;
+                        
                         }
 
                         int innerCount = (int)Math.Ceiling((double)calculatedQuantity / innerCapacity);
@@ -169,26 +190,6 @@ namespace Tools.Controllers
                             OuterEnvelope = outerCount.ToString(),
                         });
                     }
-                }
-
-                // ❌ Check for duplicates
-                var existingCombinations = await _context.ExtrasEnvelope
-                    .Where(e => e.ProjectId == ProjectId)
-                    .Select(e => new { e.ProjectId, e.CatchNo, e.ExtraId })
-                    .ToListAsync();
-
-                var duplicatesInDb = _context.ExtrasEnvelope
-             .Where(e => e.ProjectId == ProjectId)
-             .AsEnumerable() // Move evaluation to memory
-               .Where(e => envelopesToAdd.Any(newE =>
-              newE.CatchNo == e.CatchNo && newE.ExtraId == e.ExtraId))
-             .ToList();
-
-                if (duplicatesInDb.Any())
-                {
-                    // Remove existing duplicates
-                    _context.ExtrasEnvelope.RemoveRange(duplicatesInDb);
-                    await _context.SaveChangesAsync();
                 }
 
                 await _context.ExtrasEnvelope.AddRangeAsync(envelopesToAdd);

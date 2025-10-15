@@ -9,6 +9,7 @@ using ERPToolsAPI.Data;
 using Tools.Models;
 using static Tools.Controllers.ExtraEnvelopesController;
 using Tools.Services;
+using Microsoft.VisualStudio.Web.CodeGenerators.Mvc.Templates.Blazor;
 
 namespace Tools.Controllers
 {
@@ -106,12 +107,16 @@ namespace Tools.Controllers
         {
             try
             {
-                var extra = await _context.ExtraConfigurations.FindAsync(extrasConfiguration.ProjectId);
+                var extra = await _context.ExtraConfigurations
+               .FirstOrDefaultAsync(x => x.ProjectId == extrasConfiguration.ProjectId);
+
                 if (extra != null)
                 {
-                    _loggerService.LogEvent($"ProjectConfig for {extra.ProjectId} already exists", "ProjectConfig", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,extrasConfiguration.ProjectId);
+                    _loggerService.LogEvent($"ExtraConfiguration for {extra.ProjectId} already exists", "ExtrasConfiguration", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,extrasConfiguration.ProjectId);
                     _context.ExtraConfigurations.Remove(extra);
                     await _context.SaveChangesAsync();
+                    _loggerService.LogEvent($"Deleted {extra.ProjectId} old ExtrasConfiguration record(s)",
+                  "ExtrasConfiguration", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, extrasConfiguration.ProjectId);
                 }
                 _context.ExtraConfigurations.Add(extrasConfiguration);
                 await _context.SaveChangesAsync();

@@ -11,6 +11,6 @@ namespace Tools.Models
         public string Error { get; set; }
         public string Message { get; set; }
         public string Occurance {  get; set; }
-        public DateTime LoggedAt { get; set; }
+        public DateTime LoggedAt { get; set; } = DateTime.Now;
     }
 }

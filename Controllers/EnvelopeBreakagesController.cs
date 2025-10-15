@@ -323,15 +323,26 @@ namespace Tools.Controllers
                 var env = await _context.EnvelopeBreakages.Where(p => p.ProjectId == ProjectId).ToListAsync();
                 if (env.Any()) // Check if any records were found
                 {
-                    _context.EnvelopeBreakages.RemoveRange(env);
-                    _loggerService.LogEvent($"Deleted Envelope Breaking of ProjectID {ProjectId}", "EnvelopeBreakages", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, ProjectId);
-                    await _context.SaveChangesAsync();
+                    // Determine the chunk size, adjust this based on your performance testing
+                    var chunkSize = 1000; // Change this as necessary
+
+                    // Loop through the list and remove in chunks
+                    for (int i = 0; i < env.Count; i += chunkSize)
+                    {
+                        var chunk = env.Skip(i).Take(chunkSize).ToList();  // Get a chunk of the list
+                        _context.EnvelopeBreakages.RemoveRange(chunk);  // Remove the chunk
+                        await _context.SaveChangesAsync();  // Save changes after each chunk
+                        _loggerService.LogEvent($"Deleted {chunk.Count} Envelope Breaking entries for ProjectID {ProjectId}", "EnvelopeBreakages", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, ProjectId);
+                    }
+
+                    _loggerService.LogEvent($"Successfully deleted all Envelope Breaking entries for ProjectID {ProjectId}", "EnvelopeBreakages", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, ProjectId);
                 }
                 else
                 {
                     // Handle the case where no records were found
                     Console.WriteLine("No breakages found for the specified project.");
                 }
+                var breakagesToAdd = new List<EnvelopeBreakage>();
 
                 foreach (var row in nrDataList)
                 {
@@ -352,16 +363,39 @@ namespace Tools.Controllers
                     remaining = quantity; // reset for outer
                     Dictionary<string, string> outerBreakdown = new();
                     int totalOuterCount = 0;
-                    foreach (var size in outerSizes)
+
+                    // Check if inner and outer are same
+                    bool sameEnvelopes = innerSizes.SequenceEqual(outerSizes);
+
+                    if (sameEnvelopes)
                     {
-                        int count = (int)Math.Ceiling((double)remaining / size);
-                        if (count > 0)
+                        // Use same logic as inner
+                        foreach (var size in outerSizes)
                         {
-                            outerBreakdown[$"E{size}"] = count.ToString();
-                            totalOuterCount += count;
-                            remaining -= count * size;
+                            int count = remaining / size;
+                            if (count > 0)
+                            {
+                                outerBreakdown[$"E{size}"] = count.ToString();
+                                totalOuterCount += count;
+                                remaining -= count * size;
+                            }
                         }
                     }
+                    else
+                    {
+                        // Use original logic with rounding up
+                        foreach (var size in outerSizes)
+                        {
+                            int count = (int)Math.Ceiling((double)remaining / size);
+                            if (count > 0)
+                            {
+                                outerBreakdown[$"E{size}"] = count.ToString();
+                                totalOuterCount += count;
+                                remaining -= count * size;
+                            }
+                        }
+                    }
+
 
                     var envelope = new EnvelopeBreakage
                     {
@@ -374,16 +408,22 @@ namespace Tools.Controllers
 
                     // ✅ Add to database
 
-                    _context.EnvelopeBreakages.Add(envelope);
-                    _loggerService.LogEvent($"Created Envelope Breaking of ProjectID {ProjectId}", "EnvelopeBreakages", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, ProjectId);
+                    breakagesToAdd.Add(envelope);
 
                 }
 
-                await _context.SaveChangesAsync();
+                if (breakagesToAdd.Any())
+                {
+                    _context.EnvelopeBreakages.AddRange(breakagesToAdd);
+                    await _context.SaveChangesAsync();
+                    _loggerService.LogEvent($"Created Envelope Breaking of ProjectID {ProjectId}", "EnvelopeBreakages", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, ProjectId);
+                }
+
 
                 using var client = new HttpClient();
                 var response = await client.GetAsync($"http://192.168.10.208:81/API/api/EnvelopeBreakages/EnvelopeBreakage?ProjectId={ProjectId}");
-
+/*                var response = await client.GetAsync($"https://localhost:7276/api/EnvelopeBreakages/EnvelopeBreakage?ProjectId={ProjectId}");
+*/
                 if (!response.IsSuccessStatusCode)
                 {
                     // Handle failure from GET call as needed
@@ -855,7 +895,11 @@ namespace Tools.Controllers
 
             // Build dictionaries for fast lookup
             var envelopeCapacities = envCaps.ToDictionary(x => x.EnvelopeName, x => x.Capacity);
-            var envDict = envBreaking.ToDictionary(e => e.NrDataId, e => e.TotalEnvelope);
+            var envDict = envBreaking.ToDictionary(
+               e => e.NrDataId,
+               e => (e.TotalEnvelope, e.OuterEnvelope) // 👈 this is a tuple
+            );
+
 
             var resultList = new List<object>();
             int globalSerialNumber = 1; // Global serial number that only resets on CatchNo change
@@ -868,23 +912,11 @@ namespace Tools.Controllers
             var nodalExtrasAddedForCatchNo = new HashSet<string>();
             var catchExtrasAdded = new HashSet<(int ExtraId, string CatchNo)>();
 
-            // Extract outer envelope config
-            int nrOuterCapacity = 100; // default
-            if (!string.IsNullOrEmpty(outerEnvJson))
-            {
-                var outerEnvDict = JsonSerializer.Deserialize<Dictionary<string, string>>(outerEnvJson);
-                if (outerEnvDict != null && outerEnvDict.TryGetValue("Outer", out string outerType)
-                    && envelopeCapacities.TryGetValue(outerType, out int capacity))
-                {
-                    nrOuterCapacity = capacity;
-                }
-            }
-
             // Helper method to add extra envelopes - removed serialnumber++ from here
             void AddExtraWithEnv(ExtraEnvelopes extra, string examDate, string examTime, string course, string subject, int NrQuantity, string NodalCode)
             {
                 var extraConfig = extrasconfig.FirstOrDefault(e => e.ExtraType == extra.ExtraId);
-                int envCapacity = 100; // default fallback
+                int envCapacity = 0; // default fallback
 
                 if (extraConfig != null && !string.IsNullOrEmpty(extraConfig.EnvelopeType))
                 {
@@ -1005,7 +1037,9 @@ namespace Tools.Controllers
                 }
 
                 // ➕ Add current NRData row with TotalEnv replication
-                int totalEnv = envDict.TryGetValue(current.Id, out int envCount) && envCount > 0 ? envCount : 1;
+                int totalEnv = envDict.TryGetValue(current.Id, out var envData) && envData.TotalEnvelope > 0
+                ? envData.TotalEnvelope
+               : 1;
 
                 // Calculate CenterEnv
                 string currentMergeField = $"{current.CatchNo}-{current.CenterCode}";
@@ -1015,41 +1049,79 @@ namespace Tools.Controllers
                     prevMergeField = currentMergeField;
                 }
 
-                for (int j = 1; j <= totalEnv; j++)
+                var envelopeBreakdown = new List<(string EnvType, int Count, int Capacity)>();
+
+                if (envDict.TryGetValue(current.Id, out var envInfo) && !string.IsNullOrEmpty(envInfo.OuterEnvelope))
                 {
-                    centerEnvCounter++;
-                    int envQuantity;
+                    try
+                    {
+                        var outerEnvDict = JsonSerializer.Deserialize<Dictionary<string, string>>(envInfo.OuterEnvelope);
+                        if (outerEnvDict != null)
+                        {
+                            foreach (var kvp in outerEnvDict)
+                            {
+                                if (int.TryParse(kvp.Value, out int count) && count > 0)
+                                {
+                                    // Get capacity from envelope name (e.g., "E50" -> 50)
+                                    int capacity = 0;
+                                    if (envelopeCapacities.TryGetValue(kvp.Key, out int cap))
+                                    {
+                                        capacity = cap;
+                                    }
+                                    else
+                                    {
+                                        // Try to parse capacity from envelope name (e.g., E50 -> 50)
+                                        var match = System.Text.RegularExpressions.Regex.Match(kvp.Key, @"\d+");
+                                        if (match.Success)
+                                        {
+                                            capacity = int.Parse(match.Value);
+                                        }
+                                    }
 
-                    if (current.Quantity > nrOuterCapacity && j == 1)
-                    {
-                        envQuantity = current.Quantity - (totalEnv - 1) * nrOuterCapacity;
+                                    envelopeBreakdown.Add((kvp.Key, count, capacity));
+                                }
+                            }
+                        }
                     }
-                    else if (current.Quantity <= nrOuterCapacity)
-                    {
-                        envQuantity = current.Quantity;
-                    }
-                    else
-                    {
-                        envQuantity = nrOuterCapacity;
-                    }
+                    catch { }
+                }
 
-                    resultList.Add(new
+                // Sort by capacity (ascending - smallest first)
+                envelopeBreakdown = envelopeBreakdown.OrderBy(x => x.Capacity).ToList();
+
+                // If no breakdown found, use default behavior
+               
+                if (envelopeBreakdown.Count > 0)
+                {
+                    // Process each envelope type from the breakdown
+                    int envelopeIndex = 1;
+                    foreach (var (envType, count, capacity) in envelopeBreakdown)
                     {
-                        SerialNumber = globalSerialNumber++,
-                        current.CourseName,
-                        current.SubjectName,
-                        current.CatchNo,
-                        current.CenterCode,
-                        current.ExamTime,
-                        current.ExamDate,
-                        current.Quantity,
-                        EnvQuantity = envQuantity,
-                        current.NodalCode,
-                        CenterEnv = centerEnvCounter,
-                        TotalEnv = totalEnv,
-                        Env = $"{centerEnvCounter}/{totalEnv}",
-                        current.NRQuantity,
-                    });
+                        for (int k = 0; k < count; k++)
+                        {
+                            centerEnvCounter++;
+
+                            resultList.Add(new
+                            {
+                                SerialNumber = globalSerialNumber++,
+                                current.CourseName,
+                                current.SubjectName,
+                                current.CatchNo,
+                                current.CenterCode,
+                                current.ExamTime,
+                                current.ExamDate,
+                                current.Quantity,
+                                EnvQuantity = capacity,  // Use the envelope capacity
+                                current.NodalCode,
+                                CenterEnv = centerEnvCounter,
+                                TotalEnv = totalEnv,
+                                Env = $"{envelopeIndex}/{totalEnv}",
+                                current.NRQuantity,
+                            });
+
+                            envelopeIndex++;
+                        }
+                    }
                 }
 
                 prevNodalCode = current.NodalCode;
