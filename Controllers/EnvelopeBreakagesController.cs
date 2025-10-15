@@ -363,16 +363,39 @@ namespace Tools.Controllers
                     remaining = quantity; // reset for outer
                     Dictionary<string, string> outerBreakdown = new();
                     int totalOuterCount = 0;
-                    foreach (var size in outerSizes)
+
+                    // Check if inner and outer are same
+                    bool sameEnvelopes = innerSizes.SequenceEqual(outerSizes);
+
+                    if (sameEnvelopes)
                     {
-                        int count = (int)Math.Ceiling((double)remaining / size);
-                        if (count > 0)
+                        // Use same logic as inner
+                        foreach (var size in outerSizes)
                         {
-                            outerBreakdown[$"E{size}"] = count.ToString();
-                            totalOuterCount += count;
-                            remaining -= count * size;
+                            int count = remaining / size;
+                            if (count > 0)
+                            {
+                                outerBreakdown[$"E{size}"] = count.ToString();
+                                totalOuterCount += count;
+                                remaining -= count * size;
+                            }
                         }
                     }
+                    else
+                    {
+                        // Use original logic with rounding up
+                        foreach (var size in outerSizes)
+                        {
+                            int count = (int)Math.Ceiling((double)remaining / size);
+                            if (count > 0)
+                            {
+                                outerBreakdown[$"E{size}"] = count.ToString();
+                                totalOuterCount += count;
+                                remaining -= count * size;
+                            }
+                        }
+                    }
+
 
                     var envelope = new EnvelopeBreakage
                     {
@@ -398,7 +421,7 @@ namespace Tools.Controllers
 
 
                 using var client = new HttpClient();
-                var response = await client.GetAsync($"https://localhost:7276/api/EnvelopeBreakages/EnvelopeBreakage?ProjectId={ProjectId}");
+                var response = await client.GetAsync($"http://192.168.10.208:81/API/api/EnvelopeBreakages/EnvelopeBreakage?ProjectId={ProjectId}");
 
                 if (!response.IsSuccessStatusCode)
                 {
@@ -900,7 +923,7 @@ namespace Tools.Controllers
             void AddExtraWithEnv(ExtraEnvelopes extra, string examDate, string examTime, string course, string subject, int NrQuantity, string NodalCode)
             {
                 var extraConfig = extrasconfig.FirstOrDefault(e => e.ExtraType == extra.ExtraId);
-                int envCapacity = 100; // default fallback
+                int envCapacity = 0; // default fallback
 
                 if (extraConfig != null && !string.IsNullOrEmpty(extraConfig.EnvelopeType))
                 {
