@@ -113,6 +113,11 @@ namespace Tools.Controllers
                 if (extra != null)
                 {
                     _loggerService.LogEvent($"ExtraConfiguration for {extra.ProjectId} already exists", "ExtrasConfiguration", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,extrasConfiguration.ProjectId);
+                    var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", extra.ProjectId.ToString());
+                    if (Directory.Exists(reportPath))
+                    {
+                        Directory.Delete(reportPath, true); // 'true' allows recursive deletion of files and subdirectories
+                    }
                     _context.ExtraConfigurations.Remove(extra);
                     await _context.SaveChangesAsync();
                     _loggerService.LogEvent($"Deleted {extra.ProjectId} old ExtrasConfiguration record(s)",
