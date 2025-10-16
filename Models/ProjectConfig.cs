@@ -14,9 +14,10 @@ namespace Tools.Models
         public List<int> BoxBreakingCriteria { get; set; }
         public List<int> EnvelopeMakingCriteria { get; set; }
         public int BoxCapacity { get; set; }
-
         public List<int> DuplicateCriteria { get; set; }
         public double Enhancement {  get; set; }
+        public int BoxNumber { get; set; }
+        public int OmrSerialNumber { get; set; }
 
     }
 }
