@@ -336,7 +336,11 @@ namespace Tools.Controllers
                 {
                     return NotFound($"No NRData found for ProjectId {ProjectId}");
                 }
-
+                var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
+                if (Directory.Exists(reportPath))
+                {
+                    Directory.Delete(reportPath, true); // 'true' allows recursive deletion of files and subdirectories
+                }
                 // Remove all records
                 _context.NRDatas.RemoveRange(nrDataList);
                 await _context.SaveChangesAsync();

@@ -8,6 +8,7 @@ using Microsoft.EntityFrameworkCore;
 using ERPToolsAPI.Data;
 using Tools.Models;
 using Tools.Services;
+using Microsoft.CodeAnalysis;
 
 namespace Tools.Controllers
 {
@@ -107,7 +108,12 @@ namespace Tools.Controllers
                 if (config != null)
                 {
                     _loggerService.LogEvent($"ProjectConfig for {config.ProjectId} already exists", "ProjectConfig", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, projectConfig.ProjectId);
-                   _context.ProjectConfigs.Remove(config);
+                    var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", config.ProjectId.ToString());
+                    if (Directory.Exists(reportPath))
+                    {
+                        Directory.Delete(reportPath, true); // 'true' allows recursive deletion of files and subdirectories
+                    }
+                    _context.ProjectConfigs.Remove(config);
                     await _context.SaveChangesAsync();
                 }
                 _context.ProjectConfigs.Add(projectConfig);
