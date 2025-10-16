@@ -544,10 +544,10 @@ namespace Tools.Controllers
                                 CatchNo = worksheet.Cells[row, 2].Text.Trim(),
                                 CenterCode = worksheet.Cells[row, 3].Text.Trim(),
                                 ExamTime = worksheet.Cells[row, 4].Text.Trim(),
-                                ExamDate = worksheet.Cells[row, 5].Text.Trim(),
-                                Quantity = int.Parse(worksheet.Cells[row, 6].Text),
-                                TotalEnv = int.Parse(worksheet.Cells[row, 9].Text),
-                                NRQuantity = int.Parse(worksheet.Cells[row, 11].Text),
+                                ExamDate = worksheet.Cells[row, 4].Text.Trim(),
+                                Quantity = int.Parse(worksheet.Cells[row, 4].Text),
+                                TotalEnv = int.Parse(worksheet.Cells[row, 7].Text),
+                                NRQuantity = int.Parse(worksheet.Cells[row, 9].Text),
                                 NodalCode = worksheet.Cells[row, 12].Text.Trim(),
                             };
 
@@ -1166,13 +1166,13 @@ namespace Tools.Controllers
                 var worksheet = package.Workbook.Worksheets.Add("BreakingResult");
 
                 // Add headers
-                var headers = new[] { "Serial Number", "Course Name", "Subject Name", "Catch No", "Center Code",
-                          "Exam Time", "Exam Date", "Quantity", "EnvQuantity", "Nodal Code",
-                          "Center Env", "Total Env", "Env", "NRQuantity" };
+                var headers = new[] { "Serial Number", "Catch No", "Center Code",
+                         "Quantity", "EnvQuantity",
+                          "Center Env", "Total Env", "Env", "NRQuantity", "Nodal Code", "Exam Time", "Exam Date", "Course Name", "Subject Name" };
 
-                var properties = new[] { "SerialNumber", "CourseName", "SubjectName", "CatchNo", "CenterCode",
-                            "ExamTime", "ExamDate", "Quantity", "EnvQuantity", "NodalCode",
-                             "CenterEnv", "TotalEnv", "Env", "NRQuantity" };
+                var properties = new[] { "SerialNumber", "CatchNo", "CenterCode",
+                            "Quantity", "EnvQuantity", 
+                             "CenterEnv", "TotalEnv", "Env", "NRQuantity","NodalCode", "ExamTime", "ExamDate", "CourseName", "SubjectName", };
 
                 // Create a list to track which columns should be included (those that contain data)
                 var columnsToInclude = new List<int>();
