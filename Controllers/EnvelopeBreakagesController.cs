@@ -421,9 +421,9 @@ namespace Tools.Controllers
 
 
                 using var client = new HttpClient();
-                var response = await client.GetAsync($"http://192.168.10.208:81/API/api/EnvelopeBreakages/EnvelopeBreakage?ProjectId={ProjectId}");
-/*                var response = await client.GetAsync($"https://localhost:7276/api/EnvelopeBreakages/EnvelopeBreakage?ProjectId={ProjectId}");
-*/
+/*                var response = await client.GetAsync($"http://192.168.10.208:81/API/api/EnvelopeBreakages/EnvelopeBreakage?ProjectId={ProjectId}");
+*/                var response = await client.GetAsync($"https://localhost:7276/api/EnvelopeBreakages/EnvelopeBreakage?ProjectId={ProjectId}");
+
                 if (!response.IsSuccessStatusCode)
                 {
                     // Handle failure from GET call as needed
@@ -494,6 +494,9 @@ namespace Tools.Controllers
                 .Select(f => f.Name)  // Get the field names
                 .ToListAsync();
 
+            var startBox = await _context.ProjectConfigs
+                .Where(p=>p.ProjectId == ProjectId)
+                .Select(p=>p.BoxNumber).FirstOrDefaultAsync();
 
             var extrasconfig = await _context.ExtraConfigurations
                 .Where(p => p.ProjectId == ProjectId)
@@ -543,14 +546,14 @@ namespace Tools.Controllers
                                 SerialNumber = int.Parse(worksheet.Cells[row, 1].Text),
                                 CatchNo = worksheet.Cells[row, 2].Text.Trim(),
                                 CenterCode = worksheet.Cells[row, 3].Text.Trim(),
-                                ExamTime = worksheet.Cells[row, 4].Text.Trim(),
-                                ExamDate = worksheet.Cells[row, 4].Text.Trim(),
+                                ExamTime = worksheet.Cells[row, 11].Text.Trim(),
+                                ExamDate = worksheet.Cells[row, 12].Text.Trim(),
                                 Quantity = int.Parse(worksheet.Cells[row, 4].Text),
                                 TotalEnv = int.Parse(worksheet.Cells[row, 7].Text),
                                 NRQuantity = int.Parse(worksheet.Cells[row, 9].Text),
-                                NodalCode = worksheet.Cells[row, 12].Text.Trim(),
+                                NodalCode = worksheet.Cells[row, 10].Text.Trim(),
                             };
-
+                        
                             breakingReportData.Add(inputRow);
                         }
                         catch (Exception ex)
@@ -642,7 +645,7 @@ namespace Tools.Controllers
 
             var sortedList = ordered?.ToList() ?? enrichedList;
             // Step 6: Add TotalPages and BoxNo
-            int boxNo = 1001;
+            int boxNo = startBox;
             int runningPages = 0;
             string prevMergeKey = null;
 
@@ -889,6 +892,11 @@ namespace Tools.Controllers
                 .Select(p => p.Envelope)
                 .FirstOrDefaultAsync();
 
+            var EnvelopeBreaking = await _context.ProjectConfigs.Where(p => p.ProjectId == ProjectId)
+                .Select(p => p.EnvelopeMakingCriteria)
+                .FirstOrDefaultAsync();
+            var fields = await _context.Fields.ToListAsync();
+
             var extrasconfig = await _context.ExtraConfigurations
                 .Where(p => p.ProjectId == ProjectId)
                 .ToListAsync();
@@ -913,7 +921,7 @@ namespace Tools.Controllers
             var catchExtrasAdded = new HashSet<(int ExtraId, string CatchNo)>();
 
             // Helper method to add extra envelopes - removed serialnumber++ from here
-            void AddExtraWithEnv(ExtraEnvelopes extra, string examDate, string examTime, string course, string subject, int NrQuantity, string NodalCode)
+            void AddExtraWithEnv(ExtraEnvelopes extra, string examDate, string examTime,int NrQuantity, string NodalCode)
             {
                 var extraConfig = extrasconfig.FirstOrDefault(e => e.ExtraType == extra.ExtraId);
                 int envCapacity = 0; // default fallback
@@ -970,8 +978,6 @@ namespace Tools.Controllers
                         CenterEnv = extraCenterEnvCounter,
                         ExamDate = examDate,
                         ExamTime = examTime,
-                        CourseName = course,
-                        SubjectName = subject,
                         TotalEnv = totalEnv,
                         Env = $"{j}/{totalEnv}",
                         NRQuantity = NrQuantity,
@@ -997,7 +1003,7 @@ namespace Tools.Controllers
                         foreach (var extra in extrasToAdd)
                         {
                             AddExtraWithEnv(extra, prevNrData.ExamDate, prevNrData.ExamTime,
-                                          prevNrData.SubjectName, prevNrData.CourseName, prevNrData.NRQuantity, prevNrData.NodalCode);
+                                          prevNrData.NRQuantity, prevNrData.NodalCode);
                         }
                         nodalExtrasAddedForCatchNo.Add(prevCatchNo);
                     }
@@ -1011,7 +1017,7 @@ namespace Tools.Controllers
                             foreach (var extra in extrasToAdd)
                             {
                                 AddExtraWithEnv(extra, prevNrData.ExamDate, prevNrData.ExamTime,
-                                              prevNrData.SubjectName, prevNrData.CourseName, prevNrData.NRQuantity, prevNrData.NodalCode);
+                                               prevNrData.NRQuantity, prevNrData.NodalCode);
                             }
                             catchExtrasAdded.Add((extraId, prevCatchNo));
                         }
@@ -1030,7 +1036,7 @@ namespace Tools.Controllers
                         foreach (var extra in extrasToAdd)
                         {
                             AddExtraWithEnv(extra, current.ExamDate, current.ExamTime,
-                                          current.SubjectName, current.CourseName, current.NRQuantity, current.NodalCode);
+                                           current.NRQuantity, current.NodalCode);
                         }
                         nodalExtrasAddedForCatchNo.Add(current.CatchNo);
                     }
@@ -1104,8 +1110,6 @@ namespace Tools.Controllers
                             resultList.Add(new
                             {
                                 SerialNumber = globalSerialNumber++,
-                                current.CourseName,
-                                current.SubjectName,
                                 current.CatchNo,
                                 current.CenterCode,
                                 current.ExamTime,
@@ -1141,7 +1145,7 @@ namespace Tools.Controllers
                         foreach (var extra in extrasToAdd)
                         {
                             AddExtraWithEnv(extra, lastNrData.ExamDate, lastNrData.ExamTime,
-                                          lastNrData.SubjectName, lastNrData.CourseName, lastNrData.NRQuantity, lastNrData.NodalCode);
+                                       lastNrData.NRQuantity, lastNrData.NodalCode);
                         }
                     }
 
@@ -1153,7 +1157,7 @@ namespace Tools.Controllers
                             foreach (var extra in extrasToAdd)
                             {
                                 AddExtraWithEnv(extra, lastNrData.ExamDate, lastNrData.ExamTime,
-                                              lastNrData.SubjectName, lastNrData.CourseName, lastNrData.NRQuantity, lastNrData.NodalCode);
+                                             lastNrData.NRQuantity, lastNrData.NodalCode);
                             }
                         }
                     }
@@ -1168,43 +1172,20 @@ namespace Tools.Controllers
                 // Add headers
                 var headers = new[] { "Serial Number", "Catch No", "Center Code",
                          "Quantity", "EnvQuantity",
-                          "Center Env", "Total Env", "Env", "NRQuantity", "Nodal Code", "Exam Time", "Exam Date", "Course Name", "Subject Name" };
+                          "Center Env", "Total Env", "Env", "NRQuantity", "Nodal Code", "Exam Time", "Exam Date" };
 
                 var properties = new[] { "SerialNumber", "CatchNo", "CenterCode",
                             "Quantity", "EnvQuantity", 
-                             "CenterEnv", "TotalEnv", "Env", "NRQuantity","NodalCode", "ExamTime", "ExamDate", "CourseName", "SubjectName", };
-
-                // Create a list to track which columns should be included (those that contain data)
-                var columnsToInclude = new List<int>();
-
-                // Check for non-empty columns in any row (resultList) and track their indices
-                foreach (var item in resultList)
-                {
-                    for (int i = 0; i < properties.Length; i++)
-                    {
-                        var value = item.GetType().GetProperty(properties[i])?.GetValue(item);
-                        if (value != null && !string.IsNullOrEmpty(value.ToString()))
-                        {
-                            if (!columnsToInclude.Contains(i))
-                            {
-                                columnsToInclude.Add(i);  // Add column index if it contains data
-                            }
-                        }
-                    }
-                }
-
-                // Filter headers and properties based on the columns that have data
-                var filteredHeaders = columnsToInclude.Select(index => headers[index]).ToArray();
-                var filteredProperties = columnsToInclude.Select(index => properties[index]).ToArray();
+                             "CenterEnv", "TotalEnv", "Env", "NRQuantity","NodalCode", "ExamTime", "ExamDate" };
 
                 // Add filtered headers to the first row
-                for (int i = 0; i < filteredHeaders.Length; i++)
+                for (int i = 0; i < headers.Length; i++)
                 {
-                    worksheet.Cells[1, i + 1].Value = filteredHeaders[i];
+                    worksheet.Cells[1, i + 1].Value = headers[i];
                 }
 
                 // Style headers
-                using (var range = worksheet.Cells[1, 1, 1, filteredHeaders.Length])
+                using (var range = worksheet.Cells[1, 1, 1, headers.Length])
                 {
                     range.Style.Font.Bold = true;
                     range.Style.Fill.PatternType = OfficeOpenXml.Style.ExcelFillStyle.Solid;
@@ -1216,9 +1197,9 @@ namespace Tools.Controllers
                 int row = 2;
                 foreach (var item in resultList)
                 {
-                    for (int col = 0; col < filteredProperties.Length; col++)
+                    for (int col = 0; col < properties.Length; col++)
                     {
-                        var value = item.GetType().GetProperty(filteredProperties[col])?.GetValue(item);
+                        var value = item.GetType().GetProperty(properties[col])?.GetValue(item);
                         worksheet.Cells[row, col + 1].Value = value;
                     }
                     row++;

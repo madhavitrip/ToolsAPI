@@ -108,7 +108,7 @@ namespace Tools.Controllers
             try
             {
                 var extra = await _context.ExtraConfigurations
-               .FirstOrDefaultAsync(x => x.ProjectId == extrasConfiguration.ProjectId);
+               .Where(x => x.ProjectId == extrasConfiguration.ProjectId).FirstOrDefaultAsync();
 
                 if (extra != null)
                 {
