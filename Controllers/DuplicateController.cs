@@ -121,7 +121,8 @@ namespace Tools.Controllers
                     try
                     {
                         var envelopeDict = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(innerEnv);
-                        if (envelopeDict != null && envelopeDict.ContainsKey("Inner"))
+                        if (envelopeDict != null && envelopeDict.TryGetValue("Inner", out var innerValue) &&
+                         !string.IsNullOrWhiteSpace(innerValue))
                         {
                             var innerSizes = envelopeDict["Inner"]
                                 .Split(',', StringSplitOptions.RemoveEmptyEntries)
@@ -136,6 +137,24 @@ namespace Tools.Controllers
                                 smallestInner = innerSizes.First();
                             }
                         }
+                        else
+                        {
+                            Console.WriteLine("Entering in this loop");
+
+                            var innerSizes = envelopeDict["Outer"]
+                                .Split(',', StringSplitOptions.RemoveEmptyEntries)
+                                .Select(e => e.Trim().ToUpper().Replace("E", "")) // get number from E10 → 10
+                                .Where(x => int.TryParse(x, out _))
+                                .Select(int.Parse)
+                                .OrderBy(x => x)
+                                .ToList();
+
+                            if (innerSizes.Any())
+                            {
+                                smallestInner = innerSizes.First();
+                                Console.WriteLine(smallestInner);
+                            }
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -143,6 +162,7 @@ namespace Tools.Controllers
                         return StatusCode(500, "Internal server error");
                     }
                 }
+               
                 if (smallestInner > 0)
                 {
                     Console.WriteLine(smallestInner);
