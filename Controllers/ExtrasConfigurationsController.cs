@@ -79,14 +79,14 @@ namespace Tools.Controllers
             try
             {
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Updated ExtrasConfiguration with ID {id}", "ExtrasConfiguration", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,extrasConfiguration.ProjectId);
+                _loggerService.LogEvent($"Updated ExtrasConfiguration with ID {id}", "ExtrasConfiguration", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, extrasConfiguration.ProjectId);
 
             }
             catch (Exception ex)
             {
                 if (!ExtrasConfigurationExists(id))
                 {
-                    _loggerService.LogEvent($"ExtrasConfiguration with ID {id} not found during updating", "ExtrasConfiguration", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,extrasConfiguration.ProjectId);
+                    _loggerService.LogEvent($"ExtrasConfiguration with ID {id} not found during updating", "ExtrasConfiguration", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, extrasConfiguration.ProjectId);
 
                     return NotFound();
                 }
@@ -108,30 +108,38 @@ namespace Tools.Controllers
             try
             {
                 var extra = await _context.ExtraConfigurations
-               .Where(x => x.ProjectId == extrasConfiguration.ProjectId).FirstOrDefaultAsync();
+               .Where(x => x.ProjectId == extrasConfiguration.ProjectId && extrasConfiguration.ExtraType == x.ExtraType).ToListAsync();
 
-                if (extra != null)
+                if (extra.Any())
                 {
-                    _loggerService.LogEvent($"ExtraConfiguration for {extra.ProjectId} already exists", "ExtrasConfiguration", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,extrasConfiguration.ProjectId);
-                    var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", extra.ProjectId.ToString());
+
+                    var projectId = extrasConfiguration.ProjectId;
+                    var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", projectId.ToString());
                     if (Directory.Exists(reportPath))
                     {
                         Directory.Delete(reportPath, true); // 'true' allows recursive deletion of files and subdirectories
                     }
-                    _context.ExtraConfigurations.Remove(extra);
+                    _context.ExtraConfigurations.RemoveRange(extra);
                     await _context.SaveChangesAsync();
-                    _loggerService.LogEvent($"Deleted {extra.ProjectId} old ExtrasConfiguration record(s)",
+                    _loggerService.LogEvent($"Deleted {projectId} old ExtrasConfiguration record(s)",
                   "ExtrasConfiguration", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, extrasConfiguration.ProjectId);
                 }
+
+
                 _context.ExtraConfigurations.Add(extrasConfiguration);
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Created new ExtrasConfiguration with ProjectID {extrasConfiguration.ProjectId}", "ExtrasConfiguration", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,extrasConfiguration.ProjectId);
+                _loggerService.LogEvent($"Created new ExtrasConfiguration with ProjectID {extrasConfiguration.ProjectId}", "ExtrasConfiguration", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, extrasConfiguration.ProjectId);
 
                 return CreatedAtAction("GetExtrasConfiguration", new { id = extrasConfiguration.Id }, extrasConfiguration);
             }
+            catch (DbUpdateConcurrencyException ex)
+            {
+                _loggerService.LogError("Concurrency error when saving ExtrasConfiguration", ex.Message, nameof(ExtrasConfigurationsController));
+                return Conflict("Concurrency conflict occurred. The data may have been modified or deleted by another process.");
+            }
             catch (Exception ex)
             {
-               _loggerService.LogError("Error creating ExtrasConfiguration", ex.Message, nameof(ExtrasConfigurationsController));
+                _loggerService.LogError("Error creating ExtrasConfiguration", ex.Message, nameof(ExtrasConfigurationsController));
                 return StatusCode(500, "Internal server error");
             }
         }
@@ -150,7 +158,7 @@ namespace Tools.Controllers
 
                 _context.ExtraConfigurations.Remove(extrasConfiguration);
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Deleted a ExtrasConfiguration with ID {id}", "ExtrasConfiguration", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,extrasConfiguration.ProjectId);
+                _loggerService.LogEvent($"Deleted a ExtrasConfiguration with ID {id}", "ExtrasConfiguration", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, extrasConfiguration.ProjectId);
 
                 return NoContent();
             }
