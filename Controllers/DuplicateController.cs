@@ -81,7 +81,7 @@ namespace Tools.Controllers
                         continue;
 
                     var keep = group.First();
-                    keep.Quantity = group.Sum(x => x.NRQuantity);
+                    keep.NRQuantity = group.Sum(x => x.NRQuantity);
                     var subjectValues = group.Select(x => x.SubjectName?.Trim())
                                  .Where(v => !string.IsNullOrEmpty(v))
                                  .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -101,8 +101,6 @@ namespace Tools.Controllers
                         keep.CourseName = string.Join(" / ", courseValues);
                     else if (courseValues.Count == 1)
                         keep.CourseName = courseValues.First();
-
-
 
                     var duplicates = group.Skip(1).ToList();
                     _context.NRDatas.RemoveRange(duplicates);
@@ -302,6 +300,34 @@ namespace Tools.Controllers
                     }
 
                     ws.Cells[ws.Dimension.Address].AutoFitColumns();
+                    var wsClean = package.Workbook.Worksheets.Add("Clean NRData");
+
+                    // Write headers (same as base properties)
+                    col = 1;
+                    foreach (var prop in baseProperties)
+                    {
+                        wsClean.Cells[1, col].Value = prop.Name;
+                        wsClean.Cells[1, col].Style.Font.Bold = true;
+                        col++;
+                    }
+
+                    int cleanRow = 2;
+                    // Only include rows that are NOT deleted
+                    var cleanRows = reportRows.Where(r => !deletedRows.Any(d => d.Id == r.Id)).ToList();
+
+                    foreach (var item in cleanRows)
+                    {
+                        col = 1;
+                        foreach (var prop in baseProperties)
+                        {
+                            var value = prop.GetValue(item);
+                            wsClean.Cells[cleanRow, col++].Value = value?.ToString() ?? "";
+                        }
+                        cleanRow++;
+                    }
+
+                    wsClean.Cells[wsClean.Dimension.Address].AutoFitColumns();
+
                     package.SaveAs(new FileInfo(filePath));
                     _logger.LogEvent($"Duplicates report has been created", "Duplicates", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, ProjectId);
                 }
