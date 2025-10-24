@@ -215,7 +215,7 @@ namespace Tools.Controllers
                     ws.Cells[ws.Dimension.Address].AutoFitColumns();
                     package.SaveAs(new FileInfo(filePath));
                 }
-                _loggerService.LogEvent($"EnvelopeBreakage report of ProjectId {ProjectId} has been created", "EnvelopeBreakage", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,ProjectId);
+                _loggerService.LogEvent($"EnvelopeBreakage report of ProjectId {ProjectId} has been created", "EnvelopeBreakage", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, ProjectId);
                 return Ok(Consolidated); // Return original data for UI (optional)
             }
             catch (Exception ex)
@@ -224,7 +224,7 @@ namespace Tools.Controllers
                 _loggerService.LogError("Error in generating report", ex.Message, nameof(EnvelopeBreakagesController));
                 return StatusCode(500, "Internal server error");
             }
-            
+
         }
 
 
@@ -291,7 +291,6 @@ namespace Tools.Controllers
 
                 if (envelopesJson == null)
                     return NotFound("No envelope config found.");
-                _loggerService.LogError("No envelope config found", "", nameof(EnvelopeBreakagesController));
 
                 var nrDataList = await _context.NRDatas
                     .Where(s => s.ProjectId == ProjectId)
@@ -299,11 +298,9 @@ namespace Tools.Controllers
 
                 if (!nrDataList.Any())
                     return NotFound("No NRData found.");
-                _loggerService.LogError("No NRData found.", "", nameof(EnvelopeBreakagesController));
                 var envelopeDict = JsonSerializer.Deserialize<Dictionary<string, string>>(envelopesJson);
                 if (envelopeDict == null)
                     return BadRequest("Invalid envelope JSON format.");
-                _loggerService.LogError("Invalid envelope JSON format.", "", nameof(EnvelopeBreakagesController));
                 var innerSizes = envelopeDict["Inner"]
                     .Split(',', StringSplitOptions.RemoveEmptyEntries)
                     .Select(e => e.Trim().ToUpper().Replace("E", ""))
@@ -332,7 +329,7 @@ namespace Tools.Controllers
                         var chunk = env.Skip(i).Take(chunkSize).ToList();  // Get a chunk of the list
                         _context.EnvelopeBreakages.RemoveRange(chunk);  // Remove the chunk
                         await _context.SaveChangesAsync();  // Save changes after each chunk
-                        _loggerService.LogEvent($"Deleted {chunk.Count} Envelope Breaking entries for ProjectID {ProjectId}", "EnvelopeBreakages", 
+                        _loggerService.LogEvent($"Deleted {chunk.Count} Envelope Breaking entries for ProjectID {ProjectId}", "EnvelopeBreakages",
                             User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, ProjectId);
                     }
 
@@ -473,19 +470,19 @@ namespace Tools.Controllers
                 .Where(p => p.ProjectId == ProjectId)
                 .ToListAsync();
 
-            var Boxcapacity = await _context.ProjectConfigs
-                .Where(p => p.ProjectId == ProjectId)
-                .Select(p => p.BoxCapacity)
-                .FirstOrDefaultAsync();
+            var ProjectConfig = await _context.ProjectConfigs
+                .Where(p => p.ProjectId == ProjectId).FirstOrDefaultAsync();
+
+            var Boxcapacity = ProjectConfig.BoxCapacity;
+
             var capacity = await _context.BoxCapacity
            .Where(c => c.BoxCapacityId == Boxcapacity)
              .Select(c => c.Capacity) // assuming the column is named 'Value'
           .FirstOrDefaultAsync();
 
-            var boxIds = await _context.ProjectConfigs
-                .Where(p => p.ProjectId == ProjectId)
-                .Select(p => p.BoxBreakingCriteria).FirstOrDefaultAsync();
 
+            var boxIds = ProjectConfig.BoxBreakingCriteria;
+            var duplicatesFields = ProjectConfig.DuplicateRemoveFields;
             var fields = await _context.Fields
                 .Where(f => boxIds.Contains(f.FieldId))
                 .ToListAsync();
@@ -495,10 +492,13 @@ namespace Tools.Controllers
                 .Where(f => boxIds.Contains(f.FieldId))  // Assuming envelopeIds contains the IDs of the fields to sort by
                 .Select(f => f.Name)  // Get the field names
                 .ToListAsync();
+            var dupNames = await _context.Fields
+                .Where(f => duplicatesFields.Contains(f.FieldId))
+                .Select(f => f.Name)
+                .ToListAsync();
 
-            var startBox = await _context.ProjectConfigs
-                .Where(p=>p.ProjectId == ProjectId)
-                .Select(p=>p.BoxNumber).FirstOrDefaultAsync();
+
+            var startBox = ProjectConfig.BoxNumber;
 
             var extrasconfig = await _context.ExtraConfigurations
                 .Where(p => p.ProjectId == ProjectId)
@@ -555,7 +555,7 @@ namespace Tools.Controllers
                                 NRQuantity = int.Parse(worksheet.Cells[row, 9].Text),
                                 NodalCode = worksheet.Cells[row, 10].Text.Trim(),
                             };
-                        
+
                             breakingReportData.Add(inputRow);
                         }
                         catch (Exception ex)
@@ -573,9 +573,20 @@ namespace Tools.Controllers
 
             // Step 1: Remove duplicates (CatchNo + CenterCode), preserving first occurrence
             var uniqueRows = breakingReportData
-            .GroupBy(x => $"{x.CatchNo}_{x.CenterCode}")
-             .Select(g => g.First())
-            .ToList();
+     .GroupBy(x =>
+     {
+         // Build a composite key using the fields listed in dupNames
+         var keyParts = dupNames.Select(fieldName =>
+         {
+             var prop = x.GetType().GetProperty(fieldName, BindingFlags.IgnoreCase | BindingFlags.Public | BindingFlags.Instance);
+             return prop?.GetValue(x)?.ToString()?.Trim() ?? string.Empty;
+         });
+
+         // Join them with an underscore (or any separator)
+         return string.Join("_", keyParts);
+     })
+     .Select(g => g.First())
+     .ToList();
 
 
             // Step 2: Calculate Start, End, Serial (before sorting)
@@ -889,19 +900,15 @@ namespace Tools.Controllers
                 .Where(p => p.ProjectId == ProjectId)
                 .ToListAsync();
 
-            var outerEnvJson = await _context.ProjectConfigs
+            var projectconfig = await _context.ProjectConfigs
                 .Where(p => p.ProjectId == ProjectId)
-                .Select(p => p.Envelope)
                 .FirstOrDefaultAsync();
 
-            var startNumber = await _context.ProjectConfigs
-                .Where(p => p.ProjectId == ProjectId)
-                .Select(p => p.OmrSerialNumber)
-                .FirstOrDefaultAsync();
+            var outerEnvJson = projectconfig.Envelope;
 
-            var EnvelopeBreaking = await _context.ProjectConfigs.Where(p => p.ProjectId == ProjectId)
-                .Select(p => p.EnvelopeMakingCriteria)
-                .FirstOrDefaultAsync();
+            var startNumber = projectconfig.OmrSerialNumber;
+
+            var EnvelopeBreaking = projectconfig.EnvelopeMakingCriteria;
             var fields = await _context.Fields.ToListAsync();
 
             var extrasconfig = await _context.ExtraConfigurations
@@ -928,7 +935,7 @@ namespace Tools.Controllers
             var catchExtrasAdded = new HashSet<(int ExtraId, string CatchNo)>();
 
             // Helper method to add extra envelopes - removed serialnumber++ from here
-            void AddExtraWithEnv(ExtraEnvelopes extra, string examDate, string examTime,int NrQuantity, string NodalCode)
+            void AddExtraWithEnv(ExtraEnvelopes extra, string examDate, string examTime, int NrQuantity, string NodalCode)
             {
                 var extraConfig = extrasconfig.FirstOrDefault(e => e.ExtraType == extra.ExtraId);
                 int envCapacity = 0; // default fallback
@@ -1007,7 +1014,7 @@ namespace Tools.Controllers
                     if (!nodalExtrasAddedForNodalCatch.Contains((prevNrData.NodalCode, prevCatchNo)))
                     {
                         var extrasToAdd = extras.Where(e => e.ExtraId == 1 && e.CatchNo == prevCatchNo).ToList();
-                      // Get previous record for metadata
+                        // Get previous record for metadata
                         foreach (var extra in extrasToAdd)
                         {
                             AddExtraWithEnv(extra, prevNrData.ExamDate, prevNrData.ExamTime,
@@ -1037,7 +1044,7 @@ namespace Tools.Controllers
                 // ➕ Nodal Extra when NodalCode changes (but not CatchNo)
                 if (!catchNoChanged && prevNodalCode != null && current.NodalCode != prevNodalCode)
                 {
-                    if (!nodalExtrasAddedForNodalCatch.Contains((prevNodalCode,current.CatchNo)))
+                    if (!nodalExtrasAddedForNodalCatch.Contains((prevNodalCode, current.CatchNo)))
                     {
                         var extrasToAdd = extras.Where(e => e.ExtraId == 1 && e.CatchNo == current.CatchNo).ToList();
                         foreach (var extra in extrasToAdd)
@@ -1045,7 +1052,7 @@ namespace Tools.Controllers
                             AddExtraWithEnv(extra, current.ExamDate, current.ExamTime,
                                            current.NRQuantity, prevNodalCode);
                         }
-                        nodalExtrasAddedForNodalCatch.Add((prevNodalCode,current.CatchNo));
+                        nodalExtrasAddedForNodalCatch.Add((prevNodalCode, current.CatchNo));
                     }
                 }
 
@@ -1102,14 +1109,14 @@ namespace Tools.Controllers
                 // Sort by capacity (ascending - smallest first)
                 envelopeBreakdown = envelopeBreakdown.OrderBy(x => x.Capacity).ToList();
                 // If no breakdown found, use default behavior
-               
+
                 if (envelopeBreakdown.Count > 0)
                 {
                     // Process each envelope type from the breakdown
 
                     int envelopeIndex = 1;
                     int remainingQty = current.Quantity;
-                    Console.WriteLine("Remaining Qty" +remainingQty.ToString());
+                    Console.WriteLine("Remaining Qty" + remainingQty.ToString());
                     foreach (var (envType, count, capacity) in envelopeBreakdown)
                     {
                         for (int k = 0; k < count; k++)
@@ -1118,11 +1125,11 @@ namespace Tools.Controllers
                             int envQty;
                             if (remainingQty > capacity)
                                 envQty = capacity;
-                           
+
                             else
                                 envQty = remainingQty;
-                            Console.WriteLine("Remaining" +remainingQty);
-                            Console.WriteLine("Capacity" +capacity);
+                            Console.WriteLine("Remaining" + remainingQty);
+                            Console.WriteLine("Capacity" + capacity);
                             Console.WriteLine(current.CatchNo);
                             resultList.Add(new
                             {
@@ -1142,7 +1149,7 @@ namespace Tools.Controllers
                             remainingQty -= envQty;
                             envelopeIndex++;
                             if (remainingQty <= 0)
-                                break; 
+                                break;
                         }
                         if (remainingQty <= 0)
                             break;
@@ -1160,7 +1167,7 @@ namespace Tools.Controllers
 
                 if (lastNrData != null)
                 {
-                    if (!nodalExtrasAddedForNodalCatch.Contains((lastNrData.NodalCode,prevCatchNo)))
+                    if (!nodalExtrasAddedForNodalCatch.Contains((lastNrData.NodalCode, prevCatchNo)))
                     {
                         var extrasToAdd = extras.Where(e => e.ExtraId == 1 && e.CatchNo == prevCatchNo).ToList();
                         foreach (var extra in extrasToAdd)
@@ -1197,7 +1204,7 @@ namespace Tools.Controllers
                           "Center Env", "Total Env", "Env", "NRQuantity", "Nodal Code", "Exam Time", "Exam Date", "BookletSerial" };
 
                 var properties = new[] { "SerialNumber", "CatchNo", "CenterCode",
-                            "Quantity", "EnvQuantity", 
+                            "Quantity", "EnvQuantity",
                              "CenterEnv", "TotalEnv", "Env", "NRQuantity","NodalCode", "ExamTime", "ExamDate","BookletSerial" };
 
                 // Add filtered headers to the first row
