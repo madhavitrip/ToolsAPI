@@ -124,6 +124,7 @@ namespace Tools.Controllers
                         if (envelopeDict != null && envelopeDict.TryGetValue("Inner", out var innerValue) &&
                          !string.IsNullOrWhiteSpace(innerValue))
                         {
+                            Console.WriteLine("Entering into inner");
                             var innerSizes = envelopeDict["Inner"]
                                 .Split(',', StringSplitOptions.RemoveEmptyEntries)
                                 .Select(e => e.Trim().ToUpper().Replace("E", "")) // get number from E10 → 10

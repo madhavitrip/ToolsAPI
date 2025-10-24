@@ -332,10 +332,12 @@ namespace Tools.Controllers
                         var chunk = env.Skip(i).Take(chunkSize).ToList();  // Get a chunk of the list
                         _context.EnvelopeBreakages.RemoveRange(chunk);  // Remove the chunk
                         await _context.SaveChangesAsync();  // Save changes after each chunk
-                        _loggerService.LogEvent($"Deleted {chunk.Count} Envelope Breaking entries for ProjectID {ProjectId}", "EnvelopeBreakages", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, ProjectId);
+                        _loggerService.LogEvent($"Deleted {chunk.Count} Envelope Breaking entries for ProjectID {ProjectId}", "EnvelopeBreakages", 
+                            User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, ProjectId);
                     }
 
-                    _loggerService.LogEvent($"Successfully deleted all Envelope Breaking entries for ProjectID {ProjectId}", "EnvelopeBreakages", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, ProjectId);
+                    _loggerService.LogEvent($"Successfully deleted all Envelope Breaking entries for ProjectID {ProjectId}", "EnvelopeBreakages",
+                        User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, ProjectId);
                 }
                 else
                 {
@@ -421,9 +423,9 @@ namespace Tools.Controllers
 
 
                 using var client = new HttpClient();
-/*                var response = await client.GetAsync($"http://192.168.10.208:81/API/api/EnvelopeBreakages/EnvelopeBreakage?ProjectId={ProjectId}");
-*/                var response = await client.GetAsync($"https://localhost:7276/api/EnvelopeBreakages/EnvelopeBreakage?ProjectId={ProjectId}");
-
+                var response = await client.GetAsync($"http://192.168.10.208:81/API/api/EnvelopeBreakages/EnvelopeBreakage?ProjectId={ProjectId}");
+/*                var response = await client.GetAsync($"https://localhost:7276/api/EnvelopeBreakages/EnvelopeBreakage?ProjectId={ProjectId}");
+*/
                 if (!response.IsSuccessStatusCode)
                 {
                     // Handle failure from GET call as needed
@@ -1099,19 +1101,29 @@ namespace Tools.Controllers
 
                 // Sort by capacity (ascending - smallest first)
                 envelopeBreakdown = envelopeBreakdown.OrderBy(x => x.Capacity).ToList();
-
                 // If no breakdown found, use default behavior
                
                 if (envelopeBreakdown.Count > 0)
                 {
                     // Process each envelope type from the breakdown
+
                     int envelopeIndex = 1;
+                    int remainingQty = current.Quantity;
+                    Console.WriteLine("Remaining Qty" +remainingQty.ToString());
                     foreach (var (envType, count, capacity) in envelopeBreakdown)
                     {
                         for (int k = 0; k < count; k++)
                         {
                             centerEnvCounter++;
-
+                            int envQty;
+                            if (remainingQty > capacity)
+                                envQty = capacity;
+                           
+                            else
+                                envQty = remainingQty;
+                            Console.WriteLine("Remaining" +remainingQty);
+                            Console.WriteLine("Capacity" +capacity);
+                            Console.WriteLine(current.CatchNo);
                             resultList.Add(new
                             {
                                 SerialNumber = globalSerialNumber++,
@@ -1127,9 +1139,13 @@ namespace Tools.Controllers
                                 Env = $"{envelopeIndex}/{totalEnv}",
                                 current.NRQuantity,
                             });
-
+                            remainingQty -= envQty;
                             envelopeIndex++;
+                            if (remainingQty <= 0)
+                                break; 
                         }
+                        if (remainingQty <= 0)
+                            break;
                     }
                 }
 
