@@ -332,10 +332,12 @@ namespace Tools.Controllers
                         var chunk = env.Skip(i).Take(chunkSize).ToList();  // Get a chunk of the list
                         _context.EnvelopeBreakages.RemoveRange(chunk);  // Remove the chunk
                         await _context.SaveChangesAsync();  // Save changes after each chunk
-                        _loggerService.LogEvent($"Deleted {chunk.Count} Envelope Breaking entries for ProjectID {ProjectId}", "EnvelopeBreakages", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, ProjectId);
+                        _loggerService.LogEvent($"Deleted {chunk.Count} Envelope Breaking entries for ProjectID {ProjectId}", "EnvelopeBreakages", 
+                            User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, ProjectId);
                     }
 
-                    _loggerService.LogEvent($"Successfully deleted all Envelope Breaking entries for ProjectID {ProjectId}", "EnvelopeBreakages", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, ProjectId);
+                    _loggerService.LogEvent($"Successfully deleted all Envelope Breaking entries for ProjectID {ProjectId}", "EnvelopeBreakages",
+                        User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, ProjectId);
                 }
                 else
                 {
@@ -892,6 +894,11 @@ namespace Tools.Controllers
                 .Select(p => p.Envelope)
                 .FirstOrDefaultAsync();
 
+            var startNumber = await _context.ProjectConfigs
+                .Where(p => p.ProjectId == ProjectId)
+                .Select(p => p.OmrSerialNumber)
+                .FirstOrDefaultAsync();
+
             var EnvelopeBreaking = await _context.ProjectConfigs.Where(p => p.ProjectId == ProjectId)
                 .Select(p => p.EnvelopeMakingCriteria)
                 .FirstOrDefaultAsync();
@@ -917,7 +924,7 @@ namespace Tools.Controllers
             string prevExtraMergeField = null;
             int centerEnvCounter = 0;
             int extraCenterEnvCounter = 0;
-            var nodalExtrasAddedForCatchNo = new HashSet<string>();
+            var nodalExtrasAddedForNodalCatch = new HashSet<(string NodalCode, string CatchNo)>();
             var catchExtrasAdded = new HashSet<(int ExtraId, string CatchNo)>();
 
             // Helper method to add extra envelopes - removed serialnumber++ from here
@@ -995,17 +1002,18 @@ namespace Tools.Controllers
 
                 if (catchNoChanged)
                 {
+                    var prevNrData = nrData[i - 1];
                     // ➕ Add final extras for previous CatchNo before resetting serial
-                    if (!nodalExtrasAddedForCatchNo.Contains(prevCatchNo))
+                    if (!nodalExtrasAddedForNodalCatch.Contains((prevNrData.NodalCode, prevCatchNo)))
                     {
                         var extrasToAdd = extras.Where(e => e.ExtraId == 1 && e.CatchNo == prevCatchNo).ToList();
-                        var prevNrData = nrData[i - 1]; // Get previous record for metadata
+                      // Get previous record for metadata
                         foreach (var extra in extrasToAdd)
                         {
                             AddExtraWithEnv(extra, prevNrData.ExamDate, prevNrData.ExamTime,
                                           prevNrData.NRQuantity, prevNrData.NodalCode);
                         }
-                        nodalExtrasAddedForCatchNo.Add(prevCatchNo);
+                        nodalExtrasAddedForNodalCatch.Add((prevNrData.NodalCode, prevCatchNo));
                     }
 
                     foreach (var extraId in new[] { 2, 3 })
@@ -1013,7 +1021,6 @@ namespace Tools.Controllers
                         if (!catchExtrasAdded.Contains((extraId, prevCatchNo)))
                         {
                             var extrasToAdd = extras.Where(e => e.ExtraId == extraId && e.CatchNo == prevCatchNo).ToList();
-                            var prevNrData = nrData[i - 1];
                             foreach (var extra in extrasToAdd)
                             {
                                 AddExtraWithEnv(extra, prevNrData.ExamDate, prevNrData.ExamTime,
@@ -1030,15 +1037,15 @@ namespace Tools.Controllers
                 // ➕ Nodal Extra when NodalCode changes (but not CatchNo)
                 if (!catchNoChanged && prevNodalCode != null && current.NodalCode != prevNodalCode)
                 {
-                    if (!nodalExtrasAddedForCatchNo.Contains(current.CatchNo))
+                    if (!nodalExtrasAddedForNodalCatch.Contains((prevNodalCode,current.CatchNo)))
                     {
                         var extrasToAdd = extras.Where(e => e.ExtraId == 1 && e.CatchNo == current.CatchNo).ToList();
                         foreach (var extra in extrasToAdd)
                         {
                             AddExtraWithEnv(extra, current.ExamDate, current.ExamTime,
-                                           current.NRQuantity, current.NodalCode);
+                                           current.NRQuantity, prevNodalCode);
                         }
-                        nodalExtrasAddedForCatchNo.Add(current.CatchNo);
+                        nodalExtrasAddedForNodalCatch.Add((prevNodalCode,current.CatchNo));
                     }
                 }
 
@@ -1094,19 +1101,29 @@ namespace Tools.Controllers
 
                 // Sort by capacity (ascending - smallest first)
                 envelopeBreakdown = envelopeBreakdown.OrderBy(x => x.Capacity).ToList();
-
                 // If no breakdown found, use default behavior
                
                 if (envelopeBreakdown.Count > 0)
                 {
                     // Process each envelope type from the breakdown
+
                     int envelopeIndex = 1;
+                    int remainingQty = current.Quantity;
+                    Console.WriteLine("Remaining Qty" +remainingQty.ToString());
                     foreach (var (envType, count, capacity) in envelopeBreakdown)
                     {
                         for (int k = 0; k < count; k++)
                         {
                             centerEnvCounter++;
-
+                            int envQty;
+                            if (remainingQty > capacity)
+                                envQty = capacity;
+                           
+                            else
+                                envQty = remainingQty;
+                            Console.WriteLine("Remaining" +remainingQty);
+                            Console.WriteLine("Capacity" +capacity);
+                            Console.WriteLine(current.CatchNo);
                             resultList.Add(new
                             {
                                 SerialNumber = globalSerialNumber++,
@@ -1122,9 +1139,13 @@ namespace Tools.Controllers
                                 Env = $"{envelopeIndex}/{totalEnv}",
                                 current.NRQuantity,
                             });
-
+                            remainingQty -= envQty;
                             envelopeIndex++;
+                            if (remainingQty <= 0)
+                                break; 
                         }
+                        if (remainingQty <= 0)
+                            break;
                     }
                 }
 
@@ -1139,7 +1160,7 @@ namespace Tools.Controllers
 
                 if (lastNrData != null)
                 {
-                    if (!nodalExtrasAddedForCatchNo.Contains(prevCatchNo))
+                    if (!nodalExtrasAddedForNodalCatch.Contains((lastNrData.NodalCode,prevCatchNo)))
                     {
                         var extrasToAdd = extras.Where(e => e.ExtraId == 1 && e.CatchNo == prevCatchNo).ToList();
                         foreach (var extra in extrasToAdd)
@@ -1163,7 +1184,8 @@ namespace Tools.Controllers
                     }
                 }
             }
-
+            int currentStartNumber = startNumber;
+            bool assignBookletSerial = currentStartNumber > 0;
             // Generate Excel Report
             using (var package = new ExcelPackage())
             {
@@ -1172,11 +1194,11 @@ namespace Tools.Controllers
                 // Add headers
                 var headers = new[] { "Serial Number", "Catch No", "Center Code",
                          "Quantity", "EnvQuantity",
-                          "Center Env", "Total Env", "Env", "NRQuantity", "Nodal Code", "Exam Time", "Exam Date" };
+                          "Center Env", "Total Env", "Env", "NRQuantity", "Nodal Code", "Exam Time", "Exam Date", "BookletSerial" };
 
                 var properties = new[] { "SerialNumber", "CatchNo", "CenterCode",
                             "Quantity", "EnvQuantity", 
-                             "CenterEnv", "TotalEnv", "Env", "NRQuantity","NodalCode", "ExamTime", "ExamDate" };
+                             "CenterEnv", "TotalEnv", "Env", "NRQuantity","NodalCode", "ExamTime", "ExamDate","BookletSerial" };
 
                 // Add filtered headers to the first row
                 for (int i = 0; i < headers.Length; i++)
@@ -1197,10 +1219,30 @@ namespace Tools.Controllers
                 int row = 2;
                 foreach (var item in resultList)
                 {
+                    dynamic rowItem = item;
                     for (int col = 0; col < properties.Length; col++)
                     {
-                        var value = item.GetType().GetProperty(properties[col])?.GetValue(item);
-                        worksheet.Cells[row, col + 1].Value = value;
+                        var propName = properties[col];
+
+                        if (propName == "BookletSerial")
+                        {
+                            if (assignBookletSerial)
+                            {
+                                int envQuantity = rowItem.EnvQuantity;
+                                string bookletSerialRange = $"{currentStartNumber}-{currentStartNumber + envQuantity - 1}";
+                                worksheet.Cells[row, col + 1].Value = bookletSerialRange;
+                                currentStartNumber += envQuantity;
+                            }
+                            else
+                            {
+                                worksheet.Cells[row, col + 1].Value = ""; // Leave it blank
+                            }
+                        }
+                        else
+                        {
+                            var value = rowItem.GetType().GetProperty(propName)?.GetValue(rowItem);
+                            worksheet.Cells[row, col + 1].Value = value;
+                        }
                     }
                     row++;
                 }
