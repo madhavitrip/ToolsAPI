@@ -13,6 +13,7 @@ namespace Tools.Models
         public string Envelope { get; set; }
         public List<int> BoxBreakingCriteria { get; set; }
         public List<int> DuplicateRemoveFields { get; set; }
+        public List<int> SortingBoxReport { get; set; }
         public List<int> EnvelopeMakingCriteria { get; set; }
         public int BoxCapacity { get; set; }
         public List<int> DuplicateCriteria { get; set; }
