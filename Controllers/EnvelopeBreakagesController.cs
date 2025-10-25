@@ -482,6 +482,8 @@ namespace Tools.Controllers
 
 
             var boxIds = ProjectConfig.BoxBreakingCriteria;
+            var sortingId = ProjectConfig.SortingBoxReport;
+            Console.WriteLine(sortingId);
             var duplicatesFields = ProjectConfig.DuplicateRemoveFields;
             var fields = await _context.Fields
                 .Where(f => boxIds.Contains(f.FieldId))
@@ -489,9 +491,15 @@ namespace Tools.Controllers
 
             // Step 2: Fetch the corresponding field names from the Fields table
             var fieldNames = await _context.Fields
-                .Where(f => boxIds.Contains(f.FieldId))  // Assuming envelopeIds contains the IDs of the fields to sort by
+                .Where(f => sortingId.Contains(f.FieldId))  // Assuming envelopeIds contains the IDs of the fields to sort by
                 .Select(f => f.Name)  // Get the field names
                 .ToListAsync();
+            foreach ( var field in fieldNames)
+            {
+                Console.WriteLine("Line 498" + field);
+
+            }
+
             var dupNames = await _context.Fields
                 .Where(f => duplicatesFields.Contains(f.FieldId))
                 .Select(f => f.Name)
@@ -573,20 +581,20 @@ namespace Tools.Controllers
 
             // Step 1: Remove duplicates (CatchNo + CenterCode), preserving first occurrence
             var uniqueRows = breakingReportData
-     .GroupBy(x =>
-     {
-         // Build a composite key using the fields listed in dupNames
-         var keyParts = dupNames.Select(fieldName =>
-         {
+           .GroupBy(x =>
+           {
+            // Build a composite key using the fields listed in dupNames
+            var keyParts = dupNames.Select(fieldName =>
+            {
              var prop = x.GetType().GetProperty(fieldName, BindingFlags.IgnoreCase | BindingFlags.Public | BindingFlags.Instance);
              return prop?.GetValue(x)?.ToString()?.Trim() ?? string.Empty;
-         });
+             });
 
-         // Join them with an underscore (or any separator)
-         return string.Join("_", keyParts);
-     })
-     .Select(g => g.First())
-     .ToList();
+            // Join them with an underscore (or any separator)
+             return string.Join("_", keyParts);
+              })
+           .Select(g => g.First())
+           .ToList();
 
 
             // Step 2: Calculate Start, End, Serial (before sorting)
@@ -637,7 +645,6 @@ namespace Tools.Controllers
                 })
                 .Where(x => x.Property != null)
                 .ToList();
-
 
             // Step 2: Apply ordering using cached properties
             IOrderedEnumerable<dynamic> ordered = null;
@@ -690,26 +697,22 @@ namespace Tools.Controllers
                             if (prop != null)
                             {
                                 var value = prop.GetValue(item)?.ToString() ?? "";
-                                Console.WriteLine($"Value from nrRow for {fieldName}: {value}");
                                 return value;
                             }
                             else
                             {
-                                Console.WriteLine($"Property '{fieldName}' not found on nrRow");
                                 _loggerService.LogError($"Property '{fieldName}' not found on nrRow", "", nameof(EnvelopeBreakagesController));
 
                             }
                         }
                         else
                         {
-                            Console.WriteLine($"Field name not found for fieldId: {fieldId}");
                             _loggerService.LogError($"Field name not found for fieldId: {fieldId}", "", nameof(EnvelopeBreakagesController));
 
                         }
 
                         return ""; // fallback if field name or property not found
                     }));
-                    Console.WriteLine(mergeKey);
                 }
 
                 // ---- Rule 1: merge fields change → force new box
