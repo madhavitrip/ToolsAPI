@@ -50,11 +50,11 @@ namespace Tools.Controllers
 
         // GET: api/NRDatas/GetByProjectId/5
         [HttpGet("GetByProjectId/{projectId}")]
-        public async Task<ActionResult<IEnumerable<NRData>>> GetByProjectId(int projectId)
+        public async Task<ActionResult> GetByProjectId(int projectId)
         {
-            var nrData = await _context.NRDatas
+            var nrDataList = await _context.NRDatas
                 .Where(d => d.ProjectId == projectId)
-                .Select(d=>new
+                .Select(d => new
                 {
                     d.CatchNo,
                     d.CenterCode,
@@ -65,19 +65,51 @@ namespace Tools.Controllers
                     d.NodalCode,
                     d.NRQuantity,
                     d.Quantity,
-                    d.Pages,
+                    d.Route,
+                    d.Pages
                 })
                 .ToListAsync();
 
-            if (!nrData.Any())
+            if (!nrDataList.Any())
             {
                 return NotFound($"No NRData found for ProjectId {projectId}");
             }
 
+            // Find columns where *all* values are null or empty
+            var properties = nrDataList.First().GetType().GetProperties();
+            var nonEmptyColumns = properties
+                .Where(p => nrDataList.Any(d =>
+                {
+                    var value = p.GetValue(d);
+                    if (value == null) return false;
+                    if (value is string s) return !string.IsNullOrWhiteSpace(s);
+                    if (value is int i)
+                        return i != 0;
+                    if (value is long l)
+                        return l != 0;
+                    if (value is double dbl)
+                        return dbl != 0;
+                    if (value is decimal dec)
+                        return dec != 0;
 
+                    return true;
+                }))
+                .ToList();
 
-            return Ok(nrData);
+            // Build dynamic objects that only include non-empty columns
+            var result = nrDataList.Select(d =>
+            {
+                var dict = new Dictionary<string, object>();
+                foreach (var prop in nonEmptyColumns)
+                {
+                    dict[prop.Name] = prop.GetValue(d);
+                }
+                return dict;
+            });
+
+            return Ok(result);
         }
+
 
 
         // PUT: api/NRDatas/5

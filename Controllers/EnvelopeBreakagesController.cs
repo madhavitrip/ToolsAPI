@@ -483,7 +483,6 @@ namespace Tools.Controllers
 
             var boxIds = ProjectConfig.BoxBreakingCriteria;
             var sortingId = ProjectConfig.SortingBoxReport;
-            Console.WriteLine(sortingId);
             var duplicatesFields = ProjectConfig.DuplicateRemoveFields;
             var fields = await _context.Fields
                 .Where(f => boxIds.Contains(f.FieldId))
@@ -494,11 +493,7 @@ namespace Tools.Controllers
                 .Where(f => sortingId.Contains(f.FieldId))  // Assuming envelopeIds contains the IDs of the fields to sort by
                 .Select(f => f.Name)  // Get the field names
                 .ToListAsync();
-            foreach ( var field in fieldNames)
-            {
-                Console.WriteLine("Line 498" + field);
-
-            }
+         
 
             var dupNames = await _context.Fields
                 .Where(f => duplicatesFields.Contains(f.FieldId))
@@ -674,8 +669,9 @@ namespace Tools.Controllers
             foreach (var item in sortedList)
             {
                 var nrRow = nrData.FirstOrDefault(n => n.CenterCode == item.CenterCode && n.CatchNo == item.CatchNo);
-                int pages = nrRow?.Pages ?? 1;
-                int totalPages = (item.Quantity ?? 0) * pages;
+                int pages = nrRow?.Pages??0;
+
+                int totalPages = (item.Quantity) * pages;
 
                 // Build merge key
                 string mergeKey = "";
@@ -718,6 +714,9 @@ namespace Tools.Controllers
                 // ---- Rule 1: merge fields change → force new box
                 bool mergeChanged = (prevMergeKey != null && mergeKey != prevMergeKey);
                 bool overflow = (runningPages + totalPages > capacity);
+                Console.WriteLine("Running Pages" + runningPages);
+                
+                Console.WriteLine("Total Pages" + totalPages);
                 try
                 {
                     if (mergeChanged || overflow)
@@ -726,12 +725,15 @@ namespace Tools.Controllers
                         if (overflow)
                         {
                             int leftover = (runningPages + totalPages) - capacity;
+                            Console.WriteLine("Leftover" + leftover);
                             int filled = totalPages - leftover;
-
+                            Console.WriteLine("Filled" + filled);
                             // if leftover < 50% threshold, split into two balanced boxes
-                            if (leftover > 0 && leftover < capacity / 2)
-                            {
+                            /*if (leftover > 0 && leftover < capacity / 2)
+                            {*/
                                 int combined = capacity + leftover;
+                                Console.WriteLine("Combined" + combined);
+                                _loggerService.LogEvent($"Box mergekey {mergeKey} Running {runningPages} TotalPages {totalPages} Leftover {leftover} Filled {filled} Combined {combined} has been created", "EnvelopeBreakage", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, ProjectId);
                                 int half = combined / 2;
 
                                 // Adjust: previous box gets half, new box gets half
@@ -751,12 +753,13 @@ namespace Tools.Controllers
                                     item.Start,
                                     item.End,
                                     item.Serial,
-                                    TotalPages = half,
+                                    TotalPages = filled,
                                     BoxNo = boxNo
                                 });
 
                                 // second portion
                                 boxNo++;
+                            runningPages = leftover;
                                 finalWithBoxes.Add(new
                                 {
                                     item.SerialNumber,
@@ -770,14 +773,14 @@ namespace Tools.Controllers
                                     item.Start,
                                     item.End,
                                     item.Serial,
-                                    TotalPages = combined - half,
+                                    TotalPages = leftover,
                                     BoxNo = boxNo
                                 });
 
-                                runningPages = combined - half; // carry over for next items
+                                //runningPages = combined - half; // carry over for next items
                                 prevMergeKey = mergeKey;
                                 continue; // skip normal add
-                            }
+                            
                         }
 
                         // normal case: just start new box
@@ -1116,7 +1119,6 @@ namespace Tools.Controllers
                 if (envelopeBreakdown.Count > 0)
                 {
                     // Process each envelope type from the breakdown
-
                     int envelopeIndex = 1;
                     int remainingQty = current.Quantity;
                     Console.WriteLine("Remaining Qty" + remainingQty.ToString());
@@ -1127,12 +1129,17 @@ namespace Tools.Controllers
                             centerEnvCounter++;
                             int envQty;
                             if (remainingQty > capacity)
+                            {
                                 envQty = capacity;
-
+                                Console.WriteLine(envQty);
+                            }
                             else
+                            {
                                 envQty = remainingQty;
-                            Console.WriteLine("Remaining" + remainingQty);
-                            Console.WriteLine("Capacity" + capacity);
+                                Console.WriteLine(envQty);
+                                Console.WriteLine("Remaining" + remainingQty);
+                                Console.WriteLine("Capacity" + capacity);
+                            }
                             Console.WriteLine(current.CatchNo);
                             resultList.Add(new
                             {
@@ -1142,7 +1149,7 @@ namespace Tools.Controllers
                                 current.ExamTime,
                                 current.ExamDate,
                                 current.Quantity,
-                                EnvQuantity = capacity,  // Use the envelope capacity
+                                EnvQuantity = envQty,  // Use the envelope capacity
                                 current.NodalCode,
                                 CenterEnv = centerEnvCounter,
                                 TotalEnv = totalEnv,
