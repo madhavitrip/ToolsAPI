@@ -420,9 +420,9 @@ namespace Tools.Controllers
 
 
                 using var client = new HttpClient();
-                //var response = await client.GetAsync($"http://192.168.10.208:81/API/api/EnvelopeBreakages/EnvelopeBreakage?ProjectId={ProjectId}");
-               var response = await client.GetAsync($"https://localhost:7276/api/EnvelopeBreakages/EnvelopeBreakage?ProjectId={ProjectId}");
-
+                var response = await client.GetAsync($"http://192.168.10.208:81/API/api/EnvelopeBreakages/EnvelopeBreakage?ProjectId={ProjectId}");
+/*               var response = await client.GetAsync($"https://localhost:7276/api/EnvelopeBreakages/EnvelopeBreakage?ProjectId={ProjectId}");
+*/
                 if (!response.IsSuccessStatusCode)
                 {
                     // Handle failure from GET call as needed
@@ -746,6 +746,18 @@ namespace Tools.Controllers
                             // Round quantities reasonably
                             int qtyFilled = (int)Math.Round(item.Quantity * ratioFilled);
                             int qtyLeftover = item.Quantity - qtyFilled;
+                            int totalEnvFilled = (int)Math.Round(item.TotalEnv * ratioFilled);
+                            int totalEnvLeftover = item.TotalEnv - totalEnvFilled;
+
+                            // ✅ Recalculate Start, End, Serial for first portion
+                            int startFilled = item.Start;
+                            int endFilled = startFilled + totalEnvFilled - 1;
+                            string serialFilled = $"{startFilled} to {endFilled}";
+
+                            // ✅ Recalculate Start, End, Serial for second portion
+                            int startLeftover = endFilled + 1;
+                            int endLeftover = startLeftover + totalEnvLeftover - 1;
+                            string serialLeftover = $"{startLeftover} to {endLeftover}";
                             finalWithBoxes.Add(new
                                 {
                                     item.SerialNumber,
@@ -856,6 +868,8 @@ namespace Tools.Controllers
                                 .Where(x => (int)x.BoxNo == prevBox)
                                 .Sum(x => (int)x.TotalPages);
 
+                           
+
                             Console.WriteLine($"Checking {group.Key.CenterCode}: Box {prevBox}={prevBoxTotal}, Box {currentBox}={currentBoxTotal}, Cap={capacity}");
 
                             // 🔸 If the current box is underutilized (<50% of capacity)
@@ -863,6 +877,7 @@ namespace Tools.Controllers
                             {
                                 int combined = prevBoxTotal + currentBoxTotal;
                                 int split = combined / 2;
+
 
                                 _loggerService.LogEvent(
                                     $"Balancing underutilized box {currentBox} with {prevBox} for {group.Key.CenterCode}. Combined={combined}, Split≈{split}.",
@@ -893,6 +908,8 @@ namespace Tools.Controllers
                                 foreach (var item in combinedItems)
                                 {
                                     int pages = (int)item.TotalPages;
+                                    int qty = (int)item.Quantity/2;
+                                    int env = (int)item.TotalEnv;
 
                                     if (cumulative + pages <= split)
                                     {
@@ -903,7 +920,7 @@ namespace Tools.Controllers
                                             item.CenterCode,
                                             item.ExamTime,
                                             item.ExamDate,
-                                            item.Quantity,
+                                          item.Quantity,
                                             item.NodalCode,
                                             item.TotalEnv,
                                             item.Start,
