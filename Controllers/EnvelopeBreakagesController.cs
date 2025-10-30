@@ -736,18 +736,24 @@ namespace Tools.Controllers
                                 _loggerService.LogEvent($"Box mergekey {mergeKey} Running {runningPages} TotalPages {totalPages} Leftover {leftover} Filled {filled} Combined {combined} has been created", "EnvelopeBreakage", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, ProjectId);
                                 int half = combined / 2;
 
-                                // Adjust: previous box gets half, new box gets half
-                                // 💡 This means we must "reassign" some pages from last box items into new box
-                                // Simplify: we treat this item as split across two boxes
-                                // first portion
-                                finalWithBoxes.Add(new
+                            // Adjust: previous box gets half, new box gets half
+                            // 💡 This means we must "reassign" some pages from last box items into new box
+                            // Simplify: we treat this item as split across two boxes
+                            // first portion
+                            double ratioFilled = (double)filled / totalPages;
+                            double ratioLeftover = (double)leftover / totalPages;
+
+                            // Round quantities reasonably
+                            int qtyFilled = (int)Math.Round(item.Quantity * ratioFilled);
+                            int qtyLeftover = item.Quantity - qtyFilled;
+                            finalWithBoxes.Add(new
                                 {
                                     item.SerialNumber,
                                     item.CatchNo,
                                     item.CenterCode,
                                     item.ExamTime,
                                     item.ExamDate,
-                                    item.Quantity,
+                                    Quantity = qtyFilled,
                                     item.NodalCode,
                                     item.TotalEnv,
                                     item.Start,
@@ -767,7 +773,7 @@ namespace Tools.Controllers
                                     item.CenterCode,
                                     item.ExamTime,
                                     item.ExamDate,
-                                    item.Quantity,
+                                    Quantity = qtyLeftover,
                                     item.NodalCode,
                                     item.TotalEnv,
                                     item.Start,
