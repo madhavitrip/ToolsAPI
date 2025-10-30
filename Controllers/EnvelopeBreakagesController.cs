@@ -420,9 +420,9 @@ namespace Tools.Controllers
 
 
                 using var client = new HttpClient();
-                var response = await client.GetAsync($"http://192.168.10.208:81/API/api/EnvelopeBreakages/EnvelopeBreakage?ProjectId={ProjectId}");
-/*                var response = await client.GetAsync($"https://localhost:7276/api/EnvelopeBreakages/EnvelopeBreakage?ProjectId={ProjectId}");
-*/
+                //var response = await client.GetAsync($"http://192.168.10.208:81/API/api/EnvelopeBreakages/EnvelopeBreakage?ProjectId={ProjectId}");
+               var response = await client.GetAsync($"https://localhost:7276/api/EnvelopeBreakages/EnvelopeBreakage?ProjectId={ProjectId}");
+
                 if (!response.IsSuccessStatusCode)
                 {
                     // Handle failure from GET call as needed
@@ -816,6 +816,141 @@ namespace Tools.Controllers
                     return StatusCode(500, "Internal Server Error");
                 }
             }
+
+
+            // ✅ Handle underutilized boxes (<50%) balancing for all boxes safely
+            // ✅ Handle underutilized boxes (<50%) balancing for all boxes
+            try
+            {
+                if (finalWithBoxes.Any())
+                {
+                    // Group by merge key (e.g., center-wise balancing)
+                    var groupedByMerge = finalWithBoxes
+                        .GroupBy(x => new { x.CatchNo, x.CenterCode }) // use the fields defining mergeKey
+                        .ToList();
+
+                    foreach (var group in groupedByMerge)
+                    {
+                        var groupBoxes = group
+                            .Select(x => (int)x.BoxNo)
+                            .Distinct()
+                            .OrderBy(x => x)
+                            .ToList();
+
+                        for (int i = 1; i < groupBoxes.Count; i++)
+                        {
+                            int currentBox = groupBoxes[i];
+                            int prevBox = groupBoxes[i - 1];
+
+                            int currentBoxTotal = finalWithBoxes
+                                .Where(x => (int)x.BoxNo == currentBox)
+                                .Sum(x => (int)x.TotalPages);
+
+                            int prevBoxTotal = finalWithBoxes
+                                .Where(x => (int)x.BoxNo == prevBox)
+                                .Sum(x => (int)x.TotalPages);
+
+                            Console.WriteLine($"Checking {group.Key.CenterCode}: Box {prevBox}={prevBoxTotal}, Box {currentBox}={currentBoxTotal}, Cap={capacity}");
+
+                            // 🔸 If the current box is underutilized (<50% of capacity)
+                            if (currentBoxTotal > 0 && currentBoxTotal < capacity / 2)
+                            {
+                                int combined = prevBoxTotal + currentBoxTotal;
+                                int split = combined / 2;
+
+                                _loggerService.LogEvent(
+                                    $"Balancing underutilized box {currentBox} with {prevBox} for {group.Key.CenterCode}. Combined={combined}, Split≈{split}.",
+                                    "EnvelopeBreakage",
+                                    User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
+                                    ProjectId
+                                );
+
+                                // Fetch both boxes’ items for redistribution
+                                var prevItems = finalWithBoxes
+                                    .Where(x => (int)x.BoxNo == prevBox)
+                                    .OrderBy(x => x.SerialNumber)
+                                    .ToList();
+
+                                var currentItems = finalWithBoxes
+                                    .Where(x => (int)x.BoxNo == currentBox)
+                                    .OrderBy(x => x.SerialNumber)
+                                    .ToList();
+
+                                var combinedItems = prevItems.Concat(currentItems)
+                                    .OrderBy(x => x.SerialNumber)
+                                    .ToList();
+
+                                int cumulative = 0;
+                                var newPrevBox = new List<dynamic>();
+                                var newCurrentBox = new List<dynamic>();
+
+                                foreach (var item in combinedItems)
+                                {
+                                    int pages = (int)item.TotalPages;
+
+                                    if (cumulative + pages <= split)
+                                    {
+                                        newPrevBox.Add(new
+                                        {
+                                            item.SerialNumber,
+                                            item.CatchNo,
+                                            item.CenterCode,
+                                            item.ExamTime,
+                                            item.ExamDate,
+                                            item.Quantity,
+                                            item.NodalCode,
+                                            item.TotalEnv,
+                                            item.Start,
+                                            item.End,
+                                            item.Serial,
+                                            TotalPages = pages,
+                                            BoxNo = prevBox
+                                        });
+                                        cumulative += pages;
+                                    }
+                                    else
+                                    {
+                                        newCurrentBox.Add(new
+                                        {
+                                            item.SerialNumber,
+                                            item.CatchNo,
+                                            item.CenterCode,
+                                            item.ExamTime,
+                                            item.ExamDate,
+                                            item.Quantity,
+                                            item.NodalCode,
+                                            item.TotalEnv,
+                                            item.Start,
+                                            item.End,
+                                            item.Serial,
+                                            TotalPages = pages,
+                                            BoxNo = currentBox
+                                        });
+                                    }
+                                }
+
+                                // Replace both boxes in the main list
+                                finalWithBoxes.RemoveAll(x => (int)x.BoxNo == prevBox || (int)x.BoxNo == currentBox);
+                                finalWithBoxes.AddRange(newPrevBox);
+                                finalWithBoxes.AddRange(newCurrentBox);
+
+                                Console.WriteLine($"✅ Balanced boxes {prevBox} and {currentBox} for {group.Key.CenterCode}: ≈{split} pages each.");
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _loggerService.LogError("Error during underutilized box balancing loop", ex.Message, nameof(EnvelopeBreakagesController));
+            }
+
+            // 🔹 Maintain ordering
+            finalWithBoxes = finalWithBoxes
+                .OrderBy(x => (int)x.BoxNo)
+                .ThenBy(x => (int)x.SerialNumber)
+                .ToList();
+
 
             // Step 5: Export to Excel
             try
