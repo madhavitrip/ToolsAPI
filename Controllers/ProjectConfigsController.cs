@@ -123,7 +123,7 @@ namespace Tools.Controllers
             }
             catch (Exception ex)
             {
-              //  _loggerService.LogError("Error creating ProjectConfigs", ex.Message, nameof(ProjectConfigsController));
+               _loggerService.LogError("Error creating ProjectConfigs", ex.Message, nameof(ProjectConfigsController));
                 return StatusCode(500, "Internal server error");
             }
         }
