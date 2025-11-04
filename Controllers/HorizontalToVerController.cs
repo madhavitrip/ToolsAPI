@@ -193,13 +193,18 @@ namespace Tools.Controllers
                     Console.WriteLine($"Processing sheet: {worksheet.Name}");
 
                     // Load sheet into DataTable
-                    var dt = worksheet.RangeUsed().AsTable().AsNativeDataTable();
+                    var range = worksheet.RangeUsed();
+                    if (range == null)
+                        continue; // skip empty sheet
+
+                    var dt = range.AsTable().AsNativeDataTable();
+
 
                     // Find numeric columns (like "101", "102", etc.)
                     var centerCols = dt.Columns.Cast<DataColumn>()
-                        .Where(c => int.TryParse(c.ColumnName, out _))
-                        .Select(c => c.ColumnName)
-                        .ToList();
+     .Where(c => c.ColumnName.StartsWith("c_", StringComparison.OrdinalIgnoreCase))
+     .Select(c => c.ColumnName)
+     .ToList();
 
                     // Create output table
                     var outputTable = new DataTable();
