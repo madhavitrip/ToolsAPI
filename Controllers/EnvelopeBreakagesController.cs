@@ -563,14 +563,18 @@ namespace Tools.Controllers
                                 SerialNumber = int.Parse(worksheet.Cells[row, 1].Text),
                                 CatchNo = worksheet.Cells[row, 2].Text.Trim(),
                                 CenterCode = worksheet.Cells[row, 3].Text.Trim(),
-                                CenterSort = worksheet.Cells[row, 4].Text.Trim(),
+                                CenterSort = int.TryParse(worksheet.Cells[row, 4].Text.Trim(), out int sortValue)
+                                ? sortValue
+                                : 0,
                                 ExamTime = worksheet.Cells[row, 13].Text.Trim(),
                                 ExamDate = worksheet.Cells[row, 14].Text.Trim(),
                                 Quantity = int.Parse(worksheet.Cells[row, 5].Text),
                                 TotalEnv = int.Parse(worksheet.Cells[row, 8].Text),
                                 NRQuantity = int.Parse(worksheet.Cells[row, 10].Text),
                                 NodalCode = worksheet.Cells[row, 11].Text.Trim(), 
-                                NodalSort = worksheet.Cells[row, 12].Text.Trim(),
+                                NodalSort = int.TryParse(worksheet.Cells[row, 12].Text.Trim(), out int sortVal)
+                                ? sortVal
+                                : 0,
                             };
 
                             breakingReportData.Add(inputRow);
@@ -664,23 +668,15 @@ namespace Tools.Controllers
             {
                 var prop = properties[i].Property;
 
-                Func<dynamic, (bool IsNumeric, double NumValue, string StrValue)> keySelector = x =>
-                {
-                    var raw = prop.GetValue(x)?.ToString()?.Trim() ?? "";
-
-                    if (double.TryParse(raw, out double num))
-                        return (true, num, raw);   // numeric first
-                    else
-                        return (false, 0, raw);    // non-numeric second
-                };
-
                 if (i == 0)
-                    ordered = enrichedList.OrderBy(keySelector);
+                {
+                    ordered = enrichedList.OrderBy(x => prop.GetValue(x));
+                }
                 else
-                    ordered = ordered.ThenBy(keySelector);
+                {
+                    ordered = ordered.ThenBy(x => prop.GetValue(x));
+                }
             }
-
-
 
             // Step 3: Update the list if sorting happened
             if (ordered != null)
@@ -696,11 +692,19 @@ namespace Tools.Controllers
 
             foreach (var item in sortedList)
             {
-                var nrRow = nrData.FirstOrDefault(n => n.CenterCode == item.CenterCode && n.CatchNo == item.CatchNo);
-                int pages = nrRow?.Pages??0;
-
+                
+                    var nrRow = nrData.FirstOrDefault(n => n.CatchNo == item.CatchNo);
+               
+                    int pages = nrRow?.Pages ?? 0;
+                if (item.CenterCode == "University Extra")
+                {
+                    _loggerService.LogEvent($"{item.CenterCode + item.CatchNo + nrRow.Pages}", "EnvelopeBreakage", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, ProjectId);
+                }
                 int totalPages = (item.Quantity) * pages;
-
+                if (item.CenterCode == "University Extra")
+                {
+                    _loggerService.LogEvent($"{item.CenterCode + item.CatchNo + item.Quantity + totalPages}", "EnvelopeBreakage", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, ProjectId);
+                }
                 // Build merge key
                 string mergeKey = "";
                 if (boxIds == null)
@@ -1081,8 +1085,8 @@ namespace Tools.Controllers
             public int TotalEnv { get; set; }
             public int NRQuantity { get; set; }
             public string NodalCode { get; set; }
-            public string CenterSort { get; set; }
-            public string NodalSort { get; set; }
+            public int CenterSort { get; set; }
+            public int NodalSort { get; set; }
         }
 
 
