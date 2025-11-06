@@ -222,10 +222,14 @@ namespace Tools.Controllers
                 {
                     var catchNos = nodalGroup.Select(x => x.CatchNo).ToHashSet();
                     var extras1 = envelopesToAdd.Where(e => e.ExtraId == 1 && catchNos.Contains(e.CatchNo)).ToList();
-
+                    if (!extras1.Any())
+                    {
+                        continue;
+                    }
                     foreach (var extra in extras1)
                     {
                         var baseRow = allNRData.FirstOrDefault(x => x.CatchNo == extra.CatchNo);
+
                         if (baseRow == null)
                         {
                             _loggerService.LogError($"Base row not found for CatchNo: {extra.CatchNo} in NRData", "", "ExtraEnvelopes");
@@ -246,13 +250,15 @@ namespace Tools.Controllers
                 foreach (var extraType in new[] { 2, 3 })
                 {
                     var extras = envelopesToAdd.Where(e => e.ExtraId == extraType).ToList();
-
+                    if (!extras.Any())
+                    {
+                        continue;
+                    }
                     foreach (var extra in extras)
                     {
                         var baseRow = allNRData.FirstOrDefault(x => x.CatchNo == extra.CatchNo);
                         if (baseRow == null)
                         {
-                            _loggerService.LogError($"Base row not found for CatchNo: {extra.CatchNo} in NRData", "", "ExtraEnvelopes");
                             continue;
                         }
                         var config = extraConfig.FirstOrDefault(c => c.ExtraType == extra.ExtraId);
