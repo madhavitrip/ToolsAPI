@@ -421,25 +421,18 @@ namespace Tools.Controllers
             {
                 case 1:
                     dict["CenterCode"] = "Nodal Extra";
-                    if (int.TryParse(baseRow.NodalCode, out var nodalInt))
-                    {
-                        dict["NodalSort"] = nodalInt + 0.1;
-                    }
-                    else
-                    {
-                        dict["NodalSort"] = 0; // fallback for non-numeric codes
-                    }
-
+                        dict["NodalSort"] =baseRow.NodalSort;
+                        dict["CenterSort"] = 10000;
                     break;
                 case 2:
                     dict["CenterCode"] = "University Extra";
                     dict["NodalSort"] = 10000;
-                    dict["CenterSort"] = 10000;
+                    dict["CenterSort"] = 100000;
                     break;
                 case 3:
                     dict["CenterCode"] = "Office Extra";
                     dict["NodalSort"] = 100000;
-                    dict["CenterSort"] = 100000;
+                    dict["CenterSort"] = 1000000;
                     break;
                 default:
                     dict["CenterCode"] = "Extra";

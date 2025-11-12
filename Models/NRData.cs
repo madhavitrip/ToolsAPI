@@ -22,5 +22,8 @@ namespace Tools.Models
         public int Pages { get; set; }
         public int Route {  get; set; }
 
+        public int CenterSort { get; set; }
+        public int NodalSort { get; set; }
+
     }
 }
