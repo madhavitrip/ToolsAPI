@@ -16,6 +16,7 @@ using Tools.Services;
 using Microsoft.CodeAnalysis;
 using static System.Runtime.InteropServices.JavaScript.JSType;
 using System.Composition;
+using DocumentFormat.OpenXml.Spreadsheet;
 
 namespace Tools.Controllers
 {
@@ -482,11 +483,29 @@ namespace Tools.Controllers
             string outerEnvValue = envelopeObj["Outer"];
             if (string.IsNullOrWhiteSpace(outerEnvValue))
                 throw new Exception("Outer envelope value is empty in ProjectConfig.Envelope.");
-
+            int envelopeSize = 0;
             // 🔹 Extract numeric part strictly
-            string digits = new string(outerEnvValue.Where(char.IsDigit).ToArray());
-            if (!int.TryParse(digits, out int envelopeSize) || envelopeSize <= 0)
-                throw new Exception($"Invalid Outer envelope format: {outerEnvValue}");
+            var outerParts = outerEnvValue.Split(',', StringSplitOptions.RemoveEmptyEntries);
+
+            // 🔹 Only parse if there’s a single non-empty value
+            if (outerParts.Length == 1)
+            {
+                string singleValue = outerParts[0].Trim();
+
+                // Extract numeric part (e.g., from "E10" -> "10")
+                string digits = new string(singleValue.Where(char.IsDigit).ToArray());
+
+                if (int.TryParse(digits, out int parsedValue) && parsedValue > 0)
+                {
+                    envelopeSize = parsedValue;
+                }
+            }
+            else
+            {
+                // Multiple envelopes, skip parsing (maybe log or handle separately)
+                envelopeSize = 0; // or keep default
+            }
+
             var capacity = await _context.BoxCapacity
            .Where(c => c.BoxCapacityId == Boxcapacity)
              .Select(c => c.Capacity) // assuming the column is named 'Value'
@@ -499,14 +518,16 @@ namespace Tools.Controllers
             var fields = await _context.Fields
                 .Where(f => boxIds.Contains(f.FieldId))
                 .ToListAsync();
-
+            var fieldsFromDb = await _context.Fields
+           .Where(f => sortingId.Contains(f.FieldId))
+           .ToListAsync();
             // Step 2: Fetch the corresponding field names from the Fields table
-            var fieldNames = await _context.Fields
-                .Where(f => sortingId.Contains(f.FieldId))  // Assuming envelopeIds contains the IDs of the fields to sort by
+            var fieldNames = fieldsFromDb
+                 .OrderBy(f => sortingId.IndexOf(f.FieldId))
                 .Select(f => f.Name)  // Get the field names
-                .ToListAsync();
-         
+            .ToList();
 
+            _loggerService.LogEvent($"Fieldnames  {string.Join(", ", fieldNames)}", "EnvelopeBreakages", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, ProjectId);
             var dupNames = await _context.Fields
                 .Where(f => duplicatesFields.Contains(f.FieldId))
                 .Select(f => f.Name)
@@ -563,18 +584,16 @@ namespace Tools.Controllers
                                 SerialNumber = int.Parse(worksheet.Cells[row, 1].Text),
                                 CatchNo = worksheet.Cells[row, 2].Text.Trim(),
                                 CenterCode = worksheet.Cells[row, 3].Text.Trim(),
-                                CenterSort = int.TryParse(worksheet.Cells[row, 4].Text.Trim(), out int sortValue)
-                                ? sortValue
-                                : 0,
+                               CenterSort= Convert.ToInt32(worksheet.Cells[row, 4].Text.Trim()),
                                 ExamTime = worksheet.Cells[row, 13].Text.Trim(),
                                 ExamDate = worksheet.Cells[row, 14].Text.Trim(),
                                 Quantity = int.Parse(worksheet.Cells[row, 5].Text),
                                 TotalEnv = int.Parse(worksheet.Cells[row, 8].Text),
                                 NRQuantity = int.Parse(worksheet.Cells[row, 10].Text),
                                 NodalCode = worksheet.Cells[row, 11].Text.Trim(), 
-                                NodalSort = int.TryParse(worksheet.Cells[row, 12].Text.Trim(), out int sortVal)
+                                NodalSort = double.TryParse(worksheet.Cells[row, 12].Text.Trim(), out double sortVal)
                                 ? sortVal
-                                : 0,
+                                : 0.0,
                             };
 
                             breakingReportData.Add(inputRow);
@@ -608,7 +627,6 @@ namespace Tools.Controllers
               })
            .Select(g => g.First())
            .ToList();
-
 
             // Step 2: Calculate Start, End, Serial (before sorting)
             var enrichedList = new List<dynamic>();
@@ -668,14 +686,46 @@ namespace Tools.Controllers
             {
                 var prop = properties[i].Property;
 
+                Func<dynamic, object> keySelector = x =>
+                {
+                    var val = prop.GetValue(x);
+
+                    if (val == null) return null;
+
+                    // Special handling for NodalSort
+                    if (prop.Name.Equals("NodalSort", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // If it’s numeric, fine — return it
+                        if (val is int || val is long || val is float || val is double || val is decimal)
+                            return Convert.ToDouble(val);
+
+                        // If it looks like a number, parse it
+                        if (double.TryParse(val.ToString(), out double num))
+                            return num;
+
+                        // ❌ Otherwise, throw to make the problem visible
+                        throw new InvalidOperationException(
+                            $"❌ NodalSort value is not numeric for record: {System.Text.Json.JsonSerializer.Serialize(x)} (actual value: '{val}')"
+                        );
+                    }
+
+                    // Normal path for all other fields
+                    if (val is int || val is long || val is float || val is double || val is decimal)
+                        return Convert.ToDouble(val);
+
+                    if (double.TryParse(val.ToString(), out double parsedNum))
+                        return parsedNum;
+
+                    if (DateTime.TryParse(val.ToString(), out DateTime dt))
+                        return dt;
+
+                    return val.ToString().Trim();
+                };
+
                 if (i == 0)
-                {
-                    ordered = enrichedList.OrderBy(x => prop.GetValue(x));
-                }
+                    ordered = enrichedList.OrderBy(keySelector);
                 else
-                {
-                    ordered = ordered.ThenBy(x => prop.GetValue(x));
-                }
+                    ordered = ordered.ThenBy(keySelector);
             }
 
             // Step 3: Update the list if sorting happened
@@ -683,6 +733,7 @@ namespace Tools.Controllers
                 enrichedList = ordered.ToList();
 
             var sortedList = ordered?.ToList() ?? enrichedList;
+            
             // Step 6: Add TotalPages and BoxNo
             int boxNo = startBox;
             int runningPages = 0;
@@ -692,19 +743,9 @@ namespace Tools.Controllers
 
             foreach (var item in sortedList)
             {
-                
-                    var nrRow = nrData.FirstOrDefault(n => n.CatchNo == item.CatchNo);
-               
+                var nrRow = nrData.FirstOrDefault(n => n.CatchNo == item.CatchNo);
                     int pages = nrRow?.Pages ?? 0;
-                if (item.CenterCode == "University Extra")
-                {
-                    _loggerService.LogEvent($"{item.CenterCode + item.CatchNo + nrRow.Pages}", "EnvelopeBreakage", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, ProjectId);
-                }
                 int totalPages = (item.Quantity) * pages;
-                if (item.CenterCode == "University Extra")
-                {
-                    _loggerService.LogEvent($"{item.CenterCode + item.CatchNo + item.Quantity + totalPages}", "EnvelopeBreakage", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, ProjectId);
-                }
                 // Build merge key
                 string mergeKey = "";
                 if (boxIds == null)
@@ -745,15 +786,15 @@ namespace Tools.Controllers
 
                 // ---- Rule 1: merge fields change → force new box
                 bool mergeChanged = (prevMergeKey != null && mergeKey != prevMergeKey);
+                Console.WriteLine(runningPages);
+                Console.WriteLine(totalPages);
                 bool overflow = (runningPages + totalPages > capacity);
-                Console.WriteLine("Running Pages" + runningPages);
-                
-                Console.WriteLine("Total Pages" + totalPages);
                 try
                 {
+                    Console.WriteLine(boxNo);
                     if (mergeChanged || overflow)
                     {
-                        if (overflow)
+                        if (overflow && envelopeSize>0)
                         {
                             int overflowAmount = (runningPages + totalPages) - capacity;
                             int pagesPerUnit = (nrRow?.Pages ?? 0);
@@ -785,7 +826,7 @@ namespace Tools.Controllers
 
                             for (int b = 1; b <= boxesNeeded; b++)
                             {
-                                boxNo++;
+                               if(b>1) boxNo++;
 
                                 int boxQty;
                                 if (b == boxesNeeded)
@@ -834,6 +875,7 @@ namespace Tools.Controllers
                             continue;
                         }
 
+                        Console.WriteLine($"Sorted List 2 CatchNo: {item.CatchNo}, CenterSort: {item.CenterSort}, NodalSort: {item.NodalSort}");
                         // normal case: just start new box
                         boxNo++;
                         runningPages = 0;
@@ -874,7 +916,7 @@ namespace Tools.Controllers
 
             // ✅ Handle underutilized boxes (<50%) balancing for all boxes safely
             // ✅ Handle underutilized boxes (<50%) balancing for all boxes
-            try
+          /*  try
             {
                 if (finalWithBoxes.Any())
                 {
@@ -904,7 +946,7 @@ namespace Tools.Controllers
                                 .Where(x => (int)x.BoxNo == prevBox)
                                 .Sum(x => (int)x.TotalPages);
 
-                           
+
 
                             Console.WriteLine($"Checking {group.Key.CenterCode}: Box {prevBox}={prevBoxTotal}, Box {currentBox}={currentBoxTotal}, Cap={capacity}");
 
@@ -957,7 +999,7 @@ namespace Tools.Controllers
                                             item.CenterSort,
                                             item.ExamTime,
                                             item.ExamDate,
-                                          item.Quantity,
+                                            item.Quantity,
                                             item.NodalCode,
                                             item.NodalSort,
                                             item.TotalEnv,
@@ -1006,12 +1048,11 @@ namespace Tools.Controllers
             catch (Exception ex)
             {
                 _loggerService.LogError("Error during underutilized box balancing loop", ex.Message, nameof(EnvelopeBreakagesController));
-            }
+            }*/
 
             // 🔹 Maintain ordering
             finalWithBoxes = finalWithBoxes
                 .OrderBy(x => (int)x.BoxNo)
-                .ThenBy(x => (int)x.SerialNumber)
                 .ToList();
 
 
@@ -1086,7 +1127,7 @@ namespace Tools.Controllers
             public int NRQuantity { get; set; }
             public string NodalCode { get; set; }
             public int CenterSort { get; set; }
-            public int NodalSort { get; set; }
+            public double NodalSort { get; set; }
         }
 
 
@@ -1136,6 +1177,7 @@ namespace Tools.Controllers
             var resultList = new List<object>();
             int globalSerialNumber = 1; // Global serial number that only resets on CatchNo change
             string prevNodalCode = null;
+            int prevNodalSort = 0;
             string prevCatchNo = null;
             string prevMergeField = null;
             string prevExtraMergeField = null;
@@ -1145,7 +1187,7 @@ namespace Tools.Controllers
             var catchExtrasAdded = new HashSet<(int ExtraId, string CatchNo)>();
 
             // Helper method to add extra envelopes - removed serialnumber++ from here
-            void AddExtraWithEnv(ExtraEnvelopes extra, string examDate, string examTime, int NrQuantity, string NodalCode, string CenterCode)
+            void AddExtraWithEnv(ExtraEnvelopes extra, string examDate, string examTime, int NrQuantity, string NodalCode, string CenterCode, int CenterSort, int NodalSort)
             {
                 var extraConfig = extrasconfig.FirstOrDefault(e => e.ExtraType == extra.ExtraId);
                 int envCapacity = 0; // default fallback
@@ -1208,21 +1250,15 @@ namespace Tools.Controllers
                         NodalCode = NodalCode,
                         NodalSort = extra.ExtraId switch
                         {
-                            1 => string.IsNullOrWhiteSpace(NodalCode)
-                            ? ""
-                            : (object)(int.Parse(NodalCode) + 0.1),
-                            2 => string.IsNullOrWhiteSpace(NodalCode)
-                            ? ""
-                            : "10000",
-                            3 => string.IsNullOrWhiteSpace(NodalCode)
-                            ? ""
-                            : "100000",
+                            1 =>(int)NodalSort + 0.1,
+                            2 => 100000,
+                            3 =>1000000,
                         },
                           CenterSort = extra.ExtraId switch
                           {
-                              1 => CenterCode,
-                              2 => "10000",
-                              3 => "100000",
+                              1 => 10000,
+                              2 => 100000,
+                              3 => 1000000,
                           }
                     });
                 }
@@ -1246,7 +1282,7 @@ namespace Tools.Controllers
                         foreach (var extra in extrasToAdd)
                         {
                             AddExtraWithEnv(extra, prevNrData.ExamDate, prevNrData.ExamTime,
-                                          prevNrData.NRQuantity, prevNrData.NodalCode, prevNrData.CenterCode);
+                                          prevNrData.NRQuantity, prevNrData.NodalCode, prevNrData.CenterCode, prevNrData.CenterSort, prevNrData.NodalSort);
                         }
                         nodalExtrasAddedForNodalCatch.Add((prevNrData.NodalCode, prevCatchNo));
                     }
@@ -1259,7 +1295,7 @@ namespace Tools.Controllers
                             foreach (var extra in extrasToAdd)
                             {
                                 AddExtraWithEnv(extra, prevNrData.ExamDate, prevNrData.ExamTime,
-                                               prevNrData.NRQuantity, prevNrData.NodalCode, prevNrData.CenterCode);
+                                               prevNrData.NRQuantity, prevNrData.NodalCode, prevNrData.CenterCode, prevNrData.CenterSort, prevNrData.NodalSort);
                             }
                             catchExtrasAdded.Add((extraId, prevCatchNo));
                         }
@@ -1278,7 +1314,7 @@ namespace Tools.Controllers
                         foreach (var extra in extrasToAdd)
                         {
                             AddExtraWithEnv(extra, current.ExamDate, current.ExamTime,
-                                           current.NRQuantity, prevNodalCode, current.CenterCode);
+                                           current.NRQuantity, prevNodalCode, current.CenterCode, current.CenterSort, prevNodalSort);
                         }
                         nodalExtrasAddedForNodalCatch.Add((prevNodalCode, current.CatchNo));
                     }
@@ -1377,8 +1413,8 @@ namespace Tools.Controllers
                                 TotalEnv = totalEnv,
                                 Env = $"{envelopeIndex}/{totalEnv}",
                                 current.NRQuantity,
-                                NodalSort = current.NodalCode,
-                                CenterSort = current.CenterCode,
+                                current.CenterSort,
+                                current.NodalSort,
                             });
                             remainingQty -= envQty;
                             envelopeIndex++;
@@ -1391,6 +1427,7 @@ namespace Tools.Controllers
                 }
 
                 prevNodalCode = current.NodalCode;
+                prevNodalSort = current.NodalSort;
                 prevCatchNo = current.CatchNo;
             }
 
@@ -1407,7 +1444,7 @@ namespace Tools.Controllers
                         foreach (var extra in extrasToAdd)
                         {
                             AddExtraWithEnv(extra, lastNrData.ExamDate, lastNrData.ExamTime,
-                                       lastNrData.NRQuantity, lastNrData.NodalCode, lastNrData.CenterCode);
+                                       lastNrData.NRQuantity, lastNrData.NodalCode, lastNrData.CenterCode, lastNrData.CenterSort, lastNrData.NodalSort);
                         }
                     }
 
@@ -1419,7 +1456,7 @@ namespace Tools.Controllers
                             foreach (var extra in extrasToAdd)
                             {
                                 AddExtraWithEnv(extra, lastNrData.ExamDate, lastNrData.ExamTime,
-                                             lastNrData.NRQuantity, lastNrData.NodalCode, lastNrData.CenterCode);
+                                             lastNrData.NRQuantity, lastNrData.NodalCode, lastNrData.CenterCode,lastNrData.CenterSort,lastNrData.NodalSort);
                             }
                         }
                     }
