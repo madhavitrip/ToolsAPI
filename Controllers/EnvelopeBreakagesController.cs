@@ -421,9 +421,9 @@ namespace Tools.Controllers
 
 
                 using var client = new HttpClient();
-/*                var response = await client.GetAsync($"http://192.168.10.208:81/API/api/EnvelopeBreakages/EnvelopeBreakage?ProjectId={ProjectId}");
-*/                var response = await client.GetAsync($"https://localhost:7276/api/EnvelopeBreakages/EnvelopeBreakage?ProjectId={ProjectId}");
-
+                var response = await client.GetAsync($"http://192.168.10.208:81/API/api/EnvelopeBreakages/EnvelopeBreakage?ProjectId={ProjectId}");
+/*                var response = await client.GetAsync($"https://localhost:7276/api/EnvelopeBreakages/EnvelopeBreakage?ProjectId={ProjectId}");
+*/
                 if (!response.IsSuccessStatusCode)
                 {
                     // Handle failure from GET call as needed
@@ -818,11 +818,21 @@ namespace Tools.Controllers
                             int currentStart = 1;
 
                             // if we already have boxes before, continue from last box's end + 1
-                            if (finalWithBoxes.Any())
+                            // if we already have boxes for this CatchNo, continue from last box's end + 1
+                            var lastBoxForCatch = finalWithBoxes
+                                .Where(b => (string)b.GetType().GetProperty("CatchNo").GetValue(b) == item.CatchNo)
+                                .OrderBy(b => (int)b.GetType().GetProperty("End").GetValue(b))
+                                .LastOrDefault();
+
+                            if (lastBoxForCatch != null)
                             {
-                                var lastBox = finalWithBoxes.Last();
-                                currentStart = (int)lastBox.GetType().GetProperty("End").GetValue(lastBox) + 1;
+                                currentStart = (int)lastBoxForCatch.GetType().GetProperty("End").GetValue(lastBoxForCatch) + 1;
                             }
+                            else
+                            {
+                                currentStart = 1; // start fresh if no previous box exists for this CatchNo
+                            }
+
 
                             for (int b = 1; b <= boxesNeeded; b++)
                             {
@@ -841,7 +851,7 @@ namespace Tools.Controllers
                                 }
 
                                 // ensure no negative/remainder issues
-                                if (boxQty < 0) boxQty = 0;
+                                if (boxQty <= 0) continue;
 
                                 int boxPages = boxQty * pagesPerUnit;
                                 int envelopesInBox = boxQty / envelopeSize;
@@ -874,8 +884,6 @@ namespace Tools.Controllers
                             prevMergeKey = mergeKey;
                             continue;
                         }
-
-                        Console.WriteLine($"Sorted List 2 CatchNo: {item.CatchNo}, CenterSort: {item.CenterSort}, NodalSort: {item.NodalSort}");
                         // normal case: just start new box
                         boxNo++;
                         runningPages = 0;
@@ -1141,7 +1149,11 @@ namespace Tools.Controllers
 
             var nrData = await _context.NRDatas
                 .Where(p => p.ProjectId == ProjectId)
+                .OrderBy(p=>p.CatchNo)
+                .ThenBy(p => p.NodalSort)
+                .ThenBy(p => p.CenterSort)
                 .ToListAsync();
+         
 
             var envBreaking = await _context.EnvelopeBreakages
                 .Where(p => p.ProjectId == ProjectId)
@@ -1267,7 +1279,7 @@ namespace Tools.Controllers
             for (int i = 0; i < nrData.Count; i++)
             {
                 var current = nrData[i];
-
+                Console.WriteLine($" Processing: {nrData[i].CatchNo}, CenterSort={nrData[i].CenterSort}, NodalSort={nrData[i].NodalSort}");
                 // Check if CatchNo changed BEFORE processing extras
                 bool catchNoChanged = prevCatchNo != null && current.CatchNo != prevCatchNo;
 
@@ -1308,6 +1320,8 @@ namespace Tools.Controllers
                 // ➕ Nodal Extra when NodalCode changes (but not CatchNo)
                 if (!catchNoChanged && prevNodalCode != null && current.NodalCode != prevNodalCode)
                 {
+                    Console.WriteLine($" Processing: {nrData[i].CatchNo}, CenterSort={nrData[i].CenterSort}, NodalSort={nrData[i].NodalSort}");
+
                     if (!nodalExtrasAddedForNodalCatch.Contains((prevNodalCode, current.CatchNo)))
                     {
                         var extrasToAdd = extras.Where(e => e.ExtraId == 1 && e.CatchNo == current.CatchNo).ToList();
@@ -1379,7 +1393,6 @@ namespace Tools.Controllers
                     // Process each envelope type from the breakdown
                     int envelopeIndex = 1;
                     int remainingQty = current.Quantity;
-                    Console.WriteLine("Remaining Qty" + remainingQty.ToString());
                     foreach (var (envType, count, capacity) in envelopeBreakdown)
                     {
                         for (int k = 0; k < count; k++)
@@ -1389,16 +1402,12 @@ namespace Tools.Controllers
                             if (remainingQty > capacity)
                             {
                                 envQty = capacity;
-                                Console.WriteLine(envQty);
                             }
                             else
                             {
                                 envQty = remainingQty;
-                                Console.WriteLine(envQty);
-                                Console.WriteLine("Remaining" + remainingQty);
-                                Console.WriteLine("Capacity" + capacity);
+
                             }
-                            Console.WriteLine(current.CatchNo);
                             resultList.Add(new
                             {
                                 SerialNumber = globalSerialNumber++,
@@ -1465,6 +1474,21 @@ namespace Tools.Controllers
             int currentStartNumber = startNumber;
             bool assignBookletSerial = currentStartNumber > 0;
             // Generate Excel Report
+            // Sort the resultList safely (string for CatchNo, numeric for CenterSort/NodalSort)
+            resultList = resultList
+                .OrderBy(r => r.GetType().GetProperty("CatchNo")?.GetValue(r)?.ToString())
+                .ThenBy(r =>
+                {
+                    var val = r.GetType().GetProperty("CenterSort")?.GetValue(r);
+                    return Convert.ToInt32(val ?? 0);
+                })
+                .ThenBy(r =>
+                {
+                    var val = r.GetType().GetProperty("NodalSort")?.GetValue(r);
+                    return Convert.ToDouble(val ?? 0.0);
+                })
+                .ToList();
+
             using (var package = new ExcelPackage())
             {
                 var worksheet = package.Workbook.Worksheets.Add("BreakingResult");
