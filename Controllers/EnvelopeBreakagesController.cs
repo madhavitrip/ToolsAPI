@@ -421,9 +421,9 @@ namespace Tools.Controllers
 
 
                 using var client = new HttpClient();
-                var response = await client.GetAsync($"http://192.168.10.208:81/API/api/EnvelopeBreakages/EnvelopeBreakage?ProjectId={ProjectId}");
-/*                var response = await client.GetAsync($"https://localhost:7276/api/EnvelopeBreakages/EnvelopeBreakage?ProjectId={ProjectId}");
-*/
+/*                var response = await client.GetAsync($"http://192.168.10.208:81/API/api/EnvelopeBreakages/EnvelopeBreakage?ProjectId={ProjectId}");
+*/                var response = await client.GetAsync($"https://localhost:7276/api/EnvelopeBreakages/EnvelopeBreakage?ProjectId={ProjectId}");
+
                 if (!response.IsSuccessStatusCode)
                 {
                     // Handle failure from GET call as needed
@@ -758,7 +758,6 @@ namespace Tools.Controllers
                     mergeKey = string.Join("_", boxIds.Select(fieldId =>
                     {
                         var fieldName = fields.FirstOrDefault(f => f.FieldId == fieldId)?.Name;
-
                         if (fieldName != null)
                         {
                             var prop = item?.GetType().GetProperty(fieldName, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
@@ -783,19 +782,25 @@ namespace Tools.Controllers
                         return ""; // fallback if field name or property not found
                     }));
                 }
-
                 // ---- Rule 1: merge fields change → force new box
                 bool mergeChanged = (prevMergeKey != null && mergeKey != prevMergeKey);
-                Console.WriteLine(runningPages);
-                Console.WriteLine(totalPages);
+
                 bool overflow = (runningPages + totalPages > capacity);
                 try
                 {
-                    Console.WriteLine(boxNo);
-                    if (mergeChanged || overflow)
+                    if (mergeChanged)
                     {
-                        if (overflow && envelopeSize>0)
+                        boxNo++; // start new box for new merge group
+                        runningPages = 0;
+                        _loggerService.LogEvent($"🔁 MergeKey changed → new box {boxNo} for {mergeKey}",
+                            "EnvelopeBreakages",
+                            User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
+                            ProjectId);
+                    }
+                    if (overflow && envelopeSize>0)
                         {
+                            _loggerService.LogEvent($"MergeKey overflow {string.Join(", ", mergeKey)} Running {runningPages} Total Pages {totalPages}, Capacity {capacity} boxNo {boxNo}" +
+                                $"", "EnvelopeBreakages", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, ProjectId);
                             int overflowAmount = (runningPages + totalPages) - capacity;
                             int pagesPerUnit = (nrRow?.Pages ?? 0);
 
@@ -884,12 +889,13 @@ namespace Tools.Controllers
                             prevMergeKey = mergeKey;
                             continue;
                         }
-                        // normal case: just start new box
+                    if (overflow)
+                    {
                         boxNo++;
                         runningPages = 0;
                     }
-
-
+                  
+                        // normal case: just start new box
                     runningPages += totalPages;
 
                     finalWithBoxes.Add(new
