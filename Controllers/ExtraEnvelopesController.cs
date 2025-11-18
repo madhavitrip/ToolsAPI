@@ -281,7 +281,7 @@ namespace Tools.Controllers
                 // Ensure CenterSort and NodalSort columns always appear in the Excel file
                 if (!allHeaders.Contains("NodalSort")) allHeaders.Add("NodalSort");
                 if (!allHeaders.Contains("CenterSort")) allHeaders.Add("CenterSort");
-
+                if (!allHeaders.Contains("RouteSort")) allHeaders.Add("RouteSort");
 
                 allHeaders.AddRange(extraHeaders.OrderBy(x => x));
                 allHeaders.AddRange(innerKeys.OrderBy(x => x));
@@ -313,6 +313,7 @@ namespace Tools.Controllers
                         var filteredRow = new Dictionary<string, object>();
                         if (!row.ContainsKey("NodalSort")) row["NodalSort"] = "";
                         if (!row.ContainsKey("CenterSort")) row["CenterSort"] = "";
+                        if (!row.ContainsKey("RouteSort")) row["RouteSort"] = "";
                         foreach (var header in allHeaders)
                         {
                             if (row.ContainsKey(header))
@@ -423,16 +424,19 @@ namespace Tools.Controllers
                     dict["CenterCode"] = "Nodal Extra";
                         dict["NodalSort"] =baseRow.NodalSort;
                         dict["CenterSort"] = 10000;
+                    dict["RouteSort"] = 1000;
                     break;
                 case 2:
                     dict["CenterCode"] = "University Extra";
                     dict["NodalSort"] = 10000;
                     dict["CenterSort"] = 100000;
+                    dict["RouteSort"] = 10000;
                     break;
                 case 3:
                     dict["CenterCode"] = "Office Extra";
                     dict["NodalSort"] = 100000;
                     dict["CenterSort"] = 1000000;
+                    dict["RouteSort"] = 100000;
                     break;
                 default:
                     dict["CenterCode"] = "Extra";

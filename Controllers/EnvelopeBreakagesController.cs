@@ -581,12 +581,11 @@ namespace Tools.Controllers
                         {
                             var inputRow = new ExcelInputRow
                             {
-                                SerialNumber = int.Parse(worksheet.Cells[row, 1].Text),
                                 CatchNo = worksheet.Cells[row, 2].Text.Trim(),
                                 CenterCode = worksheet.Cells[row, 3].Text.Trim(),
                                CenterSort= Convert.ToInt32(worksheet.Cells[row, 4].Text.Trim()),
-                                ExamTime = worksheet.Cells[row, 13].Text.Trim(),
-                                ExamDate = worksheet.Cells[row, 14].Text.Trim(),
+                                ExamTime = worksheet.Cells[row, 14].Text.Trim(),
+                                ExamDate = worksheet.Cells[row, 15].Text.Trim(),
                                 Quantity = int.Parse(worksheet.Cells[row, 5].Text),
                                 TotalEnv = int.Parse(worksheet.Cells[row, 8].Text),
                                 NRQuantity = int.Parse(worksheet.Cells[row, 10].Text),
@@ -594,6 +593,7 @@ namespace Tools.Controllers
                                 NodalSort = double.TryParse(worksheet.Cells[row, 12].Text.Trim(), out double sortVal)
                                 ? sortVal
                                 : 0.0,
+                                RouteSort = Convert.ToInt32(worksheet.Cells[row, 13].Text.Trim())
                             };
 
                             breakingReportData.Add(inputRow);
@@ -642,7 +642,6 @@ namespace Tools.Controllers
 
                     enrichedList.Add(new
                     {
-                        row.SerialNumber,
                         row.CatchNo,
                         row.CenterCode,
                         row.CenterSort,
@@ -653,6 +652,7 @@ namespace Tools.Controllers
                         row.NRQuantity,
                         row.NodalCode,
                         row.NodalSort,
+                        row.RouteSort,
                         Start = start,
                         End = end,
                         Serial = serial
@@ -689,6 +689,7 @@ namespace Tools.Controllers
                 Func<dynamic, object> keySelector = x =>
                 {
                     var val = prop.GetValue(x);
+                  
 
                     if (val == null) return null;
 
@@ -696,12 +697,8 @@ namespace Tools.Controllers
                     if (prop.Name.Equals("NodalSort", StringComparison.OrdinalIgnoreCase))
                     {
                         // If it’s numeric, fine — return it
-                        if (val is int || val is long || val is float || val is double || val is decimal)
-                            return Convert.ToDouble(val);
-
-                        // If it looks like a number, parse it
-                        if (double.TryParse(val.ToString(), out double num))
-                            return num;
+                        if (double.TryParse(val.ToString(), out double nodalNum))
+                            return nodalNum;
 
                         // ❌ Otherwise, throw to make the problem visible
                         throw new InvalidOperationException(
@@ -709,14 +706,7 @@ namespace Tools.Controllers
                         );
                     }
 
-                    // Normal path for all other fields
-                    if (val is int || val is long || val is float || val is double || val is decimal)
-                        return Convert.ToDouble(val);
-
-                    if (double.TryParse(val.ToString(), out double parsedNum))
-                        return parsedNum;
-
-                    if (DateTime.TryParse(val.ToString(), out DateTime dt))
+                    if (val is DateTime dt)
                         return dt;
 
                     return val.ToString().Trim();
@@ -785,7 +775,6 @@ namespace Tools.Controllers
                 // ---- Rule 1: merge fields change → force new box
                 bool mergeChanged = (prevMergeKey != null && mergeKey != prevMergeKey);
 
-                bool overflow = (runningPages + totalPages > capacity);
                 try
                 {
                     if (mergeChanged)
@@ -797,7 +786,13 @@ namespace Tools.Controllers
                             User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
                             ProjectId);
                     }
-                    if (overflow && envelopeSize>0)
+                    bool overflow = (runningPages + totalPages > capacity);
+                    if (overflow)
+                    {
+                        _loggerService.LogEvent($"Overflow {string.Join(", ", mergeKey)} Running {runningPages} Total Pages {totalPages}, Capacity {capacity} boxNo {boxNo}" +
+                               $"", "EnvelopeBreakages", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, ProjectId);
+                        Console.WriteLine(envelopeSize);
+                        if (envelopeSize < 50 && envelopeSize>0)
                         {
                             _loggerService.LogEvent($"MergeKey overflow {string.Join(", ", mergeKey)} Running {runningPages} Total Pages {totalPages}, Capacity {capacity} boxNo {boxNo}" +
                                 $"", "EnvelopeBreakages", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, ProjectId);
@@ -815,7 +810,7 @@ namespace Tools.Controllers
                             int baseQty = (int)Math.Floor((double)totalQty / boxesNeeded);
 
                             // Round each box's quantity to nearest multiple of 20
-                            baseQty = (int)Math.Round(baseQty /(double)envelopeSize) * envelopeSize;
+                            baseQty = (int)Math.Round(baseQty / (double)envelopeSize) * envelopeSize;
                             if (baseQty <= 0) baseQty = envelopeSize; // safety floor
 
                             // 🔹 Now distribute across boxes
@@ -841,7 +836,7 @@ namespace Tools.Controllers
 
                             for (int b = 1; b <= boxesNeeded; b++)
                             {
-                               if(b>1) boxNo++;
+                                if (b > 1) boxNo++;
 
                                 int boxQty;
                                 if (b == boxesNeeded)
@@ -866,7 +861,6 @@ namespace Tools.Controllers
                                 string serial = $"{start} to {end}";
                                 finalWithBoxes.Add(new
                                 {
-                                    item.SerialNumber,
                                     item.CatchNo,
                                     item.CenterCode,
                                     item.CenterSort,
@@ -875,9 +869,10 @@ namespace Tools.Controllers
                                     Quantity = boxQty,
                                     item.NodalCode,
                                     item.NodalSort,
+                                    item.RouteSort,
                                     item.TotalEnv,
                                     Start = start,
-                                    End= end,
+                                    End = end,
                                     Serial = serial,
                                     TotalPages = boxPages,
                                     BoxNo = boxNo
@@ -889,18 +884,16 @@ namespace Tools.Controllers
                             prevMergeKey = mergeKey;
                             continue;
                         }
-                    if (overflow)
-                    {
                         boxNo++;
                         runningPages = 0;
                     }
+
                   
                         // normal case: just start new box
                     runningPages += totalPages;
 
                     finalWithBoxes.Add(new
                     {
-                        item.SerialNumber,
                         item.CatchNo,
                         item.CenterCode,
                         item.CenterSort,
@@ -909,6 +902,7 @@ namespace Tools.Controllers
                         item.Quantity,
                         item.NodalCode,
                         item.NodalSort,
+                        item.RouteSort,
                         item.TotalEnv,
                         item.Start,
                         item.End,
@@ -926,143 +920,6 @@ namespace Tools.Controllers
                     return StatusCode(500, "Internal Server Error");
                 }
             }
-
-
-            // ✅ Handle underutilized boxes (<50%) balancing for all boxes safely
-            // ✅ Handle underutilized boxes (<50%) balancing for all boxes
-          /*  try
-            {
-                if (finalWithBoxes.Any())
-                {
-                    // Group by merge key (e.g., center-wise balancing)
-                    var groupedByMerge = finalWithBoxes
-                        .GroupBy(x => new { x.CatchNo, x.CenterCode }) // use the fields defining mergeKey
-                        .ToList();
-
-                    foreach (var group in groupedByMerge)
-                    {
-                        var groupBoxes = group
-                            .Select(x => (int)x.BoxNo)
-                            .Distinct()
-                            .OrderBy(x => x)
-                            .ToList();
-
-                        for (int i = 1; i < groupBoxes.Count; i++)
-                        {
-                            int currentBox = groupBoxes[i];
-                            int prevBox = groupBoxes[i - 1];
-
-                            int currentBoxTotal = finalWithBoxes
-                                .Where(x => (int)x.BoxNo == currentBox)
-                                .Sum(x => (int)x.TotalPages);
-
-                            int prevBoxTotal = finalWithBoxes
-                                .Where(x => (int)x.BoxNo == prevBox)
-                                .Sum(x => (int)x.TotalPages);
-
-
-
-                            Console.WriteLine($"Checking {group.Key.CenterCode}: Box {prevBox}={prevBoxTotal}, Box {currentBox}={currentBoxTotal}, Cap={capacity}");
-
-                            // 🔸 If the current box is underutilized (<50% of capacity)
-                            if (currentBoxTotal > 0 && currentBoxTotal < capacity / 2)
-                            {
-                                int combined = prevBoxTotal + currentBoxTotal;
-                                int split = combined / 2;
-
-
-                                _loggerService.LogEvent(
-                                    $"Balancing underutilized box {currentBox} with {prevBox} for {group.Key.CenterCode}. Combined={combined}, Split≈{split}.",
-                                    "EnvelopeBreakage",
-                                    User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
-                                    ProjectId
-                                );
-
-                                // Fetch both boxes’ items for redistribution
-                                var prevItems = finalWithBoxes
-                                    .Where(x => (int)x.BoxNo == prevBox)
-                                    .OrderBy(x => x.SerialNumber)
-                                    .ToList();
-
-                                var currentItems = finalWithBoxes
-                                    .Where(x => (int)x.BoxNo == currentBox)
-                                    .OrderBy(x => x.SerialNumber)
-                                    .ToList();
-
-                                var combinedItems = prevItems.Concat(currentItems)
-                                    .OrderBy(x => x.SerialNumber)
-                                    .ToList();
-
-                                int cumulative = 0;
-                                var newPrevBox = new List<dynamic>();
-                                var newCurrentBox = new List<dynamic>();
-
-                                foreach (var item in combinedItems)
-                                {
-                                    int pages = (int)item.TotalPages;
-                                    int qty = (int)item.Quantity;
-                                    int env = (int)item.TotalEnv;
-
-                                    if (cumulative + pages <= split)
-                                    {
-                                        newPrevBox.Add(new
-                                        {
-                                            item.SerialNumber,
-                                            item.CatchNo,
-                                            item.CenterCode,
-                                            item.CenterSort,
-                                            item.ExamTime,
-                                            item.ExamDate,
-                                            item.Quantity,
-                                            item.NodalCode,
-                                            item.NodalSort,
-                                            item.TotalEnv,
-                                            item.Start,
-                                            item.End,
-                                            item.Serial,
-                                            TotalPages = pages,
-                                            BoxNo = prevBox
-                                        });
-                                        cumulative += pages;
-                                    }
-                                    else
-                                    {
-                                        newCurrentBox.Add(new
-                                        {
-                                            item.SerialNumber,
-                                            item.CatchNo,
-                                            item.CenterCode,
-                                            item.CenterSort,
-                                            item.ExamTime,
-                                            item.ExamDate,
-                                            item.Quantity,
-                                            item.NodalCode,
-                                            item.NodalSort,
-                                            item.TotalEnv,
-                                            item.Start,
-                                            item.End,
-                                            item.Serial,
-                                            TotalPages = pages,
-                                            BoxNo = currentBox
-                                        });
-                                    }
-                                }
-
-                                // Replace both boxes in the main list
-                                finalWithBoxes.RemoveAll(x => (int)x.BoxNo == prevBox || (int)x.BoxNo == currentBox);
-                                finalWithBoxes.AddRange(newPrevBox);
-                                finalWithBoxes.AddRange(newCurrentBox);
-
-                                Console.WriteLine($"✅ Balanced boxes {prevBox} and {currentBox} for {group.Key.CenterCode}: ≈{split} pages each.");
-                            }
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                _loggerService.LogError("Error during underutilized box balancing loop", ex.Message, nameof(EnvelopeBreakagesController));
-            }*/
 
             // 🔹 Maintain ordering
             finalWithBoxes = finalWithBoxes
@@ -1087,17 +944,19 @@ namespace Tools.Controllers
                     worksheet.Cells[1, 7].Value = "Quantity";
                     worksheet.Cells[1, 8].Value = "NodalCode"; 
                     worksheet.Cells[1, 9].Value = "NodalSort";
-                    worksheet.Cells[1, 10].Value = "TotalEnv";
-                    worksheet.Cells[1, 11].Value = "Start";
-                    worksheet.Cells[1, 12].Value = "End";
-                    worksheet.Cells[1, 13].Value = "Serial";
-                    worksheet.Cells[1, 14].Value = "TotalPages";
-                    worksheet.Cells[1, 15].Value = "BoxNo";
+                    worksheet.Cells[1, 10].Value = "RouteSort";
+                    worksheet.Cells[1, 11].Value = "TotalEnv";
+                    worksheet.Cells[1, 12].Value = "Start";
+                    worksheet.Cells[1, 13].Value = "End";
+                    worksheet.Cells[1, 14].Value = "Serial";
+                    worksheet.Cells[1, 15].Value = "TotalPages";
+                    worksheet.Cells[1, 16].Value = "BoxNo";
 
                     int row = 2;
+                    int serial = 1;
                     foreach (var item in finalWithBoxes)
                     {
-                        worksheet.Cells[row, 1].Value = item.SerialNumber;
+                        worksheet.Cells[row, 1].Value = serial++;
                         worksheet.Cells[row, 2].Value = item.CatchNo;
                         worksheet.Cells[row, 3].Value = item.CenterCode; 
                         worksheet.Cells[row, 4].Value = item.CenterSort;
@@ -1106,12 +965,13 @@ namespace Tools.Controllers
                         worksheet.Cells[row, 7].Value = item.Quantity;
                         worksheet.Cells[row, 8].Value = item.NodalCode;
                         worksheet.Cells[row, 9].Value = item.NodalSort;
-                        worksheet.Cells[row, 10].Value = item.TotalEnv;
-                        worksheet.Cells[row, 11].Value = item.Start;
-                        worksheet.Cells[row, 12].Value = item.End;
-                        worksheet.Cells[row, 13].Value = item.Serial;
-                        worksheet.Cells[row, 14].Value = item.TotalPages;
-                        worksheet.Cells[row, 15].Value = item.BoxNo;
+                        worksheet.Cells[row, 10].Value = item.RouteSort;
+                        worksheet.Cells[row, 11].Value = item.TotalEnv;
+                        worksheet.Cells[row, 12].Value = item.Start;
+                        worksheet.Cells[row, 13].Value = item.End;
+                        worksheet.Cells[row, 14].Value = item.Serial;
+                        worksheet.Cells[row, 15].Value = item.TotalPages;
+                        worksheet.Cells[row, 16].Value = item.BoxNo;
                         row++;
                     }
 
@@ -1131,7 +991,6 @@ namespace Tools.Controllers
 
         public class ExcelInputRow
         {
-            public int SerialNumber { get; set; }
             public string CatchNo { get; set; }
             public string CenterCode { get; set; }
             public string ExamTime { get; set; }
@@ -1142,6 +1001,7 @@ namespace Tools.Controllers
             public string NodalCode { get; set; }
             public int CenterSort { get; set; }
             public double NodalSort { get; set; }
+            public int RouteSort { get; set; }
         }
 
 
@@ -1156,6 +1016,7 @@ namespace Tools.Controllers
             var nrData = await _context.NRDatas
                 .Where(p => p.ProjectId == ProjectId)
                 .OrderBy(p=>p.CatchNo)
+                .ThenBy(p => p.RouteSort)
                 .ThenBy(p => p.NodalSort)
                 .ThenBy(p => p.CenterSort)
                 .ToListAsync();
@@ -1277,7 +1138,13 @@ namespace Tools.Controllers
                               1 => 10000,
                               2 => 100000,
                               3 => 1000000,
-                          }
+                          },
+                          RouteSort = extra.ExtraId switch
+                          {
+                              1 => 1000,
+                              2 => 10000,
+                              3 => 100000,
+                          },
                     });
                 }
             }
@@ -1430,6 +1297,7 @@ namespace Tools.Controllers
                                 current.NRQuantity,
                                 current.CenterSort,
                                 current.NodalSort,
+                                current.RouteSort,
                             });
                             remainingQty -= envQty;
                             envelopeIndex++;
@@ -1483,6 +1351,11 @@ namespace Tools.Controllers
             // Sort the resultList safely (string for CatchNo, numeric for CenterSort/NodalSort)
             resultList = resultList
                 .OrderBy(r => r.GetType().GetProperty("CatchNo")?.GetValue(r)?.ToString())
+                  .ThenBy(r =>
+                  {
+                      var val = r.GetType().GetProperty("RouteSort")?.GetValue(r);
+                      return Convert.ToInt32(val ?? 0);
+                  })
                 .ThenBy(r =>
                 {
                     var val = r.GetType().GetProperty("CenterSort")?.GetValue(r);
@@ -1502,11 +1375,11 @@ namespace Tools.Controllers
                 // Add headers
                 var headers = new[] { "Serial Number", "Catch No", "Center Code",
                         "Center Sort", "Quantity", "EnvQuantity",
-                          "Center Env", "Total Env", "Env", "NRQuantity", "Nodal Code","Nodal Sort", "Exam Time", "Exam Date", "BookletSerial" };
+                          "Center Env", "Total Env", "Env", "NRQuantity", "Nodal Code","Nodal Sort", "Route Sort", "Exam Time", "Exam Date", "BookletSerial" };
 
                 var properties = new[] { "SerialNumber", "CatchNo", "CenterCode",
                              "CenterSort", "Quantity", "EnvQuantity",
-                             "CenterEnv", "TotalEnv", "Env", "NRQuantity","NodalCode","NodalSort", "ExamTime", "ExamDate","BookletSerial" };
+                             "CenterEnv", "TotalEnv", "Env", "NRQuantity","NodalCode","NodalSort","RouteSort", "ExamTime", "ExamDate","BookletSerial" };
 
                 // Add filtered headers to the first row
                 for (int i = 0; i < headers.Length; i++)
