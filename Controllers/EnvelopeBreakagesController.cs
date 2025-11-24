@@ -421,9 +421,9 @@ namespace Tools.Controllers
 
 
                 using var client = new HttpClient();
-/*                var response = await client.GetAsync($"http://192.168.10.208:81/API/api/EnvelopeBreakages/EnvelopeBreakage?ProjectId={ProjectId}");
-*/                var response = await client.GetAsync($"https://localhost:7276/api/EnvelopeBreakages/EnvelopeBreakage?ProjectId={ProjectId}");
-
+                var response = await client.GetAsync($"http://192.168.10.208:81/API/api/EnvelopeBreakages/EnvelopeBreakage?ProjectId={ProjectId}");
+/*                var response = await client.GetAsync($"https://localhost:7276/api/EnvelopeBreakages/EnvelopeBreakage?ProjectId={ProjectId}");
+*/
                 if (!response.IsSuccessStatusCode)
                 {
                     // Handle failure from GET call as needed
@@ -1039,7 +1039,8 @@ namespace Tools.Controllers
             var startNumber = projectconfig.OmrSerialNumber;
 
             var EnvelopeBreaking = projectconfig.EnvelopeMakingCriteria;
-            var fields = await _context.Fields.ToListAsync();
+            var fields = await _context.Fields.Where(f => EnvelopeBreaking.Contains(f.FieldId)).ToListAsync();
+            var fieldNames = fields.OrderBy(f => EnvelopeBreaking.IndexOf(f.FieldId)).Select(f => f.Name); // Get the field names .ToList();
 
             var extrasconfig = await _context.ExtraConfigurations
                 .Where(p => p.ProjectId == ProjectId)
@@ -1349,7 +1350,46 @@ namespace Tools.Controllers
             bool assignBookletSerial = currentStartNumber > 0;
             // Generate Excel Report
             // Sort the resultList safely (string for CatchNo, numeric for CenterSort/NodalSort)
-            resultList = resultList
+            IOrderedEnumerable<dynamic> ordered = null;
+
+            foreach (var fieldName in fieldNames)
+            {
+                Func<dynamic, object> keySelector = record =>
+                {
+                    var prop = record.GetType().GetProperty(fieldName);
+                    if (prop == null) return null;
+
+                    var val = prop.GetValue(record);
+                    if (val == null) return null;
+
+                    // ---- TYPE-SAFE HANDLING PER FIELD ----
+                    switch (fieldName)
+                    {
+                        case "RouteSort":
+                        case "CenterSort":
+                            if (int.TryParse(val.ToString(), out int intVal))
+                                return intVal;
+                            return 0;
+
+                        case "NodalSort":
+                            if (double.TryParse(val.ToString(), out double dblVal))
+                                return dblVal;
+                            return 0.0;
+
+                        default:
+                            return val.ToString().Trim();
+                    }
+                };
+
+                if (ordered == null)
+                    ordered = resultList.OrderBy(keySelector);
+                else
+                    ordered = ordered.ThenBy(keySelector);
+            }
+
+            resultList = ordered?.ToList() ?? resultList;
+
+           /* resultList = resultList
                 .OrderBy(r => r.GetType().GetProperty("CatchNo")?.GetValue(r)?.ToString())
                   .ThenBy(r =>
                   {
@@ -1366,7 +1406,7 @@ namespace Tools.Controllers
                     var val = r.GetType().GetProperty("NodalSort")?.GetValue(r);
                     return Convert.ToDouble(val ?? 0.0);
                 })
-                .ToList();
+                .ToList();*/
 
             using (var package = new ExcelPackage())
             {
