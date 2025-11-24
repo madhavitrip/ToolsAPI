@@ -66,7 +66,10 @@ namespace Tools.Controllers
                     d.NRQuantity,
                     d.Quantity,
                     d.Route,
-                    d.Pages
+                    d.Pages,
+                    d.CenterSort,
+                    d.NodalSort,
+                    d.RouteSort
                 })
                 .ToListAsync();
 
