@@ -50,10 +50,60 @@ namespace Tools.Controllers
 
         // GET: api/NRDatas/GetByProjectId/5
         [HttpGet("GetByProjectId/{projectId}")]
-        public async Task<ActionResult> GetByProjectId(int projectId)
+        public async Task<ActionResult> GetByProjectId(int projectId, int pageSize, int pageNo, string?search=null, string? key = null)
         {
-            var nrDataList = await _context.NRDatas
-                .Where(d => d.ProjectId == projectId)
+            IQueryable<NRData> query = _context.NRDatas
+             .Where(d => d.ProjectId == projectId);
+
+            // ⭐ APPLY SEARCH IF KEY + SEARCH PROVIDED
+            if (!string.IsNullOrWhiteSpace(search) && !string.IsNullOrWhiteSpace(key))
+            {
+                search = search.ToLower();
+
+                switch (key)
+                {
+                    case "CatchNo":
+                        query = query.Where(d => d.CatchNo.ToLower().Contains(search));
+                        break;
+                    case "CenterCode":
+                        query = query.Where(d => d.CenterCode.ToLower().Contains(search));
+                        break;
+                    case "SubjectName":
+                        query = query.Where(d => d.SubjectName.ToLower().Contains(search));
+                        break;
+                    case "CourseName":
+                        query = query.Where(d => d.CourseName.ToLower().Contains(search));
+                        break;
+                    case "NodalCode":
+                        query = query.Where(d => d.NodalCode.ToLower().Contains(search));
+                        break;
+                    case "Route":
+                        query = query.Where(d => d.Route.ToString().Contains(search));
+                        break;
+                    case "ExamDate":
+                        query = query.Where(d => d.ExamDate.ToString().Contains(search));
+                        break;
+                    case "ExamTime":
+                        query = query.Where(d => d.ExamTime.ToString().Contains(search));
+                        break;
+                    case "NRQuantity":
+                        query = query.Where(d => d.NRQuantity.ToString().Contains(search));
+                        break;
+                    case "Quantity":
+                        query = query.Where(d => d.Quantity.ToString().Contains(search));
+                        break;
+
+                    default:
+                        return BadRequest($"Key '{key}' is not searchable.");
+                }
+            }
+            int totalCount = await query.CountAsync();
+            int totalPages = (int)Math.Ceiling(totalCount / (double)pageSize);
+
+            var nrDataList = await query
+                .OrderBy(d=>d.Id)
+                .Skip((pageNo - 1) * pageSize)
+                .Take(pageSize)
                 .Select(d => new
                 {
                     d.CatchNo,
@@ -75,42 +125,40 @@ namespace Tools.Controllers
 
             if (!nrDataList.Any())
             {
-                return NotFound($"No NRData found for ProjectId {projectId}");
+                var allColumns = typeof(NRData).GetProperties()
+              .Select(p => p.Name)
+               .Where(name => name != "Id" && name != "ProjectId" && name!= "NRDatas")
+             .ToList();
+
+                return Ok(new
+                {
+                    data = new List<object>(),
+                    columns = allColumns,
+                    totalRecords = 0,
+                    totalPages = 0
+                });
             }
 
             // Find columns where *all* values are null or empty
             var properties = nrDataList.First().GetType().GetProperties();
-            var nonEmptyColumns = properties
-                .Where(p => nrDataList.Any(d =>
-                {
-                    var value = p.GetValue(d);
-                    if (value == null) return false;
-                    if (value is string s) return !string.IsNullOrWhiteSpace(s);
-                    if (value is int i)
-                        return i != 0;
-                    if (value is long l)
-                        return l != 0;
-                    if (value is double dbl)
-                        return dbl != 0;
-                    if (value is decimal dec)
-                        return dec != 0;
-
-                    return true;
-                }))
-                .ToList();
-
             // Build dynamic objects that only include non-empty columns
             var result = nrDataList.Select(d =>
             {
                 var dict = new Dictionary<string, object>();
-                foreach (var prop in nonEmptyColumns)
+                foreach (var prop in properties)
                 {
                     dict[prop.Name] = prop.GetValue(d);
                 }
                 return dict;
             });
 
-            return Ok(result);
+            return Ok(new
+            {
+                items = result,
+                columns = properties.Select(p => p.Name).ToList(),
+                totalCount,
+                totalPages
+            });
         }
 
 

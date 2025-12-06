@@ -421,9 +421,9 @@ namespace Tools.Controllers
 
 
                 using var client = new HttpClient();
-/*                var response = await client.GetAsync($"http://192.168.10.208:81/API/api/EnvelopeBreakages/EnvelopeBreakage?ProjectId={ProjectId}");
-*/                var response = await client.GetAsync($"https://localhost:7276/api/EnvelopeBreakages/EnvelopeBreakage?ProjectId={ProjectId}");
-
+                var response = await client.GetAsync($"http://192.168.10.208:81/API/api/EnvelopeBreakages/EnvelopeBreakage?ProjectId={ProjectId}");
+                /*                var response = await client.GetAsync($"https://localhost:7276/api/EnvelopeBreakages/EnvelopeBreakage?ProjectId={ProjectId}");
+                */
                 if (!response.IsSuccessStatusCode)
                 {
                     // Handle failure from GET call as needed
@@ -593,7 +593,8 @@ namespace Tools.Controllers
                                 NodalSort = double.TryParse(worksheet.Cells[row, 12].Text.Trim(), out double sortVal)
                                 ? sortVal
                                 : 0.0,
-                                RouteSort = Convert.ToInt32(worksheet.Cells[row, 13].Text.Trim())
+                                RouteSort = Convert.ToInt32(worksheet.Cells[row, 13].Text.Trim()),
+                                OmrSerial = worksheet.Cells[row,16].Text.Trim(),   
                             };
 
                             breakingReportData.Add(inputRow);
@@ -655,7 +656,8 @@ namespace Tools.Controllers
                         row.RouteSort,
                         Start = start,
                         End = end,
-                        Serial = serial
+                        Serial = serial,
+                        row.OmrSerial,
                     });
 
                     previousCatchNo = row.CatchNo;
@@ -886,7 +888,8 @@ namespace Tools.Controllers
                                     End = end,
                                     Serial = serial,
                                     TotalPages = boxPages,
-                                    BoxNo = boxNo
+                                    BoxNo = boxNo,
+                                    item.OmrSerial,
                                 });
                             }
 
@@ -919,7 +922,8 @@ namespace Tools.Controllers
                         item.End,
                         item.Serial,
                         TotalPages = totalPages,
-                        BoxNo = boxNo
+                        BoxNo = boxNo,
+                        item.OmrSerial,
                     });
 
                     prevMergeKey = mergeKey;
@@ -962,7 +966,7 @@ namespace Tools.Controllers
                     worksheet.Cells[1, 14].Value = "Serial";
                     worksheet.Cells[1, 15].Value = "TotalPages";
                     worksheet.Cells[1, 16].Value = "BoxNo";
-
+                    worksheet.Cells[1, 17].Value = "OmrSerial";
                     int row = 2;
                     int serial = 1;
                     foreach (var item in finalWithBoxes)
@@ -983,6 +987,7 @@ namespace Tools.Controllers
                         worksheet.Cells[row, 14].Value = item.Serial;
                         worksheet.Cells[row, 15].Value = item.TotalPages;
                         worksheet.Cells[row, 16].Value = item.BoxNo;
+                        worksheet.Cells[row, 17].Value = item.OmrSerial;
                         row++;
                     }
 
@@ -1013,6 +1018,7 @@ namespace Tools.Controllers
             public int CenterSort { get; set; }
             public double NodalSort { get; set; }
             public int RouteSort { get; set; }
+            public string OmrSerial { get; set; }
         }
 
 
