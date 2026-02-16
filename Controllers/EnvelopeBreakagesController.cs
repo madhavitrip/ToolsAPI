@@ -421,9 +421,9 @@ namespace Tools.Controllers
 
 
                 using var client = new HttpClient();
-                var response = await client.GetAsync($"http://192.168.10.208:81/API/api/EnvelopeBreakages/EnvelopeBreakage?ProjectId={ProjectId}");
-                /*                var response = await client.GetAsync($"https://localhost:7276/api/EnvelopeBreakages/EnvelopeBreakage?ProjectId={ProjectId}");
-                */
+/*                var response = await client.GetAsync($"http://192.168.10.208:81/API/api/EnvelopeBreakages/EnvelopeBreakage?ProjectId={ProjectId}");
+*/                var response = await client.GetAsync($"https://localhost:7276/api/EnvelopeBreakages/EnvelopeBreakage?ProjectId={ProjectId}");
+
                 if (!response.IsSuccessStatusCode)
                 {
                     // Handle failure from GET call as needed
@@ -719,8 +719,22 @@ namespace Tools.Controllers
                             $"❌ CenterSort value is not numeric for record: {System.Text.Json.JsonSerializer.Serialize(x)} (actual value: '{val}')"
                         );
                     }
+                    if (prop.Name.Equals("RouteSort", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // If it’s numeric, fine — return it
+                        if (int.TryParse(val.ToString(), out int routeNum))
+                            return routeNum;
+
+                        // ❌ Otherwise, throw to make the problem visible
+                        throw new InvalidOperationException(
+                            $"❌ RouteSort value is not numeric for record: {System.Text.Json.JsonSerializer.Serialize(x)} (actual value: '{val}')"
+                        );
+                    }
                     if (val is DateTime dt)
                         return dt;
+
+                    // Try to parse as numeric if field name suggests it (ends with Sort or contains numeric indicators)
+                  
 
                     return val.ToString().Trim();
                 };
@@ -1383,9 +1397,12 @@ namespace Tools.Controllers
                     switch (fieldName)
                     {
                         case "RouteSort":
-                        case "CenterSort":
                             if (int.TryParse(val.ToString(), out int intVal))
                                 return intVal;
+                            return 0;
+                        case "CenterSort":
+                            if (int.TryParse(val.ToString(), out int intval))
+                                return intval;
                             return 0;
 
                         case "NodalSort":
@@ -1405,25 +1422,6 @@ namespace Tools.Controllers
             }
 
             resultList = ordered?.ToList() ?? resultList;
-
-           /* resultList = resultList
-                .OrderBy(r => r.GetType().GetProperty("CatchNo")?.GetValue(r)?.ToString())
-                  .ThenBy(r =>
-                  {
-                      var val = r.GetType().GetProperty("RouteSort")?.GetValue(r);
-                      return Convert.ToInt32(val ?? 0);
-                  })
-                .ThenBy(r =>
-                {
-                    var val = r.GetType().GetProperty("CenterSort")?.GetValue(r);
-                    return Convert.ToInt32(val ?? 0);
-                })
-                .ThenBy(r =>
-                {
-                    var val = r.GetType().GetProperty("NodalSort")?.GetValue(r);
-                    return Convert.ToDouble(val ?? 0.0);
-                })
-                .ToList();*/
 
             using (var package = new ExcelPackage())
             {
