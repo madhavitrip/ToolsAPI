@@ -17,6 +17,7 @@ using Microsoft.CodeAnalysis;
 using static System.Runtime.InteropServices.JavaScript.JSType;
 using System.Composition;
 using DocumentFormat.OpenXml.Spreadsheet;
+using Microsoft.Extensions.Options;
 
 namespace Tools.Controllers
 {
@@ -26,10 +27,13 @@ namespace Tools.Controllers
     {
         private readonly ERPToolsDbContext _context;
         private readonly ILoggerService _loggerService;
-        public EnvelopeBreakagesController(ERPToolsDbContext context, ILoggerService loggerService)
+        private readonly ApiSettings _apiSettings;
+
+        public EnvelopeBreakagesController(ERPToolsDbContext context, ILoggerService loggerService, IOptions<ApiSettings> apiSettings)
         {
             _context = context;
             _loggerService = loggerService;
+            _apiSettings = apiSettings.Value;
         }
 
         // GET: api/EnvelopeBreakages
@@ -421,9 +425,7 @@ namespace Tools.Controllers
 
 
                 using var client = new HttpClient();
-/*                var response = await client.GetAsync($"http://192.168.10.208:81/API/api/EnvelopeBreakages/EnvelopeBreakage?ProjectId={ProjectId}");
-*/                var response = await client.GetAsync($"https://localhost:7276/api/EnvelopeBreakages/EnvelopeBreakage?ProjectId={ProjectId}");
-
+                var response = await client.GetAsync($"{_apiSettings.EnvelopeBreakageUrl}?ProjectId={ProjectId}");
                 if (!response.IsSuccessStatusCode)
                 {
                     // Handle failure from GET call as needed
