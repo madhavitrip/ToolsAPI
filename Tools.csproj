@@ -33,7 +33,8 @@
 
   <!-- Exclude appsettings files from publish (they should be managed separately in production) -->
   <ItemGroup>
-    <None Remove="appsettings.json" />
+   <None Remove="appsettings.json" />
+   <None Remove="appsettings.Development.json" /> <None Remove="appsettings.json" />
     <None Remove="appsettings.Development.json" />
     <None Remove="web.config" />
   </ItemGroup>

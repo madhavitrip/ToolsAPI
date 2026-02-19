@@ -167,7 +167,14 @@ namespace Tools.Controllers
                                     // Step 1: Calculate raw percent of quantity
                                     var rawQuantity = (double)(data.Quantity * percentValue) / 100;
                                     // Step 3: Round up to next multiple of innerCapacity
+                                    if (innerCapacity > 10)
+                                    {
                                     calculatedQuantity = (int)Math.Ceiling(rawQuantity / (double)innerCapacity) * innerCapacity;
+                                    }
+                                    else
+                                    {
+                                        calculatedQuantity = (int)Math.Ceiling(rawQuantity / (double)outerCapacity) * outerCapacity;
+                                    }
                                 }
                                 else
                                 {
@@ -414,7 +421,7 @@ namespace Tools.Controllers
                 ["NodalCode"] = baseRow.NodalCode,
                 ["Quantity"] = extra.Quantity,
                 ["CenterSort"] = baseRow.CenterCode,
-                ["RouteSort"] = baseRow.Route
+                ["RouteSort"] = baseRow.RouteSort
             };
 
             // Set CenterCode
@@ -424,7 +431,7 @@ namespace Tools.Controllers
                     dict["CenterCode"] = "Nodal Extra";
                         dict["NodalSort"] =baseRow.NodalSort;
                         dict["CenterSort"] = 10000;
-                    dict["RouteSort"] = 1000;
+                    dict["RouteSort"] = baseRow.RouteSort;
                     break;
                 case 2:
                     dict["CenterCode"] = "University Extra";
