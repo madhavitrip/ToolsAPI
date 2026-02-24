@@ -455,8 +455,258 @@ namespace Tools.Controllers
             return Ok(new { exists = fileExists });
         }
 
+        [HttpGet("EnvelopeSummaryReport")]
+        public async Task<IActionResult> EnvelopeSummaryReport(int ProjectId)
+        {
+            try
+            {
+                var nrDataList = await _context.NRDatas
+                    .Where(x => x.ProjectId == ProjectId)
+                    .ToListAsync();
 
+                if (!nrDataList.Any())
+                    return NotFound("No NRData found.");
 
+                var breakages = await _context.EnvelopeBreakages
+                    .Where(x => x.ProjectId == ProjectId)
+                    .ToListAsync();
+
+                if (!breakages.Any())
+                    return NotFound("No EnvelopeBreakages found.");
+
+                // Collect all dynamic keys
+                var allInnerKeys = new HashSet<string>();
+                var allOuterKeys = new HashSet<string>();
+
+                foreach (var b in breakages)
+                {
+                    if (!string.IsNullOrEmpty(b.InnerEnvelope))
+                    {
+                        var innerDict = JsonSerializer.Deserialize<Dictionary<string, string>>(b.InnerEnvelope);
+                        foreach (var key in innerDict.Keys)
+                            allInnerKeys.Add($"Inner_{key}");
+                    }
+
+                    if (!string.IsNullOrEmpty(b.OuterEnvelope))
+                    {
+                        var outerDict = JsonSerializer.Deserialize<Dictionary<string, string>>(b.OuterEnvelope);
+                        foreach (var key in outerDict.Keys)
+                            allOuterKeys.Add($"Outer_{key}");
+                    }
+                }
+
+                using var package = new ExcelPackage();
+                var worksheet = package.Workbook.Worksheets.Add("EnvelopeSummary");
+
+                var nrProps = typeof(NRData).GetProperties().Select(p => p.Name).ToList();
+                var headers = new List<string>();
+
+                headers.AddRange(nrProps);
+                headers.AddRange(allInnerKeys.OrderBy(x => x));
+                headers.AddRange(allOuterKeys.OrderBy(x => x));
+                headers.Add("TotalEnvelope");
+
+                // Add headers
+                for (int i = 0; i < headers.Count; i++)
+                    worksheet.Cells[1, i + 1].Value = headers[i];
+
+                using (var range = worksheet.Cells[1, 1, 1, headers.Count])
+                {
+                    range.Style.Font.Bold = true;
+                    range.Style.Fill.PatternType = OfficeOpenXml.Style.ExcelFillStyle.Solid;
+                    range.Style.Fill.BackgroundColor.SetColor(System.Drawing.Color.LightGray);
+                }
+
+                int rowIndex = 2;
+
+                foreach (var nr in nrDataList)
+                {
+                    var breakage = breakages.FirstOrDefault(x => x.NrDataId == nr.Id);
+
+                    var rowDict = new Dictionary<string, object>();
+
+                    foreach (var prop in typeof(NRData).GetProperties())
+                        rowDict[prop.Name] = prop.GetValue(nr);
+
+                    foreach (var key in allInnerKeys)
+                        rowDict[key] = 0;
+
+                    foreach (var key in allOuterKeys)
+                        rowDict[key] = 0;
+
+                    if (breakage != null)
+                    {
+                        var innerDict = JsonSerializer.Deserialize<Dictionary<string, string>>(breakage.InnerEnvelope ?? "{}");
+                        var outerDict = JsonSerializer.Deserialize<Dictionary<string, string>>(breakage.OuterEnvelope ?? "{}");
+
+                        foreach (var kvp in innerDict)
+                            rowDict[$"Inner_{kvp.Key}"] = kvp.Value;
+
+                        foreach (var kvp in outerDict)
+                            rowDict[$"Outer_{kvp.Key}"] = kvp.Value;
+
+                        rowDict["TotalEnvelope"] = breakage.TotalEnvelope;
+                    }
+
+                    for (int col = 0; col < headers.Count; col++)
+                        worksheet.Cells[rowIndex, col + 1].Value =
+                            rowDict.ContainsKey(headers[col]) ? rowDict[headers[col]] : 0;
+
+                    rowIndex++;
+                }
+
+                worksheet.Cells[worksheet.Dimension.Address].AutoFitColumns();
+
+                // Save in application root folder
+                var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
+                Directory.CreateDirectory(reportPath);
+                var filePath = Path.Combine(reportPath, "EnvelopeSummary.xlsx");
+                if (System.IO.File.Exists(filePath))
+                {
+                    System.IO.File.Delete(filePath);
+                }
+
+                package.SaveAs(new FileInfo(filePath));
+
+                return Ok($"Envelope summary report saved at root folder: {filePath}");
+
+            }
+            catch (Exception ex)
+            {
+                _loggerService.LogError("Error generating EnvelopeSummaryReport", ex.Message, nameof(EnvelopeBreakagesController));
+                return StatusCode(500, "Internal Server Error");
+            }
+        }
+
+        [HttpGet("CatchEnvelopeSummaryWithExtras")]
+        public async Task<IActionResult> CatchEnvelopeSummaryWithExtras(int ProjectId)
+        {
+            try
+            {
+                // 1️⃣ Define file paths
+                var folderPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
+                var envelopeSummaryPath = Path.Combine(folderPath, "EnvelopeSummary.xlsx");
+                var extrasCalculationPath = Path.Combine(folderPath, "ExtrasCalculation.xlsx");
+
+                if (!System.IO.File.Exists(envelopeSummaryPath) || !System.IO.File.Exists(extrasCalculationPath))
+                    return NotFound("One or both Excel files not found.");
+
+                using var packageSummary = new ExcelPackage(new FileInfo(envelopeSummaryPath));
+                using var packageExtras = new ExcelPackage(new FileInfo(extrasCalculationPath));
+
+                var wsSummary = packageSummary.Workbook.Worksheets.First();
+                var wsExtras = packageExtras.Workbook.Worksheets.First();
+
+                // 2️⃣ Read EnvelopeSummary into a dictionary grouped by CatchNo
+                var summaryData = new Dictionary<string, Dictionary<string, int>>(); // CatchNo -> {EnvelopeKey -> value}
+                var summaryHeaderMap = new Dictionary<int, string>(); // colIndex -> header
+
+                int summaryCols = wsSummary.Dimension.End.Column;
+                for (int c = 1; c <= summaryCols; c++)
+                {
+                    var header = wsSummary.Cells[1, c].Text.Trim();
+                    summaryHeaderMap[c] = header;
+                }
+
+                int summaryRows = wsSummary.Dimension.End.Row;
+                for (int r = 2; r <= summaryRows; r++)
+                {
+                    string catchNo = wsSummary.Cells[r, summaryHeaderMap.First(kv => kv.Value == "CatchNo").Key].Text.Trim();
+                    if (!summaryData.ContainsKey(catchNo))
+                        summaryData[catchNo] = new Dictionary<string, int>();
+
+                    for (int c = 1; c <= summaryCols; c++)
+                    {
+                        string header = summaryHeaderMap[c];
+                        if (header.StartsWith("Inner_") || header.StartsWith("Outer_") || header == "TotalEnvelope")
+                        {
+                            int val = int.TryParse(wsSummary.Cells[r, c].Text.Trim(), out var v) ? v : 0;
+                            if (!summaryData[catchNo].ContainsKey(header))
+                                summaryData[catchNo][header] = 0;
+                            summaryData[catchNo][header] += val; // Sum envelopes
+                        }
+                    }
+                }
+
+                // 3️⃣ Read ExtrasCalculation into the same dictionary
+                var extrasHeaderMap = new Dictionary<int, string>();
+                int extrasCols = wsExtras.Dimension.End.Column;
+                for (int c = 1; c <= extrasCols; c++)
+                {
+                    extrasHeaderMap[c] = wsExtras.Cells[1, c].Text.Trim();
+                }
+
+                int extrasRows = wsExtras.Dimension.End.Row;
+                for (int r = 2; r <= extrasRows; r++)
+                {
+                    string catchNo = wsExtras.Cells[r, extrasHeaderMap.First(kv => kv.Value == "CatchNo").Key].Text.Trim();
+                    if (!summaryData.ContainsKey(catchNo))
+                        summaryData[catchNo] = new Dictionary<string, int>();
+
+                    for (int c = 1; c <= extrasCols; c++)
+                    {
+                        string header = extrasHeaderMap[c];
+                        if (header.StartsWith("Inner_") || header.StartsWith("Outer_") || header == "TotalEnvelope")
+                        {
+                            int val = int.TryParse(wsExtras.Cells[r, c].Text.Trim(), out var v) ? v : 0;
+                            if (!summaryData[catchNo].ContainsKey(header))
+                                summaryData[catchNo][header] = 0;
+                            summaryData[catchNo][header] += val; // Sum envelopes
+                        }
+                    }
+                }
+
+                // 4️⃣ Determine all unique headers
+                var allHeaders = new HashSet<string>();
+                foreach (var catchEntry in summaryData)
+                {
+                    foreach (var key in catchEntry.Value.Keys)
+                        allHeaders.Add(key);
+                }
+
+                var orderedHeaders = new List<string> { "CatchNo" };
+                orderedHeaders.AddRange(allHeaders.OrderBy(h => h));
+
+                // 5️⃣ Prepare combined Excel
+                using var packageCombined = new ExcelPackage();
+                var wsCombined = packageCombined.Workbook.Worksheets.Add("CombinedCatchEnvelope");
+
+                // Write headers
+                for (int i = 0; i < orderedHeaders.Count; i++)
+                    wsCombined.Cells[1, i + 1].Value = orderedHeaders[i];
+
+                wsCombined.Cells[1, 1, 1, orderedHeaders.Count].Style.Font.Bold = true;
+
+                // Write data rows
+                int rowIndex = 2;
+                foreach (var catchEntry in summaryData.OrderBy(k => k.Key))
+                {
+                    wsCombined.Cells[rowIndex, 1].Value = catchEntry.Key;
+                    for (int i = 1; i < orderedHeaders.Count; i++)
+                    {
+                        string key = orderedHeaders[i];
+                        wsCombined.Cells[rowIndex, i + 1].Value = catchEntry.Value.ContainsKey(key) ? catchEntry.Value[key] : 0;
+                    }
+                    rowIndex++;
+                }
+
+                wsCombined.Cells[wsCombined.Dimension.Address].AutoFitColumns();
+
+                // Save combined file
+                var combinedPath = Path.Combine(folderPath, "CombinedCatchEnvelope.xlsx");
+                if (System.IO.File.Exists(combinedPath))
+                    System.IO.File.Delete(combinedPath);
+
+                packageCombined.SaveAs(new FileInfo(combinedPath));
+
+                return Ok($"Combined envelope summary saved at: {combinedPath}");
+            }
+            catch (Exception ex)
+            {
+                _loggerService.LogError("Error generating CatchEnvelopeSummaryWithExtras", ex.Message, nameof(EnvelopeBreakagesController));
+                return StatusCode(500, "Internal Server Error");
+            }
+        }
 
         [HttpGet("Replication")]
         public async Task<IActionResult> ReplicationConfiguration(int ProjectId)
