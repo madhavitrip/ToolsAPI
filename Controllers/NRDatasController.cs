@@ -78,7 +78,7 @@ namespace Tools.Controllers
                         query = query.Where(d => d.NodalCode.ToLower().Contains(search));
                         break;
                     case "Route":
-                        query = query.Where(d => d.Route.ToString().Contains(search));
+                        query = query.Where(d => d.Route.ToLower().Contains(search));
                         break;
                     case "ExamDate":
                         query = query.Where(d => d.ExamDate.ToString().Contains(search));
@@ -92,7 +92,7 @@ namespace Tools.Controllers
                     case "Quantity":
                         query = query.Where(d => d.Quantity.ToString().Contains(search));
                         break;
-
+                  
                     default:
                         return BadRequest($"Key '{key}' is not searchable.");
                 }
@@ -119,7 +119,9 @@ namespace Tools.Controllers
                     d.Pages,
                     d.CenterSort,
                     d.NodalSort,
-                    d.RouteSort
+                    d.RouteSort,
+                    d.Symbol,
+
                 })
                 .ToListAsync();
 

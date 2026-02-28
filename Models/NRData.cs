@@ -20,10 +20,10 @@ namespace Tools.Models
         public string? NRDatas { get; set; }
         public string ? NodalCode { get; set; }
         public int Pages { get; set; }
-        public int Route {  get; set; }
+        public string Route {  get; set; }
         public int RouteSort { get; set; }
         public int CenterSort { get; set; }
         public int NodalSort { get; set; }
-
+        public string Symbol { get; set; }
     }
 }

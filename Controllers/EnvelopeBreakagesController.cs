@@ -763,10 +763,19 @@ namespace Tools.Controllers
              .Select(c => c.Capacity) // assuming the column is named 'Value'
           .FirstOrDefaultAsync();
 
-
             var boxIds = ProjectConfig.BoxBreakingCriteria;
             var sortingId = ProjectConfig.SortingBoxReport;
             var duplicatesFields = ProjectConfig.DuplicateRemoveFields;
+            bool InnerBundling = ProjectConfig.IsInnerBundlingDone;
+            var innerBundlingFieldNames = new List<string>();
+            if (InnerBundling)
+            {
+                var InnerBCriteria = ProjectConfig.InnerBundlingCriteria;
+                innerBundlingFieldNames = await _context.Fields
+                  .Where(f => InnerBCriteria.Contains(f.FieldId))
+                .Select(f => f.Name)
+                .ToListAsync();
+            }
             var fields = await _context.Fields
                 .Where(f => boxIds.Contains(f.FieldId))
                 .ToListAsync();
@@ -785,9 +794,8 @@ namespace Tools.Controllers
                 .Select(f => f.Name)
                 .ToListAsync();
 
-
             var startBox = ProjectConfig.BoxNumber;
-
+            bool resetOnSymbolChange = ProjectConfig.ResetOnSymbolChange;
             var extrasconfig = await _context.ExtraConfigurations
                 .Where(p => p.ProjectId == ProjectId)
                 .ToListAsync();
@@ -845,9 +853,10 @@ namespace Tools.Controllers
                                 NodalSort = double.TryParse(worksheet.Cells[row, 12].Text.Trim(), out double sortVal)
                                 ? sortVal
                                 : 0.0,
-                                Route = int.Parse(worksheet.Cells[row, 13].Text),
+                                Route = worksheet.Cells[row, 13].Text.Trim(),
                                 RouteSort = Convert.ToInt32(worksheet.Cells[row, 14].Text.Trim()),
-                                OmrSerial = worksheet.Cells[row,17].Text.Trim(),   
+                                OmrSerial = worksheet.Cells[row, 17].Text.Trim(), 
+                                CourseName = worksheet.Cells[row,18].Text.Trim(),
                             };
 
                             breakingReportData.Add(inputRow);
@@ -912,6 +921,7 @@ namespace Tools.Controllers
                         End = end,
                         Serial = serial,
                         row.OmrSerial,
+                        row.CourseName,
                     });
 
                     previousCatchNo = row.CatchNo;
@@ -930,7 +940,8 @@ namespace Tools.Controllers
                 .Select(name => new
                 {
                     Name = name,
-                    Property = enrichedList.First().GetType().GetProperty(name)
+                    Property = enrichedList.First().GetType().GetProperty(name,
+    BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase)
                 })
                 .Where(x => x.Property != null)
                 .ToList();
@@ -973,6 +984,7 @@ namespace Tools.Controllers
                             $"❌ CenterSort value is not numeric for record: {System.Text.Json.JsonSerializer.Serialize(x)} (actual value: '{val}')"
                         );
                     }
+
                     if (prop.Name.Equals("RouteSort", StringComparison.OrdinalIgnoreCase))
                     {
                         // If it’s numeric, fine — return it
@@ -984,13 +996,19 @@ namespace Tools.Controllers
                             $"❌ RouteSort value is not numeric for record: {System.Text.Json.JsonSerializer.Serialize(x)} (actual value: '{val}')"
                         );
                     }
+                    if (prop.Name.Equals("ExamDate", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (DateTime.TryParseExact(val.ToString(), "dd-MM-yyyy",
+                            System.Globalization.CultureInfo.InvariantCulture,
+                            System.Globalization.DateTimeStyles.None, out DateTime parsedDate))
+                            return parsedDate;
+                    }
+
                     if (val is DateTime dt)
                         return dt;
 
-                    // Try to parse as numeric if field name suggests it (ends with Sort or contains numeric indicators)
-                  
-
                     return val.ToString().Trim();
+
                 };
 
                 if (i == 0)
@@ -1011,12 +1029,72 @@ namespace Tools.Controllers
             string prevMergeKey = null;
 
             var finalWithBoxes = new List<dynamic>();
-
+            long runningOmrPointer = 0;
+            string previousCatchForOmr = null;
+            string previousCourse = null;
+            int innerBundlingSerial = 0;
+            string prevInnerBundlingKey = null;
             foreach (var item in sortedList)
             {
+                bool hasOmr = !string.IsNullOrWhiteSpace(item.OmrSerial);
                 var nrRow = nrData.FirstOrDefault(n => n.CatchNo == item.CatchNo);
                     int pages = nrRow?.Pages ?? 0;
                 int totalPages = (item.Quantity) * pages;
+                string currentSymbol = resetOnSymbolChange
+           ? (nrRow?.Symbol ?? "")
+           : "";
+
+                string currentCourseName = item.CourseName?.ToString() ?? "";
+
+                // ✅ Reset boxNo when CourseName changes
+                if (previousCourse != null && currentCourseName != previousCourse)
+                {
+                    boxNo = startBox;
+                    runningPages = 0;
+                    _loggerService.LogEvent(
+                        $"🔁 CourseName changed from '{previousCourse}' to '{currentCourseName}' → BoxNo reset to {boxNo}",
+                        "EnvelopeBreakages",
+                        User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
+                        ProjectId);
+                }
+
+                if (hasOmr)
+                {
+                    if (previousCatchForOmr != item.CatchNo)
+                    {
+                        runningOmrPointer = 0;
+                        previousCatchForOmr = item.CatchNo;
+                    }
+                    if (runningOmrPointer == 0 && item.OmrSerial.Contains("-"))
+                    {
+                        var parts = item.OmrSerial.Split('-');
+                        runningOmrPointer = long.Parse(parts[0]);
+                    }
+                }
+
+              
+                string innerBundlingKey = null;
+                int currentInnerBundlingSerial = 0;
+                if (InnerBundling && innerBundlingFieldNames.Any())
+                {
+                    innerBundlingKey = string.Join("_", innerBundlingFieldNames.Select(fieldName =>
+                    {
+                        var prop = item?.GetType().GetProperty(fieldName, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+                        return prop?.GetValue(item)?.ToString()?.Trim() ?? "";
+                    }));
+
+                    if (innerBundlingKey != prevInnerBundlingKey)
+                    {
+                        innerBundlingSerial++;
+                        prevInnerBundlingKey = innerBundlingKey;
+                    }
+                    currentInnerBundlingSerial = innerBundlingSerial;
+                }
+                // ✅ Helper: format BoxNo as concatenation of number + symbol
+                string FormatBoxNo(int num, string symbol)
+                    => resetOnSymbolChange && !string.IsNullOrEmpty(symbol)
+                        ? $"{num}{symbol}"
+                        : num.ToString();
                 // Build merge key
                 string mergeKey = "";
                 if (boxIds == null)
@@ -1119,34 +1197,75 @@ namespace Tools.Controllers
                                 int end = start + envelopesInBox - 1;
                                 currentStart = end + 1;
                                 string serial = $"{start} to {end}";
+                                string omrRange = "";
 
-                                finalWithBoxes.Add(new
+                                if (hasOmr)
                                 {
-                                    item.CatchNo,
-                                    item.CenterCode,
-                                    item.CenterSort,
-                                    item.ExamTime,
-                                    item.ExamDate,
-                                    Quantity = chunkQty,
-                                    item.NodalCode,
-                                    item.NodalSort,
-                                    item.Route,
-                                    item.RouteSort,
-                                    item.TotalEnv,
-                                    Start = start,
-                                    End = end,
-                                    Serial = serial,
-                                    TotalPages = chunkPages,
-                                    BoxNo = boxNo,
-                                    item.OmrSerial,
-                                });
+                                    long omrStart = runningOmrPointer;
+                                    long omrEnd = omrStart + chunkQty - 1;
+                                    omrRange = $"{omrStart}-{omrEnd}";
+                                    runningOmrPointer = omrEnd + 1;
+                                }
+                                object boxNoValue = resetOnSymbolChange
+                           ? (object)$"{boxNo}{currentSymbol}"
+                           : boxNo;
+                                if (InnerBundling)
+                                {
+                                    finalWithBoxes.Add(new
+                                    {
+                                        item.CatchNo,
+                                        item.CenterCode,
+                                        item.CenterSort,
+                                        item.ExamTime,
+                                        item.ExamDate,
+                                        Quantity = chunkQty,
+                                        item.NodalCode,
+                                        item.NodalSort,
+                                        item.Route,
+                                        item.RouteSort,
+                                        item.TotalEnv,
+                                        Start = start,
+                                        End = end,
+                                        Serial = serial,
+                                        TotalPages = chunkPages,
+                                        BoxNo = boxNoValue,
+                                        OmrSerial = omrRange,
+                                        InnerBundlingSerial = currentInnerBundlingSerial,
+                                        item.CourseName,
+                                    });
+                                }
+                                else
+                                {
+                                    finalWithBoxes.Add(new
+                                    {
+                                        item.CatchNo,
+                                        item.CenterCode,
+                                        item.CenterSort,
+                                        item.ExamTime,
+                                        item.ExamDate,
+                                        Quantity = chunkQty,
+                                        item.NodalCode,
+                                        item.NodalSort,
+                                        item.Route,
+                                        item.RouteSort,
+                                        item.TotalEnv,
+                                        Start = start,
+                                        End = end,
+                                        Serial = serial,
+                                        TotalPages = chunkPages,
+                                        BoxNo = boxNoValue,
+                                        OmrSerial = omrRange,
+                                        item.CourseName,
+                                    });
+                                }
 
-                                runningPages += chunkPages; // ✅ naturally tracks current box pages
+                                    runningPages += chunkPages; // ✅ naturally tracks current box pages
                                 remainingQty -= chunkQty;
                             }
 
                             prevMergeKey = mergeKey;
-                            continue;
+                            previousCourse = currentCourseName;
+                            continue;   
                         }
                         boxNo++;
                         runningPages = 0;
@@ -1155,29 +1274,70 @@ namespace Tools.Controllers
                   
                         // normal case: just start new box
                     runningPages += totalPages;
+                    string normalOmrRange = "";
 
-                    finalWithBoxes.Add(new
+                    if (hasOmr)
                     {
-                        item.CatchNo,
-                        item.CenterCode,
-                        item.CenterSort,
-                        item.ExamTime,
-                        item.ExamDate,
-                        item.Quantity,
-                        item.NodalCode,
-                        item.NodalSort,
-                        item.Route,
-                        item.RouteSort,
-                        item.TotalEnv,
-                        item.Start,
-                        item.End,
-                        item.Serial,
-                        TotalPages = totalPages,
-                        BoxNo = boxNo,
-                        item.OmrSerial,
-                    });
+                        long normalOmrStart = runningOmrPointer;
+                        long normalOmrEnd = normalOmrStart + item.Quantity - 1;
+                        normalOmrRange = $"{normalOmrStart}-{normalOmrEnd}";
+                        runningOmrPointer = normalOmrEnd + 1;
+                    }
+                    object normalBoxNoValue = resetOnSymbolChange
+               ? (object)$"{boxNo}{currentSymbol}"
+               : boxNo;
+                    if (InnerBundling)
+                    {
+                        finalWithBoxes.Add(new
+                        {
+                            item.CatchNo,
+                            item.CenterCode,
+                            item.CenterSort,
+                            item.ExamTime,
+                            item.ExamDate,
+                            item.Quantity,
+                            item.NodalCode,
+                            item.NodalSort,
+                            item.Route,
+                            item.RouteSort,
+                            item.TotalEnv,
+                            item.Start,
+                            item.End,
+                            item.Serial,
+                            TotalPages = totalPages,
+                            BoxNo = normalBoxNoValue,
+                            OmrSerial = normalOmrRange,
+                            InnerBundlingSerial = currentInnerBundlingSerial,
+                            item.CourseName
+                        });
+                    }
+                    else
+                    {
+                        finalWithBoxes.Add(new
+                        {
+                            item.CatchNo,
+                            item.CenterCode,
+                            item.CenterSort,
+                            item.ExamTime,
+                            item.ExamDate,
+                            item.Quantity,
+                            item.NodalCode,
+                            item.NodalSort,
+                            item.Route,
+                            item.RouteSort,
+                            item.TotalEnv,
+                            item.Start,
+                            item.End,
+                            item.Serial,
+                            TotalPages = totalPages,
+                            BoxNo = normalBoxNoValue,
+                            OmrSerial = normalOmrRange,
+                            item.CourseName,
+                        });
+                    }
 
                     prevMergeKey = mergeKey;
+                    previousCourse = currentCourseName;
                 }
 
                 catch (Exception ex)
@@ -1188,9 +1348,17 @@ namespace Tools.Controllers
             }
 
             // 🔹 Maintain ordering
-            finalWithBoxes = finalWithBoxes
-                .OrderBy(x => (int)x.BoxNo)
-                .ToList();
+            finalWithBoxes = resetOnSymbolChange
+                ? finalWithBoxes
+                    .OrderBy(x => x.CourseName?.ToString() ?? "")  // ✅ group by course first
+                    .ThenBy(x =>
+                    {
+                        string boxNoStr = x.BoxNo?.ToString() ?? "";
+                        string numPart = new string(boxNoStr.TakeWhile(char.IsDigit).ToArray());
+                        return int.TryParse(numPart, out int n) ? n : 0;
+                    })
+                    .ToList()
+                : finalWithBoxes.OrderBy(x => (int)x.BoxNo).ToList();
 
 
             // Step 5: Export to Excel
@@ -1199,7 +1367,9 @@ namespace Tools.Controllers
                 using (var package = new ExcelPackage())
                 {
                     var worksheet = package.Workbook.Worksheets.Add("BoxBreaking");
-
+                    bool hasAnyOmr = finalWithBoxes
+    .Any(x => !string.IsNullOrWhiteSpace(
+        x.GetType().GetProperty("OmrSerial")?.GetValue(x)?.ToString()));
                     // Headers
                     worksheet.Cells[1, 1].Value = "SerialNumber";
                     worksheet.Cells[1, 2].Value = "CatchNo";
@@ -1218,7 +1388,35 @@ namespace Tools.Controllers
                     worksheet.Cells[1, 15].Value = "Serial";
                     worksheet.Cells[1, 16].Value = "TotalPages";
                     worksheet.Cells[1, 17].Value = "BoxNo";
-                    worksheet.Cells[1, 18].Value = "OmrSerial";
+                    int omrCol = -1;
+                    int nextCol = 18;
+                    int symbolCol = -1;
+                    int courseCol = -1;
+                    int innerBundlingCol = -1;
+                    if (hasAnyOmr)
+                    {
+                        worksheet.Cells[1, nextCol].Value = "OmrSerial";
+                        omrCol = nextCol;
+                        nextCol++;
+                    }
+                   
+                    if (resetOnSymbolChange)
+                    {
+                        worksheet.Cells[1, nextCol].Value = "Symbol";
+                        symbolCol = nextCol;
+                        nextCol++;
+                        worksheet.Cells[1, nextCol].Value = "CourseName";
+                        courseCol = nextCol;
+                        nextCol++;
+                    }
+
+                    // ✅ Add InnerBundling column if enabled
+                    if (InnerBundling)
+                    {
+                        worksheet.Cells[1, nextCol].Value = "InnerBundlingSerial";
+                        innerBundlingCol = nextCol;
+                        nextCol++;
+                    }
                     int row = 2;
                     int serial = 1;
                     foreach (var item in finalWithBoxes)
@@ -1240,7 +1438,26 @@ namespace Tools.Controllers
                         worksheet.Cells[row, 15].Value = item.Serial;
                         worksheet.Cells[row, 16].Value = item.TotalPages;
                         worksheet.Cells[row, 17].Value = item.BoxNo;
-                        worksheet.Cells[row, 18].Value = item.OmrSerial;
+                        if (omrCol > 0)
+                        {
+                            worksheet.Cells[row, omrCol].Value = item.OmrSerial;
+                        }
+                        if (symbolCol > 0)
+                        {
+                            var nrRow = nrData.FirstOrDefault(n => n.CatchNo == item.CatchNo);
+                            worksheet.Cells[row, symbolCol].Value = nrRow?.Symbol ?? "";
+                        }
+
+                        if (courseCol > 0)
+                        {
+                            worksheet.Cells[row, courseCol].Value = item.CourseName;
+                        }
+
+                        // ✅ InnerBundlingSerial column — only if InnerBundling is on
+                        if (innerBundlingCol > 0)
+                        {
+                            worksheet.Cells[row, innerBundlingCol].Value = item.InnerBundlingSerial;
+                        }
                         row++;
                     }
 
@@ -1270,9 +1487,10 @@ namespace Tools.Controllers
             public string NodalCode { get; set; }
             public int CenterSort { get; set; }
             public double NodalSort { get; set; }
-            public int Route {  get; set; }
+            public string Route {  get; set; }
             public int RouteSort { get; set; }
             public string OmrSerial { get; set; }
+            public string CourseName { get; set; }
         }
 
 
@@ -1327,7 +1545,7 @@ namespace Tools.Controllers
 
             var resultList = new List<object>();
             string prevNodalCode = null;
-            int prevRoute=0;
+            string prevRoute = null;
             int prevRouteSort = 0;
             int prevNodalSort = 0;
             string prevCatchNo = null;
@@ -1339,7 +1557,7 @@ namespace Tools.Controllers
             var catchExtrasAdded = new HashSet<(int ExtraId, string CatchNo)>();
 
             // Helper method to add extra envelopes - removed serialnumber++ from here
-            void AddExtraWithEnv(ExtraEnvelopes extra, string examDate, string examTime, int NrQuantity, string NodalCode, string CenterCode, int CenterSort, int NodalSort, int RouteSort, int Route)
+            void AddExtraWithEnv(ExtraEnvelopes extra, string examDate, string examTime, string course,int NrQuantity, string NodalCode, string CenterCode, int CenterSort, int NodalSort, int RouteSort, string Route)
             {
                 var extraConfig = extrasconfig.FirstOrDefault(e => e.ExtraType == extra.ExtraId);
                 int envCapacity = 0; // default fallback
@@ -1394,6 +1612,7 @@ namespace Tools.Controllers
                         },
                         CenterEnv = extraCenterEnvCounter,
                         ExamDate = examDate,
+                        CourseName = course,
                         ExamTime = examTime,
                         TotalEnv = totalEnv,
                         Env = $"{j}/{totalEnv}",
@@ -1439,7 +1658,7 @@ namespace Tools.Controllers
                         // Get previous record for metadata
                         foreach (var extra in extrasToAdd)
                         {
-                            AddExtraWithEnv(extra, prevNrData.ExamDate, prevNrData.ExamTime,
+                            AddExtraWithEnv(extra, prevNrData.ExamDate, prevNrData.ExamTime, prevNrData.CourseName,
                                           prevNrData.NRQuantity, prevNrData.NodalCode, prevNrData.CenterCode, prevNrData.CenterSort, prevNrData.NodalSort,prevNrData.RouteSort, prevNrData.Route);
                         }
                         nodalExtrasAddedForNodalCatch.Add((prevNrData.NodalCode, prevCatchNo));
@@ -1452,7 +1671,7 @@ namespace Tools.Controllers
                             var extrasToAdd = extras.Where(e => e.ExtraId == extraId && e.CatchNo == prevCatchNo).ToList();
                             foreach (var extra in extrasToAdd)
                             {
-                                AddExtraWithEnv(extra, prevNrData.ExamDate, prevNrData.ExamTime,
+                                AddExtraWithEnv(extra, prevNrData.ExamDate, prevNrData.ExamTime,prevNrData.CourseName,
                                                prevNrData.NRQuantity, prevNrData.NodalCode, prevNrData.CenterCode, prevNrData.CenterSort, prevNrData.NodalSort,prevNrData.RouteSort,prevNrData.Route);
                             }
                             catchExtrasAdded.Add((extraId, prevCatchNo));
@@ -1472,7 +1691,7 @@ namespace Tools.Controllers
                         var extrasToAdd = extras.Where(e => e.ExtraId == 1 && e.CatchNo == current.CatchNo).ToList();
                         foreach (var extra in extrasToAdd)
                         {
-                            AddExtraWithEnv(extra, current.ExamDate, current.ExamTime,
+                            AddExtraWithEnv(extra, current.ExamDate, current.ExamTime,current.CourseName,
                                            current.NRQuantity, prevNodalCode, current.CenterCode, current.CenterSort, prevNodalSort, prevRouteSort, prevRoute);
                         }
                         nodalExtrasAddedForNodalCatch.Add((prevNodalCode, current.CatchNo));
@@ -1557,6 +1776,7 @@ namespace Tools.Controllers
                             {
                                 current.CatchNo,
                                 current.CenterCode,
+                                current.CourseName,
                                 current.ExamTime,
                                 current.ExamDate,
                                 current.Quantity,
@@ -1600,7 +1820,7 @@ namespace Tools.Controllers
                         var extrasToAdd = extras.Where(e => e.ExtraId == 1 && e.CatchNo == prevCatchNo).ToList();
                         foreach (var extra in extrasToAdd)
                         {
-                            AddExtraWithEnv(extra, lastNrData.ExamDate, lastNrData.ExamTime,
+                            AddExtraWithEnv(extra, lastNrData.ExamDate, lastNrData.ExamTime,lastNrData.CourseName,
                                        lastNrData.NRQuantity, lastNrData.NodalCode, lastNrData.CenterCode, lastNrData.CenterSort, lastNrData.NodalSort,lastNrData.RouteSort, lastNrData.Route);
                         }
                     }
@@ -1612,7 +1832,7 @@ namespace Tools.Controllers
                             var extrasToAdd = extras.Where(e => e.ExtraId == extraId && e.CatchNo == prevCatchNo).ToList();
                             foreach (var extra in extrasToAdd)
                             {
-                                AddExtraWithEnv(extra, lastNrData.ExamDate, lastNrData.ExamTime,
+                                AddExtraWithEnv(extra, lastNrData.ExamDate, lastNrData.ExamTime,lastNrData.CourseName,
                                              lastNrData.NRQuantity, lastNrData.NodalCode, lastNrData.CenterCode,lastNrData.CenterSort,lastNrData.NodalSort,lastNrData.RouteSort, lastNrData.Route);
                             }
                         }
@@ -1708,11 +1928,11 @@ namespace Tools.Controllers
                 // Add headers
                 var headers = new[] { "Serial Number", "Catch No", "Center Code",
                         "Center Sort", "Quantity", "EnvQuantity",
-                          "Center Env", "Total Env", "Env", "NRQuantity", "Nodal Code","Nodal Sort", "Route", "Route Sort", "Exam Time", "Exam Date", "BookletSerial" };
+                          "Center Env", "Total Env", "Env", "NRQuantity", "Nodal Code","Nodal Sort", "Route", "Route Sort", "Exam Time", "Exam Date", "BookletSerial","CourseName" };
 
                 var properties = new[] { "SerialNumber", "CatchNo", "CenterCode",
                              "CenterSort", "Quantity", "EnvQuantity",
-                             "CenterEnv", "TotalEnv", "Env", "NRQuantity","NodalCode","NodalSort","Route","RouteSort", "ExamTime", "ExamDate","BookletSerial" };
+                             "CenterEnv", "TotalEnv", "Env", "NRQuantity","NodalCode","NodalSort","Route","RouteSort", "ExamTime", "ExamDate","BookletSerial","CourseName" };
 
                 // Add filtered headers to the first row
                 for (int i = 0; i < headers.Length; i++)
