@@ -23,5 +23,6 @@ namespace Tools.Models
         public bool ResetOnSymbolChange { get; set; }
         public bool IsInnerBundlingDone { get; set; }
         public List<int>? InnerBundlingCriteria { get; set; }
+        public bool ResetOmrSerialOnCatchChange { get; set; }
     }
 }
