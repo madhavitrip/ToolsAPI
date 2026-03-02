@@ -209,6 +209,13 @@ namespace Tools.Controllers
                 int projectId = inputData.GetProperty("projectId").GetInt32();
                 var dataArray = inputData.GetProperty("data").EnumerateArray();
 
+                // Load Extra Configurations once
+                var extraConfigs = await _context.ExtraConfigurations
+                    .Where(c => c.ProjectId == projectId)
+                    .ToListAsync();
+
+                var extraEnvelopesToAdd = new List<ExtraEnvelopes>();
+
                 foreach (var item in dataArray)
                 {
                     var nRData = new NRData();
@@ -222,15 +229,19 @@ namespace Tools.Controllers
                         string key = prop.Name;
                         string value = prop.Value.ToString();
 
-                        var propInfo = nRDataType.GetProperty(key.Replace(" ", ""),
-                                            System.Reflection.BindingFlags.IgnoreCase |
-                                            System.Reflection.BindingFlags.Public |
-                                            System.Reflection.BindingFlags.Instance);
+                        var propInfo = nRDataType.GetProperty(
+                            key.Replace(" ", ""),
+                            System.Reflection.BindingFlags.IgnoreCase |
+                            System.Reflection.BindingFlags.Public |
+                            System.Reflection.BindingFlags.Instance);
 
                         if (propInfo != null)
                         {
                             var targetType = Nullable.GetUnderlyingType(propInfo.PropertyType) ?? propInfo.PropertyType;
-                            object convertedValue = string.IsNullOrEmpty(value) ? null : Convert.ChangeType(value, targetType);
+                            object convertedValue = string.IsNullOrEmpty(value)
+                                ? null
+                                : Convert.ChangeType(value, targetType);
+
                             propInfo.SetValue(nRData, convertedValue);
                         }
                         else
@@ -240,20 +251,125 @@ namespace Tools.Controllers
                     }
 
                     if (extraData.Count > 0)
-                        nRData.NRDatas = System.Text.Json.JsonSerializer.Serialize(extraData);
+                        nRData.NRDatas = JsonSerializer.Serialize(extraData);
 
+                    // ===============================
+                    // 🔥 HANDLE EXTRA CENTER TYPES
+                    // ===============================
+
+                    int? extraTypeId = nRData.CenterCode switch
+                    {
+                        "NodalExtra" => 1,
+                        "UniversityExtra" => 2,
+                        "OfficeExtra" => 3,
+                        _ => null
+                    };
+
+                    if (extraTypeId.HasValue)
+                    {
+                        var extraConfig = extraConfigs
+                            .FirstOrDefault(c => c.ExtraType == extraTypeId.Value);
+
+                        if (extraConfig != null)
+                        {
+                            EnvelopeType envelopeType;
+                            try
+                            {
+                                envelopeType = JsonSerializer.Deserialize<EnvelopeType>(extraConfig.EnvelopeType);
+                            }
+                            catch
+                            {
+                                envelopeType = new EnvelopeType { Inner = "E1", Outer = "E1" };
+                            }
+
+                            int innerCapacity = GetEnvelopeCapacity(envelopeType.Inner);
+                            int outerCapacity = GetEnvelopeCapacity(envelopeType.Outer);
+
+                            int calculatedQuantity = 0;
+
+                            switch (extraConfig.Mode)
+                            {
+                                case "Fixed":
+                                    calculatedQuantity = int.Parse(extraConfig.Value);
+                                    break;
+
+                                case "Percentage":
+                                    if (decimal.TryParse(extraConfig.Value, out var percentValue))
+                                    {
+                                        var rawQuantity = (double)(nRData.Quantity * percentValue) / 100;
+
+                                        if (innerCapacity > 10)
+                                            calculatedQuantity =
+                                                (int)Math.Ceiling(rawQuantity / innerCapacity) * innerCapacity;
+                                        else
+                                            calculatedQuantity =
+                                                (int)Math.Ceiling(rawQuantity / outerCapacity) * outerCapacity;
+                                    }
+                                    break;
+                            }
+
+                            int innerCount = (int)Math.Ceiling((double)calculatedQuantity / innerCapacity);
+                            int outerCount = (int)Math.Ceiling((double)calculatedQuantity / outerCapacity);
+
+                            extraEnvelopesToAdd.Add(new ExtraEnvelopes
+                            {
+                                ProjectId = projectId,
+                                CatchNo = nRData.CatchNo,
+                                ExtraId = extraTypeId.Value,
+                                Quantity = calculatedQuantity,
+                                InnerEnvelope = innerCount.ToString(),
+                                OuterEnvelope = outerCount.ToString(),
+                            });
+                        }
+
+                        // 🚫 DO NOT SAVE IN NRDatas
+                        continue;
+                    }
+
+                    // ✅ Save only normal centers in NRDatas
                     _context.NRDatas.Add(nRData);
                 }
 
+                // Save NRDatas
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Created new NRadat with ID {projectId}", "NRData", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,projectId);
+
+                // Save ExtrasEnvelope if any
+                if (extraEnvelopesToAdd.Any())
+                {
+                    await _context.ExtrasEnvelope.AddRangeAsync(extraEnvelopesToAdd);
+                    await _context.SaveChangesAsync();
+                }
+
+                _loggerService.LogEvent(
+                    $"Created new NRData/Extras for Project {projectId}",
+                    "NRData",
+                    User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
+                    projectId);
+
                 return Ok("Data inserted successfully");
             }
             catch (Exception ex)
             {
-                _loggerService.LogError("Error saving Nrdata", ex.Message, nameof(NRDatasController));
+                _loggerService.LogError("Error saving NRData", ex.Message, nameof(NRDatasController));
                 return StatusCode(500, "Internal Server Error");
             }
+        }
+
+        public class EnvelopeType
+        {
+            public string Inner { get; set; }
+            public string Outer { get; set; }
+        }
+
+        private int GetEnvelopeCapacity(string envelopeCode)
+        {
+            if (string.IsNullOrWhiteSpace(envelopeCode))
+                return 1; // default to 1 if null or invalid
+
+            // Expecting format like "E10", "E25", etc.
+            var numberPart = new string(envelopeCode.Where(char.IsDigit).ToArray());
+
+            return int.TryParse(numberPart, out var capacity) ? capacity : 1;
         }
 
 
