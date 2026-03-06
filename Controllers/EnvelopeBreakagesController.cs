@@ -693,7 +693,7 @@ namespace Tools.Controllers
                 wsCombined.Cells[wsCombined.Dimension.Address].AutoFitColumns();
 
                 // Save combined file
-                var combinedPath = Path.Combine(folderPath, "CombinedCatchEnvelope.xlsx");
+                var combinedPath = Path.Combine(folderPath, "CatchSummary.xlsx");
                 if (System.IO.File.Exists(combinedPath))
                     System.IO.File.Delete(combinedPath);
 
@@ -1524,7 +1524,7 @@ namespace Tools.Controllers
                 .FirstOrDefaultAsync();
 
             var outerEnvJson = projectconfig.Envelope;
-
+            bool resetOmrSerialOnCatchChange = projectconfig.ResetOmrSerialOnCatchChange;
             var startNumber = projectconfig.OmrSerialNumber;
 
             var EnvelopeBreaking = projectconfig.EnvelopeMakingCriteria;
@@ -1841,6 +1841,7 @@ namespace Tools.Controllers
             }
             int currentStartNumber = startNumber;
             bool assignBookletSerial = currentStartNumber > 0;
+            string prevCatchForSerial = null;
             // Generate Excel Report
             // Sort the resultList safely (string for CatchNo, numeric for CenterSort/NodalSort)
             IOrderedEnumerable<dynamic> ordered = null;
@@ -1953,6 +1954,15 @@ namespace Tools.Controllers
                 int row = 2;
                 foreach (Dictionary<string, object> rowItem in resultList)
                 {
+                    string catchNo = rowItem.ContainsKey("CatchNo")
+        ? rowItem["CatchNo"]?.ToString()
+        : null;
+
+                    // Reset OMR Serial if CatchNo changes and config enabled
+                    if (resetOmrSerialOnCatchChange && prevCatchForSerial != null && catchNo != prevCatchForSerial)
+                    {
+                        currentStartNumber = startNumber;
+                    }
                     for (int col = 0; col < properties.Length; col++)
                     {
                         var propName = properties[col];
