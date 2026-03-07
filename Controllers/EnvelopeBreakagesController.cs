@@ -1284,7 +1284,7 @@ namespace Tools.Controllers
                         runningOmrPointer = normalOmrEnd + 1;
                     }
                     object normalBoxNoValue = resetOnSymbolChange
-               ? (object)$"{boxNo}{currentSymbol}"
+               ? (object)$"{currentSymbol}-{boxNo}"
                : boxNo;
                     if (InnerBundling)
                     {
@@ -1387,26 +1387,29 @@ namespace Tools.Controllers
                     worksheet.Cells[1, 14].Value = "End";
                     worksheet.Cells[1, 15].Value = "Serial";
                     worksheet.Cells[1, 16].Value = "TotalPages";
-                    worksheet.Cells[1, 17].Value = "BoxNo";
-                    int omrCol = -1;
-                    int nextCol = 18;
+                    int nextCol = 17;
                     int symbolCol = -1;
                     int courseCol = -1;
-                    int innerBundlingCol = -1;
-                    if (hasAnyOmr)
-                    {
-                        worksheet.Cells[1, nextCol].Value = "OmrSerial";
-                        omrCol = nextCol;
-                        nextCol++;
-                    }
-                   
                     if (resetOnSymbolChange)
                     {
                         worksheet.Cells[1, nextCol].Value = "Symbol";
                         symbolCol = nextCol;
                         nextCol++;
+
                         worksheet.Cells[1, nextCol].Value = "CourseName";
                         courseCol = nextCol;
+                        nextCol++;
+                    }
+
+                    worksheet.Cells[1, nextCol].Value = "BoxNo";
+                    int boxCol = nextCol;
+                    nextCol++;
+                    int omrCol = -1;                   
+                    int innerBundlingCol = -1;
+                    if (hasAnyOmr)
+                    {
+                        worksheet.Cells[1, nextCol].Value = "OmrSerial";
+                        omrCol = nextCol;
                         nextCol++;
                     }
 
