@@ -25,6 +25,7 @@ namespace ERPToolsAPI.Data
         public DbSet<ErrorLog> ErrorLogs { get; set; }
         public DbSet<EventLog> EventLogs { get; set; }
         public DbSet<ConflictingFields> ConflictingFields { get; set; }
+        public DbSet<BoxBreakingResult> BoxBreakingResults { get; set; }
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);
@@ -32,6 +33,10 @@ namespace ERPToolsAPI.Data
             modelBuilder.Entity<EnvelopeBreakage>()
                 .HasIndex(e => e.NrDataId)
                 .IsUnique();
+
+            modelBuilder.Entity<BoxBreakingResult>()
+                .HasIndex(e => new { e.ProjectId, e.NrDataId, e.BoxNo })
+                .IsUnique(false);
         }
     }
 
