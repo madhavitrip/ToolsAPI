@@ -202,159 +202,168 @@ namespace Tools.Controllers
         // POST: api/NRDatas
         // To protect from overposting attacks, see https://go.microsoft.com/fwlink/?linkid=2123754
         [HttpPost]
-        public async Task<ActionResult> PostNRData([FromBody] JsonElement inputData)
+        public async Task<IActionResult> PostNRData([FromBody] JsonElement inputData)
         {
+            if (!ModelState.IsValid)
+                return BadRequest(ModelState);
+
             try
             {
                 int projectId = inputData.GetProperty("projectId").GetInt32();
                 var dataArray = inputData.GetProperty("data").EnumerateArray();
 
-                // Load Extra Configurations once
                 var extraConfigs = await _context.ExtraConfigurations
-                    .Where(c => c.ProjectId == projectId)
+                    .Where(x => x.ProjectId == projectId)
                     .ToListAsync();
 
+                var nrDatasToAdd = new List<NRData>();
                 var extraEnvelopesToAdd = new List<ExtraEnvelopes>();
+
+                var nRDataType = typeof(NRData);
+                var properties = nRDataType
+                    .GetProperties()
+                    .ToDictionary(p => p.Name.ToLower(), p => p);
 
                 foreach (var item in dataArray)
                 {
-                    var nRData = new NRData();
-                    nRData.ProjectId = projectId;
+                    var nRData = new NRData
+                    {
+                        ProjectId = projectId
+                    };
 
                     var extraData = new Dictionary<string, string>();
-                    var nRDataType = typeof(NRData);
 
                     foreach (var prop in item.EnumerateObject())
                     {
-                        string key = prop.Name;
+                        string key = prop.Name.Replace(" ", "").ToLower();
                         string value = prop.Value.ToString();
 
-                        var propInfo = nRDataType.GetProperty(
-                            key.Replace(" ", ""),
-                            System.Reflection.BindingFlags.IgnoreCase |
-                            System.Reflection.BindingFlags.Public |
-                            System.Reflection.BindingFlags.Instance);
-
-                        if (propInfo != null)
+                        if (properties.TryGetValue(key, out var propInfo))
                         {
-                            var targetType = Nullable.GetUnderlyingType(propInfo.PropertyType) ?? propInfo.PropertyType;
-                            object convertedValue = string.IsNullOrEmpty(value)
-                                ? null
-                                : Convert.ChangeType(value, targetType);
+                            try
+                            {
+                                var targetType = Nullable.GetUnderlyingType(propInfo.PropertyType) ?? propInfo.PropertyType;
 
-                            propInfo.SetValue(nRData, convertedValue);
+                                object convertedValue = string.IsNullOrWhiteSpace(value)
+                                    ? null
+                                    : Convert.ChangeType(value, targetType);
+
+                                propInfo.SetValue(nRData, convertedValue);
+                            }
+                            catch (Exception e)
+                            {
+                                throw new Exception($"Error converting '{prop.Name}' value '{value}' to {propInfo.PropertyType.Name}", e);
+                            }
                         }
                         else
                         {
-                            extraData[key] = value;
+                            extraData[prop.Name] = value;
                         }
                     }
 
-                    if (extraData.Count > 0)
+                    if (extraData.Any())
                         nRData.NRDatas = JsonSerializer.Serialize(extraData);
 
-                    // ===============================
-                    // 🔥 HANDLE EXTRA CENTER TYPES
-                    // ===============================
+                    // =============================
+                    // EXTRA CENTER LOGIC
+                    // =============================
 
                     int? extraTypeId = nRData.CenterCode switch
                     {
-                        "NodalExtra" => 1,
-                        "UniversityExtra" => 2,
-                        "OfficeExtra" => 3,
+                        "Nodal Extra" => 1,
+                        "University Extra" => 2,
+                        "Office Extra" => 3,
                         _ => null
                     };
 
                     if (extraTypeId.HasValue)
                     {
-                        var extraConfig = extraConfigs
-                            .FirstOrDefault(c => c.ExtraType == extraTypeId.Value);
+                        var config = extraConfigs.FirstOrDefault(x => x.ExtraType == extraTypeId);
 
-                        if (extraConfig != null)
+                        if (config != null)
                         {
-                            EnvelopeType envelopeType;
-                            try
+                            EnvelopeType envelopeType = null;
+
+                            if (!string.IsNullOrWhiteSpace(config.EnvelopeType))
                             {
-                                envelopeType = JsonSerializer.Deserialize<EnvelopeType>(extraConfig.EnvelopeType);
-                            }
-                            catch
-                            {
-                                envelopeType = new EnvelopeType { Inner = "E1", Outer = "E1" };
-                            }
-
-                            int innerCapacity = GetEnvelopeCapacity(envelopeType.Inner);
-                            int outerCapacity = GetEnvelopeCapacity(envelopeType.Outer);
-
-                            int calculatedQuantity = 0;
-
-                            switch (extraConfig.Mode)
-                            {
-                                case "Fixed":
-                                    calculatedQuantity = int.Parse(extraConfig.Value);
-                                    break;
-
-                                case "Percentage":
-                                    if (decimal.TryParse(extraConfig.Value, out var percentValue))
-                                    {
-                                        var rawQuantity = (double)(nRData.Quantity * percentValue) / 100;
-
-                                        if (innerCapacity > 10)
-                                            calculatedQuantity =
-                                                (int)Math.Ceiling(rawQuantity / innerCapacity) * innerCapacity;
-                                        else
-                                            calculatedQuantity =
-                                                (int)Math.Ceiling(rawQuantity / outerCapacity) * outerCapacity;
-                                    }
-                                    break;
+                                try
+                                {
+                                    envelopeType = JsonSerializer.Deserialize<EnvelopeType>(config.EnvelopeType);
+                                }
+                                catch { }
                             }
 
-                            int innerCount = (int)Math.Ceiling((double)calculatedQuantity / innerCapacity);
-                            int outerCount = (int)Math.Ceiling((double)calculatedQuantity / outerCapacity);
+                            int? innerCapacity = envelopeType != null ? GetEnvelopeCapacity(envelopeType.Inner) : null;
+                            int? outerCapacity = envelopeType != null ? GetEnvelopeCapacity(envelopeType.Outer) : null;
+
+                            int roundedQty = nRData.Quantity;
+
+                            if (innerCapacity > 0)
+                                roundedQty = (int)Math.Ceiling((double)nRData.Quantity / innerCapacity.Value) * innerCapacity.Value;
+                            else if (outerCapacity > 0)
+                                roundedQty = (int)Math.Ceiling((double)nRData.Quantity / outerCapacity.Value) * outerCapacity.Value;
+
+                            string innerEnvelope = innerCapacity > 0
+                                ? Math.Ceiling((double)roundedQty / innerCapacity.Value).ToString()
+                                : null;
+
+                            string outerEnvelope = outerCapacity > 0
+                                ? Math.Ceiling((double)roundedQty / outerCapacity.Value).ToString()
+                                : null;
 
                             extraEnvelopesToAdd.Add(new ExtraEnvelopes
                             {
                                 ProjectId = projectId,
                                 CatchNo = nRData.CatchNo,
                                 ExtraId = extraTypeId.Value,
-                                Quantity = calculatedQuantity,
-                                InnerEnvelope = innerCount.ToString(),
-                                OuterEnvelope = outerCount.ToString(),
+                                Quantity = roundedQty,
+                                InnerEnvelope = innerEnvelope,
+                                OuterEnvelope = outerEnvelope
                             });
                         }
 
-                        // 🚫 DO NOT SAVE IN NRDatas
                         continue;
                     }
 
-                    // ✅ Save only normal centers in NRDatas
-                    _context.NRDatas.Add(nRData);
+                    nrDatasToAdd.Add(nRData);
                 }
 
-                // Save NRDatas
+                if (nrDatasToAdd.Any())
+                    await _context.NRDatas.AddRangeAsync(nrDatasToAdd);
+
+                if (extraEnvelopesToAdd.Any())
+                    await _context.ExtrasEnvelope.AddRangeAsync(extraEnvelopesToAdd);
+
                 await _context.SaveChangesAsync();
 
-                // Save ExtrasEnvelope if any
-                if (extraEnvelopesToAdd.Any())
-                {
-                    await _context.ExtrasEnvelope.AddRangeAsync(extraEnvelopesToAdd);
-                    await _context.SaveChangesAsync();
-                }
-
                 _loggerService.LogEvent(
-                    $"Created new NRData/Extras for Project {projectId}",
+                    $"Created NRData/Extras for Project {projectId}",
                     "NRData",
                     User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
                     projectId);
 
-                return Ok("Data inserted successfully");
+                return Ok(new
+                {
+                    message = "Data inserted successfully",
+                    NRDataCount = nrDatasToAdd.Count,
+                    ExtraEnvelopeCount = extraEnvelopesToAdd.Count
+                });
+            }
+            catch (DbUpdateException dbEx)
+            {
+                var error = dbEx.InnerException?.Message ?? dbEx.Message;
+
+                _loggerService.LogError("Database update error", error, nameof(NRDatasController));
+
+                return StatusCode(500, error);
             }
             catch (Exception ex)
             {
-                _loggerService.LogError("Error saving NRData", ex.Message, nameof(NRDatasController));
-                return StatusCode(500, "Internal Server Error");
+                _loggerService.LogError("NRData processing error", ex.ToString(), nameof(NRDatasController));
+
+                return StatusCode(500, ex.Message);
             }
         }
-
         public class EnvelopeType
         {
             public string Inner { get; set; }
@@ -376,6 +385,7 @@ namespace Tools.Controllers
         [HttpGet("ErrorReport")]
         public async Task<ActionResult> GetDuplicateswrtCatch(int ProjectId)
         {
+            // 1️⃣ Fetch NR Data
             var nrData = await _context.NRDatas
                 .Where(p => p.ProjectId == ProjectId)
                 .ToListAsync();
@@ -383,29 +393,78 @@ namespace Tools.Controllers
             if (!nrData.Any())
                 return NotFound("No NRData found for this project.");
 
+            // 2️⃣ Fetch Project Configuration
+            var projectConfig = await _context.ProjectConfigs
+                .FirstOrDefaultAsync(p => p.ProjectId == ProjectId);
+
+            if (projectConfig == null)
+                return BadRequest("Project configuration not found.");
+
+            // 3️⃣ Extract FieldIds from ProjectConfig JSON
+            List<int> fieldIds = new List<int>();
+
+            List<int> ParseIds(string json)
+            {
+                if (string.IsNullOrWhiteSpace(json))
+                    return new List<int>();
+
+                try
+                {
+                    return JsonSerializer.Deserialize<List<int>>(json);
+                }
+                catch
+                {
+                    return new List<int>();
+                }
+            }
+
+            fieldIds.AddRange(projectConfig.DuplicateCriteria ?? new List<int>());
+            fieldIds.AddRange(projectConfig.EnvelopeMakingCriteria ?? new List<int>());
+            fieldIds.AddRange(projectConfig.BoxBreakingCriteria ?? new List<int>());
+            fieldIds.AddRange(projectConfig.InnerBundlingCriteria ?? new List<int>());
+
+            fieldIds = fieldIds.Distinct().ToList();
+
+            // 4️⃣ Get Field Names from Fields table
+            var requiredFields = await _context.Fields
+                .Where(f => fieldIds.Contains(f.FieldId))
+                .Select(f => f.Name.Trim())
+                .ToListAsync();
+
+            // 5️⃣ Unique fields (already configured)
             var uniqueFields = await _context.Fields
                 .Where(f => f.IsUnique == true)
                 .Select(f => f.Name.Trim())
                 .ToListAsync();
 
-            if (!uniqueFields.Any())
-                return BadRequest("No unique fields configured.");
-
             var props = typeof(NRData).GetProperties(BindingFlags.Public | BindingFlags.Instance);
-            var catchProp = props.FirstOrDefault(p => string.Equals(p.Name, "CatchNo", StringComparison.OrdinalIgnoreCase));
+
+            var catchProp = props.FirstOrDefault(p =>
+                string.Equals(p.Name, "CatchNo", StringComparison.OrdinalIgnoreCase));
+
+            var centreProp = props.FirstOrDefault(p =>
+                string.Equals(p.Name, "CenterCode", StringComparison.OrdinalIgnoreCase));
+
+            var nodalProp = props.FirstOrDefault(p =>
+                string.Equals(p.Name, "NodalCode", StringComparison.OrdinalIgnoreCase));
 
             if (catchProp == null)
                 return BadRequest("CatchNo field not found in NRData.");
 
             var errorReport = new List<object>();
 
+            // ---------------------------------------------------
+            // 6️⃣ CatchNo vs Unique Field Conflict Check
+            // ---------------------------------------------------
+
             foreach (var uniqueField in uniqueFields)
             {
-                var uniqueProp = props.FirstOrDefault(p => string.Equals(p.Name, uniqueField, StringComparison.OrdinalIgnoreCase));
+                var uniqueProp = props.FirstOrDefault(p =>
+                    string.Equals(p.Name, uniqueField, StringComparison.OrdinalIgnoreCase));
+
                 if (uniqueProp == null)
                     continue;
 
-                // Step 1: Group by CatchNo
                 var catchGroups = nrData
                     .GroupBy(d => catchProp.GetValue(d)?.ToString()?.Trim() ?? "")
                     .Where(g => !string.IsNullOrEmpty(g.Key));
@@ -414,47 +473,107 @@ namespace Tools.Controllers
                 {
                     var catchNo = group.Key;
 
-                    // Get all distinct values for the current unique field within this CatchNo group
                     var uniqueValues = group
                         .Select(r => uniqueProp.GetValue(r)?.ToString()?.Trim() ?? "")
                         .Distinct()
-                        .Where(val => !string.IsNullOrEmpty(val))
+                        .Where(v => !string.IsNullOrEmpty(v))
                         .ToList();
-                    var json = JsonSerializer.Serialize(uniqueValues);
-                  
 
                     if (uniqueValues.Count > 1)
                     {
-                        // Error: CatchNo maps to multiple values for the unique field
                         errorReport.Add(new
                         {
                             CatchNo = catchNo,
                             UniqueField = uniqueField,
                             ConflictingValues = uniqueValues
                         });
-                    }
-                    var conflictRecord = new ConflictingFields
-                    {
-                        CatchNo = catchNo,
-                        ProjectId = ProjectId, // set this from your current context
-                        UniqueField = uniqueField,
-                        ConflictingField = json
-                    };
 
-                    _context.ConflictingFields.Add(conflictRecord);
+                        var conflictRecord = new ConflictingFields
+                        {
+                            CatchNo = catchNo,
+                            ProjectId = ProjectId,
+                            UniqueField = uniqueField,
+                            ConflictingField = JsonSerializer.Serialize(uniqueValues)
+                        };
+
+                        _context.ConflictingFields.Add(conflictRecord);
+                    }
                 }
             }
 
+            // ---------------------------------------------------
+            // 7️⃣ CentreCode mapped to multiple NodalCodes
+            // ---------------------------------------------------
+
+            if (centreProp != null && nodalProp != null)
+            {
+                var centreGroups = nrData
+                    .GroupBy(d => centreProp.GetValue(d)?.ToString()?.Trim() ?? "")
+                    .Where(g => !string.IsNullOrEmpty(g.Key));
+
+                foreach (var group in centreGroups)
+                {
+                    var nodalValues = group
+                        .Select(r => nodalProp.GetValue(r)?.ToString()?.Trim() ?? "")
+                        .Distinct()
+                        .Where(v => !string.IsNullOrEmpty(v))
+                        .ToList();
+
+                    if (nodalValues.Count > 1)
+                    {
+                        errorReport.Add(new
+                        {
+                            CentreCode = group.Key,
+                            Error = "CentreCode mapped to multiple NodalCodes",
+                            NodalCodes = nodalValues
+                        });
+                    }
+                }
+            }
+
+            // ---------------------------------------------------
+            // 8️⃣ Required Fields Empty Check
+            // ---------------------------------------------------
+
+            foreach (var field in requiredFields)
+            {
+                var prop = props.FirstOrDefault(p =>
+                    string.Equals(p.Name, field, StringComparison.OrdinalIgnoreCase));
+
+                if (prop == null)
+                    continue;
+
+                var emptyRows = nrData
+                    .Where(r => string.IsNullOrWhiteSpace(prop.GetValue(r)?.ToString()))
+                    .Select(r => catchProp.GetValue(r)?.ToString())
+                    .ToList();
+
+                if (emptyRows.Any())
+                {
+                    errorReport.Add(new
+                    {
+                        Field = field,
+                        Error = "Required field is empty",
+                        CatchNos = emptyRows
+                    });
+                }
+            }
+
+            await _context.SaveChangesAsync();
+
+            // ---------------------------------------------------
+            // 9️⃣ Final Response
+            // ---------------------------------------------------
+
             if (!errorReport.Any())
-                return Ok("All CatchNo mappings to unique fields are valid.");
+                return Ok("All validations passed. No errors found.");
 
             return Ok(new
             {
-                DuplicatesFound = true,
+                ErrorsFound = true,
                 Errors = errorReport
             });
         }
-
         [HttpGet("Counts")]
         public async Task<ActionResult> GetCount(int ProjectId)
         {

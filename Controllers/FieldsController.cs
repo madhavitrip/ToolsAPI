@@ -29,7 +29,9 @@ namespace Tools.Controllers
         [HttpGet]
         public async Task<ActionResult<IEnumerable<Field>>> GetFields()
         {
-            return await _context.Fields.ToListAsync();
+            return await _context.Fields
+                .OrderBy(f => f.Name)
+                .ToListAsync();
         }
 
         // GET: api/Fields/5
@@ -86,15 +88,30 @@ namespace Tools.Controllers
         // POST: api/Fields
         // To protect from overposting attacks, see https://go.microsoft.com/fwlink/?linkid=2123754
         [HttpPost]
-        public async Task<ActionResult<Field>> PostField(Field @field)
+        public async Task<ActionResult<Field>> PostField(Field field)
         {
             try
             {
-                _context.Fields.Add(@field);
-                await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Created a new Field with ID {field.FieldId}", "Field", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,0);
+                // 🔹 Check if field name already exists
+                bool fieldExists = await _context.Fields
+                    .AnyAsync(f => f.Name.ToLower() == field.Name.ToLower());
 
-                return CreatedAtAction("GetField", new { id = @field.FieldId }, @field);
+                if (fieldExists)
+                {
+                    return Conflict(new { message = "A field with the same name already exists." });
+                }
+
+                _context.Fields.Add(field);
+                await _context.SaveChangesAsync();
+
+                _loggerService.LogEvent(
+                    $"Created a new Field with ID {field.FieldId}",
+                    "Field",
+                    User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
+                    0
+                );
+
+                return CreatedAtAction("GetField", new { id = field.FieldId }, field);
             }
             catch (Exception ex)
             {

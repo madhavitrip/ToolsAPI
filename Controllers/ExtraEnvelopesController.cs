@@ -385,6 +385,7 @@ namespace Tools.Controllers
                         }
 
                         ws.Cells[ws.Dimension.Address].AutoFitColumns();
+                        ws.View.FreezePanes(2, 1);
                         package.SaveAs(new FileInfo(filePath));
                     }
                 }
@@ -469,24 +470,33 @@ namespace Tools.Controllers
             }
 
             // ✅ Set InnerEnvelope and OuterEnvelope values in proper columns
-            EnvelopeType envelopeType;
+            EnvelopeType envelopeType=null;
             try
             {
                 envelopeType = JsonSerializer.Deserialize<EnvelopeType>(config.EnvelopeType);
             }
             catch
             {
-                envelopeType = new EnvelopeType { Inner = "E1", Outer = "E1" }; // fallback
             }
 
-            string innerKey = $"Inner_{envelopeType.Inner}";
-            string outerKey = $"Outer_{envelopeType.Outer}";
+            string innerKey = null, outerKey = null;
 
-            dict[innerKey] = extra.InnerEnvelope;
-            dict[outerKey] = extra.OuterEnvelope;
+            if (envelopeType != null)
+            {
+                if (!string.IsNullOrWhiteSpace(envelopeType.Inner) && !string.IsNullOrWhiteSpace(extra.InnerEnvelope))
+                {
+                    innerKey = $"Inner_{envelopeType.Inner}";
+                    dict[innerKey] = extra.InnerEnvelope;
+                    innerKeys.Add(innerKey);
+                }
 
-            innerKeys.Add(innerKey);
-            outerKeys.Add(outerKey);
+                if (!string.IsNullOrWhiteSpace(envelopeType.Outer) && !string.IsNullOrWhiteSpace(extra.OuterEnvelope))
+                {
+                    outerKey = $"Outer_{envelopeType.Outer}";
+                    dict[outerKey] = extra.OuterEnvelope;
+                    outerKeys.Add(outerKey);
+                }
+            }
 
             return dict;
         }
@@ -494,7 +504,7 @@ namespace Tools.Controllers
         private int GetEnvelopeCapacity(string envelopeCode)
         {
             if (string.IsNullOrWhiteSpace(envelopeCode))
-                return 1; // default to 1 if null or invalid
+                return 0; // default to 1 if null or invalid
 
             // Expecting format like "E10", "E25", etc.
             var numberPart = new string(envelopeCode.Where(char.IsDigit).ToArray());

@@ -150,7 +150,7 @@ namespace Tools.Controllers
         {
             try
             {
-                var extrasConfiguration = await _context.ExtraConfigurations.FindAsync(id);
+                var extrasConfiguration = await _context.ExtraConfigurations.FirstOrDefaultAsync(s=>s.ProjectId==id);
                 if (extrasConfiguration == null)
                 {
                     return NotFound();

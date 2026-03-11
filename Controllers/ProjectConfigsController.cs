@@ -49,18 +49,100 @@ namespace Tools.Controllers
 
         // GET: api/ProjectConfigs/5
         [HttpGet("{id}")]
-        public async Task<ActionResult<ProjectConfig>> GetProjectConfig(int id)
+        public async Task<IActionResult> GetProjectConfig(int id)
         {
-            var projectConfig = await _context.ProjectConfigs.FindAsync(id);
+            var projectConfig = await _context.ProjectConfigs
+                .FirstOrDefaultAsync(p => p.ProjectId == id);
 
             if (projectConfig == null)
-            {
                 return NotFound();
+
+            // Collect all field ids used in config
+            var allFieldIds = new List<int>();
+
+            void AddIds(List<int> ids)
+            {
+                if (ids != null && ids.Any())
+                    allFieldIds.AddRange(ids);
             }
 
-            return projectConfig;
-        }
+            AddIds(projectConfig.EnvelopeMakingCriteria);
+            AddIds(projectConfig.BoxBreakingCriteria);
+            AddIds(projectConfig.DuplicateCriteria);
+            AddIds(projectConfig.DuplicateRemoveFields);
+            AddIds(projectConfig.SortingBoxReport);
+            AddIds(projectConfig.InnerBundlingCriteria);
 
+            allFieldIds = allFieldIds.Distinct().ToList();
+
+            // Fetch field names
+            var fields = await _context.Fields
+                .Where(f => allFieldIds.Contains(f.FieldId))
+                .Select(f => new { f.FieldId, f.Name })
+                .ToListAsync();
+
+            // Helper function to convert ids -> names
+            List<string> GetNames(List<int> ids)
+            {
+                if (ids == null) return new List<string>();
+
+                return fields
+                    .Where(f => ids.Contains(f.FieldId))
+                    .Select(f => f.Name)
+                    .ToList();
+            }
+
+            var result = new
+            {
+                projectConfig.Envelope,
+                projectConfig.Modules,
+                projectConfig.BoxCapacity,
+                projectConfig.Enhancement,
+                projectConfig.BoxNumber,
+                projectConfig.OmrSerialNumber,
+                projectConfig.IsInnerBundlingDone,
+                projectConfig.ResetOnSymbolChange,
+                projectConfig.ResetOmrSerialOnCatchChange,
+
+                EnvelopeMakingCriteria = new
+                {
+                    Ids = projectConfig.EnvelopeMakingCriteria,
+                    Names = GetNames(projectConfig.EnvelopeMakingCriteria)
+                },
+
+                BoxBreakingCriteria = new
+                {
+                    Ids = projectConfig.BoxBreakingCriteria,
+                    Names = GetNames(projectConfig.BoxBreakingCriteria)
+                },
+
+                DuplicateCriteria = new
+                {
+                    Ids = projectConfig.DuplicateCriteria,
+                    Names = GetNames(projectConfig.DuplicateCriteria)
+                },
+
+                DuplicateRemoveFields = new
+                {
+                    Ids = projectConfig.DuplicateRemoveFields,
+                    Names = GetNames(projectConfig.DuplicateRemoveFields)
+                },
+
+                SortingBoxReport = new
+                {
+                    Ids = projectConfig.SortingBoxReport,
+                    Names = GetNames(projectConfig.SortingBoxReport)
+                },
+
+                InnerBundlingCriteria = new
+                {
+                    Ids = projectConfig.InnerBundlingCriteria,
+                    Names = GetNames(projectConfig.InnerBundlingCriteria)
+                }
+            };
+
+            return Ok(result);
+        }
         // PUT: api/ProjectConfigs/5
         // To protect from overposting attacks, see https://go.microsoft.com/fwlink/?linkid=2123754
         [HttpPut("{id}")]
