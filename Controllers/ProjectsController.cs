@@ -29,9 +29,29 @@ namespace Tools.Controllers
 
         // GET: api/Projects
         [HttpGet]
-        public async Task<ActionResult<IEnumerable<Project>>> GetProjects()
+        public async Task<ActionResult> GetProjects(int page = 1, int pageSize = 10)
         {
-            return await _context.Projects.ToListAsync();
+            if (page <= 0) page = 1;
+            if (pageSize <= 0) pageSize = 10;
+
+            var totalRecords = await _context.Projects.CountAsync();
+
+            var projects = await _context.Projects
+                .OrderByDescending(p => p.ProjectId) // Always order before Skip
+                .Skip((page - 1) * pageSize)
+                .Take(pageSize)
+                .ToListAsync();
+
+            var result = new
+            {
+                Page = page,
+                PageSize = pageSize,
+                TotalRecords = totalRecords,
+                TotalPages = (int)Math.Ceiling(totalRecords / (double)pageSize),
+                Data = projects
+            };
+
+            return Ok(result);
         }
 
         [Authorize]
@@ -96,12 +116,21 @@ namespace Tools.Controllers
 
                 // Join the result with userProjects to get the project name and latest log time
                 var result = userProjects
-                    .Join(projectWithLastLoggedAt, p => p.ProjectId, l => l.ProjectId, (p, l) => new
+                 .Join(projectWithLastLoggedAt,
+                  p => p.ProjectId,
+                  l => l.ProjectId,
+                    (p, l) => new
                     {
-                        p.ProjectId,
-                       TimeAgo = GetTimeAgo(l.LatestLoggedAt) 
+                      p.ProjectId,
+                      LatestLoggedAt = l.LatestLoggedAt
                     })
-                    .ToList();
+                 .OrderByDescending(x => x.LatestLoggedAt)   // ⭐ Order by latest access
+                  .Select(x => new
+                  {
+                   x.ProjectId,
+                   TimeAgo = GetTimeAgo(x.LatestLoggedAt)
+                  })
+               .ToList();
                 return Ok(result);
             }
             catch (Exception ex)
@@ -253,9 +282,23 @@ namespace Tools.Controllers
         {
             try
             {
+                // Check if a project with the same ProjectId already exists
+                bool exists = await _context.Projects.AnyAsync(p => p.ProjectId == project.ProjectId);
+                if (exists)
+                {
+                    return Conflict($"Project with ID {project.ProjectId} already exists.");
+                }
+
                 _context.Projects.Add(project);
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Created a new Project with ID {project.ProjectId}", "Projects", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, project.ProjectId);
+
+                _loggerService.LogEvent(
+                    $"Created a new Project with ID {project.ProjectId}",
+                    "Projects",
+                    User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
+                    project.ProjectId
+                );
+
                 return CreatedAtAction("GetProject", new { id = project.ProjectId }, project);
             }
             catch (Exception ex)

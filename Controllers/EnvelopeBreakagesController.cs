@@ -218,6 +218,7 @@ namespace Tools.Controllers
                     }
 
                     ws.Cells[ws.Dimension.Address].AutoFitColumns();
+                    ws.View.FreezePanes(2, 1);
                     package.SaveAs(new FileInfo(filePath));
                 }
                 _loggerService.LogEvent($"EnvelopeBreakage report of ProjectId {ProjectId} has been created", "EnvelopeBreakage", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, ProjectId);
@@ -556,7 +557,7 @@ namespace Tools.Controllers
                 }
 
                 worksheet.Cells[worksheet.Dimension.Address].AutoFitColumns();
-
+                worksheet.View.FreezePanes(2, 1);
                 // Save in application root folder
                 var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
                 Directory.CreateDirectory(reportPath);
@@ -578,128 +579,203 @@ namespace Tools.Controllers
             }
         }
 
+
         [HttpGet("CatchEnvelopeSummaryWithExtras")]
         public async Task<IActionResult> CatchEnvelopeSummaryWithExtras(int ProjectId)
         {
             try
             {
-                // 1️⃣ Define file paths
                 var folderPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
                 var envelopeSummaryPath = Path.Combine(folderPath, "EnvelopeSummary.xlsx");
                 var extrasCalculationPath = Path.Combine(folderPath, "ExtrasCalculation.xlsx");
 
-                if (!System.IO.File.Exists(envelopeSummaryPath) || !System.IO.File.Exists(extrasCalculationPath))
-                    return NotFound("One or both Excel files not found.");
+                if (!System.IO.File.Exists(envelopeSummaryPath))
+                    return NotFound("EnvelopeSummary.xlsx not found.");
 
                 using var packageSummary = new ExcelPackage(new FileInfo(envelopeSummaryPath));
-                using var packageExtras = new ExcelPackage(new FileInfo(extrasCalculationPath));
-
                 var wsSummary = packageSummary.Workbook.Worksheets.First();
-                var wsExtras = packageExtras.Workbook.Worksheets.First();
 
-                // 2️⃣ Read EnvelopeSummary into a dictionary grouped by CatchNo
-                var summaryData = new Dictionary<string, Dictionary<string, int>>(); // CatchNo -> {EnvelopeKey -> value}
-                var summaryHeaderMap = new Dictionary<int, string>(); // colIndex -> header
+                ExcelPackage packageExtras = null;
+                ExcelWorksheet wsExtras = null;
 
-                int summaryCols = wsSummary.Dimension.End.Column;
-                for (int c = 1; c <= summaryCols; c++)
+                if (System.IO.File.Exists(extrasCalculationPath))
                 {
-                    var header = wsSummary.Cells[1, c].Text.Trim();
-                    summaryHeaderMap[c] = header;
+                    packageExtras = new ExcelPackage(new FileInfo(extrasCalculationPath));
+                    wsExtras = packageExtras.Workbook.Worksheets.First();
                 }
 
+                // CatchNo -> EnvelopeKey -> Count
+                var summaryData = new Dictionary<string, Dictionary<string, int>>();
+
+                // CatchNo -> Qty
+                var qtyData = new Dictionary<string, int>();
+
+                // ==============================
+                // 1️⃣ Read EnvelopeSummary
+                // ==============================
+
+                var summaryHeaderMap = new Dictionary<int, string>();
+                int summaryCols = wsSummary.Dimension.End.Column;
+
+                for (int c = 1; c <= summaryCols; c++)
+                    summaryHeaderMap[c] = wsSummary.Cells[1, c].Text.Trim();
+
+                int catchNoCol = summaryHeaderMap.First(x => x.Value == "CatchNo").Key;
+                int qtyCol = summaryHeaderMap.FirstOrDefault(x => x.Value == "Qty").Key;
+
                 int summaryRows = wsSummary.Dimension.End.Row;
+
                 for (int r = 2; r <= summaryRows; r++)
                 {
-                    string catchNo = wsSummary.Cells[r, summaryHeaderMap.First(kv => kv.Value == "CatchNo").Key].Text.Trim();
+                    string catchNo = wsSummary.Cells[r, catchNoCol].Text.Trim();
+
+                    if (string.IsNullOrEmpty(catchNo))
+                        continue;
+
                     if (!summaryData.ContainsKey(catchNo))
                         summaryData[catchNo] = new Dictionary<string, int>();
+
+                    // Qty from summary
+                    if (qtyCol > 0)
+                    {
+                        int qty = int.TryParse(wsSummary.Cells[r, qtyCol].Text.Trim(), out var q) ? q : 0;
+
+                        if (!qtyData.ContainsKey(catchNo))
+                            qtyData[catchNo] = 0;
+
+                        qtyData[catchNo] += qty;
+                    }
 
                     for (int c = 1; c <= summaryCols; c++)
                     {
                         string header = summaryHeaderMap[c];
+
                         if (header.StartsWith("Inner_") || header.StartsWith("Outer_") || header == "TotalEnvelope")
                         {
                             int val = int.TryParse(wsSummary.Cells[r, c].Text.Trim(), out var v) ? v : 0;
+
                             if (!summaryData[catchNo].ContainsKey(header))
                                 summaryData[catchNo][header] = 0;
-                            summaryData[catchNo][header] += val; // Sum envelopes
+
+                            summaryData[catchNo][header] += val;
                         }
                     }
                 }
 
-                // 3️⃣ Read ExtrasCalculation into the same dictionary
-                var extrasHeaderMap = new Dictionary<int, string>();
-                int extrasCols = wsExtras.Dimension.End.Column;
-                for (int c = 1; c <= extrasCols; c++)
-                {
-                    extrasHeaderMap[c] = wsExtras.Cells[1, c].Text.Trim();
-                }
+                // ==============================
+                // 2️⃣ Read ExtrasCalculation
+                // ==============================
 
-                int extrasRows = wsExtras.Dimension.End.Row;
-                for (int r = 2; r <= extrasRows; r++)
+                if (wsExtras != null)
                 {
-                    string catchNo = wsExtras.Cells[r, extrasHeaderMap.First(kv => kv.Value == "CatchNo").Key].Text.Trim();
-                    if (!summaryData.ContainsKey(catchNo))
-                        summaryData[catchNo] = new Dictionary<string, int>();
+                    var extrasHeaderMap = new Dictionary<int, string>();
+                    int extrasCols = wsExtras.Dimension.End.Column;
 
                     for (int c = 1; c <= extrasCols; c++)
+                        extrasHeaderMap[c] = wsExtras.Cells[1, c].Text.Trim();
+
+                    int extrasCatchNoCol = extrasHeaderMap.First(x => x.Value == "CatchNo").Key;
+                    int extrasQtyCol = extrasHeaderMap.FirstOrDefault(x => x.Value == "Qty").Key;
+
+                    int extrasRows = wsExtras.Dimension.End.Row;
+
+                    for (int r = 2; r <= extrasRows; r++)
                     {
-                        string header = extrasHeaderMap[c];
-                        if (header.StartsWith("Inner_") || header.StartsWith("Outer_") || header == "TotalEnvelope")
+                        string catchNo = wsExtras.Cells[r, extrasCatchNoCol].Text.Trim();
+
+                        if (string.IsNullOrEmpty(catchNo))
+                            continue;
+
+                        if (!summaryData.ContainsKey(catchNo))
+                            summaryData[catchNo] = new Dictionary<string, int>();
+
+                        // Qty from extras
+                        if (extrasQtyCol > 0)
                         {
-                            int val = int.TryParse(wsExtras.Cells[r, c].Text.Trim(), out var v) ? v : 0;
-                            if (!summaryData[catchNo].ContainsKey(header))
-                                summaryData[catchNo][header] = 0;
-                            summaryData[catchNo][header] += val; // Sum envelopes
+                            int qty = int.TryParse(wsExtras.Cells[r, extrasQtyCol].Text.Trim(), out var q) ? q : 0;
+
+                            if (!qtyData.ContainsKey(catchNo))
+                                qtyData[catchNo] = 0;
+
+                            qtyData[catchNo] += qty;
+                        }
+
+                        for (int c = 1; c <= extrasCols; c++)
+                        {
+                            string header = extrasHeaderMap[c];
+
+                            if (header.StartsWith("Inner_") || header.StartsWith("Outer_") || header == "TotalEnvelope")
+                            {
+                                int val = int.TryParse(wsExtras.Cells[r, c].Text.Trim(), out var v) ? v : 0;
+
+                                if (!summaryData[catchNo].ContainsKey(header))
+                                    summaryData[catchNo][header] = 0;
+
+                                summaryData[catchNo][header] += val;
+                            }
                         }
                     }
                 }
 
-                // 4️⃣ Determine all unique headers
+                // ==============================
+                // 3️⃣ Collect All Headers
+                // ==============================
+
                 var allHeaders = new HashSet<string>();
+
                 foreach (var catchEntry in summaryData)
-                {
                     foreach (var key in catchEntry.Value.Keys)
                         allHeaders.Add(key);
-                }
 
-                var orderedHeaders = new List<string> { "CatchNo" };
-                orderedHeaders.AddRange(allHeaders.OrderBy(h => h));
+                var orderedHeaders = new List<string> { "CatchNo", "Qty" };
+                orderedHeaders.AddRange(allHeaders.OrderBy(x => x));
 
-                // 5️⃣ Prepare combined Excel
+                // ==============================
+                // 4️⃣ Create Combined Excel
+                // ==============================
+
                 using var packageCombined = new ExcelPackage();
-                var wsCombined = packageCombined.Workbook.Worksheets.Add("CombinedCatchEnvelope");
+                var wsCombined = packageCombined.Workbook.Worksheets.Add("CatchSummary");
 
-                // Write headers
                 for (int i = 0; i < orderedHeaders.Count; i++)
                     wsCombined.Cells[1, i + 1].Value = orderedHeaders[i];
 
                 wsCombined.Cells[1, 1, 1, orderedHeaders.Count].Style.Font.Bold = true;
 
-                // Write data rows
                 int rowIndex = 2;
-                foreach (var catchEntry in summaryData.OrderBy(k => k.Key))
+
+                foreach (var catchEntry in summaryData.OrderBy(x => x.Key))
                 {
                     wsCombined.Cells[rowIndex, 1].Value = catchEntry.Key;
-                    for (int i = 1; i < orderedHeaders.Count; i++)
+
+                    wsCombined.Cells[rowIndex, 2].Value =
+                        qtyData.ContainsKey(catchEntry.Key) ? qtyData[catchEntry.Key] : 0;
+
+                    for (int i = 2; i < orderedHeaders.Count; i++)
                     {
                         string key = orderedHeaders[i];
-                        wsCombined.Cells[rowIndex, i + 1].Value = catchEntry.Value.ContainsKey(key) ? catchEntry.Value[key] : 0;
+
+                        wsCombined.Cells[rowIndex, i + 1].Value =
+                            catchEntry.Value.ContainsKey(key) ? catchEntry.Value[key] : 0;
                     }
+
                     rowIndex++;
                 }
 
                 wsCombined.Cells[wsCombined.Dimension.Address].AutoFitColumns();
+                wsCombined.View.FreezePanes(2, 1);
+                // ==============================
+                // 5️⃣ Save File
+                // ==============================
 
-                // Save combined file
                 var combinedPath = Path.Combine(folderPath, "CatchSummary.xlsx");
+
                 if (System.IO.File.Exists(combinedPath))
                     System.IO.File.Delete(combinedPath);
 
                 packageCombined.SaveAs(new FileInfo(combinedPath));
 
-                return Ok($"Combined envelope summary saved at: {combinedPath}");
+                return Ok($"CatchSummary.xlsx generated at: {combinedPath}");
             }
             catch (Exception ex)
             {
@@ -707,6 +783,7 @@ namespace Tools.Controllers
                 return StatusCode(500, "Internal Server Error");
             }
         }
+
 
         [HttpGet("Replication")]
         public async Task<IActionResult> ReplicationConfiguration(int ProjectId)
@@ -722,7 +799,23 @@ namespace Tools.Controllers
             var nrData = await _context.NRDatas
                 .Where(p => p.ProjectId == ProjectId)
                 .ToListAsync();
+            var missingPages = nrData
+         .Where(x => x.Pages == null || x.Pages <= 0)
+         .Select(x => new { x.CatchNo, x.CenterCode })
+         .ToList();
 
+            if (missingPages.Any())
+            {
+                var sample = missingPages
+                    .Take(10)
+                    .Select(x => $"{x.CatchNo}-{x.CenterCode}");
+
+                return BadRequest(new
+                {
+                    message = "Pages are missing for some NRData. Please upload pages for all NRData before running replication.",
+                    affectedRecords = sample
+                });
+            }
             var ProjectConfig = await _context.ProjectConfigs
                 .Where(p => p.ProjectId == ProjectId).FirstOrDefaultAsync();
 
@@ -1178,6 +1271,11 @@ namespace Tools.Controllers
                                     // current box is full, open new box
                                     boxNo++;
                                     runningPages = 0;
+                                    if (InnerBundling)
+                                    {
+                                        innerBundlingSerial++;
+                                        currentInnerBundlingSerial = innerBundlingSerial;
+                                    }
                                     continue;
                                 }
 
@@ -1188,6 +1286,11 @@ namespace Tools.Controllers
                                 {
                                     boxNo++;
                                     runningPages = 0;
+                                    if (InnerBundling)
+                                    {
+                                        innerBundlingSerial++;
+                                        currentInnerBundlingSerial = innerBundlingSerial;
+                                    }
                                     continue;
                                 }
 
@@ -1370,6 +1473,7 @@ namespace Tools.Controllers
                     bool hasAnyOmr = finalWithBoxes
     .Any(x => !string.IsNullOrWhiteSpace(
         x.GetType().GetProperty("OmrSerial")?.GetValue(x)?.ToString()));
+
                     // Headers
                     worksheet.Cells[1, 1].Value = "SerialNumber";
                     worksheet.Cells[1, 2].Value = "CatchNo";
@@ -1386,8 +1490,9 @@ namespace Tools.Controllers
                     worksheet.Cells[1, 13].Value = "Start";
                     worksheet.Cells[1, 14].Value = "End";
                     worksheet.Cells[1, 15].Value = "Serial";
-                    worksheet.Cells[1, 16].Value = "TotalPages";
-                    int nextCol = 17;
+                    worksheet.Cells[1, 16].Value = "Pages";
+                    worksheet.Cells[1, 17].Value = "TotalPages";
+                    int nextCol = 18;
                     int symbolCol = -1;
                     int courseCol = -1;
                     if (resetOnSymbolChange)
@@ -1424,6 +1529,7 @@ namespace Tools.Controllers
                     int serial = 1;
                     foreach (var item in finalWithBoxes)
                     {
+                        var nrRow = nrData.FirstOrDefault(n => n.CatchNo == item.CatchNo);
                         worksheet.Cells[row, 1].Value = serial++;
                         worksheet.Cells[row, 2].Value = item.CatchNo;
                         worksheet.Cells[row, 3].Value = item.CenterCode; 
@@ -1439,18 +1545,18 @@ namespace Tools.Controllers
                         worksheet.Cells[row, 13].Value = item.Start;
                         worksheet.Cells[row, 14].Value = item.End;
                         worksheet.Cells[row, 15].Value = item.Serial;
-                        worksheet.Cells[row, 16].Value = item.TotalPages;
-                        worksheet.Cells[row, 17].Value = item.BoxNo;
+                        worksheet.Cells[row, 16].Value = nrRow?.Pages ?? 0;
+                        worksheet.Cells[row, 17].Value = item.TotalPages;
+                        worksheet.Cells[row, boxCol].Value = item.BoxNo;
                         if (omrCol > 0)
                         {
                             worksheet.Cells[row, omrCol].Value = item.OmrSerial;
                         }
+
                         if (symbolCol > 0)
                         {
-                            var nrRow = nrData.FirstOrDefault(n => n.CatchNo == item.CatchNo);
                             worksheet.Cells[row, symbolCol].Value = nrRow?.Symbol ?? "";
                         }
-
                         if (courseCol > 0)
                         {
                             worksheet.Cells[row, courseCol].Value = item.CourseName;
@@ -1501,6 +1607,7 @@ namespace Tools.Controllers
         public async Task<IActionResult> BreakageConfiguration(int ProjectId)
         {
             // Fetch all data sequentially
+
             var envCaps = await _context.EnvelopesTypes
                 .Select(e => new { e.EnvelopeName, e.Capacity })
                 .ToListAsync();
@@ -1997,13 +2104,13 @@ namespace Tools.Controllers
                                 : null;
                         }
                     }
-
+                    prevCatchForSerial = catchNo;
                     row++;
                 }
 
 
                 worksheet.Cells[worksheet.Dimension.Address].AutoFitColumns();
-
+                worksheet.View.FreezePanes(2, 1);
                 // Save the file
                 var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
                 Directory.CreateDirectory(reportPath); // CreateDirectory is idempotent

@@ -72,6 +72,7 @@ namespace Tools.Controllers
                 int mergedCount = 0;
                 var deletedRows = new List<NRData>();
                 var reportRows = new List<NRData>();
+                var retainedRows = new List<NRData>();
 
                 foreach (var group in grouped)
                 {
@@ -79,8 +80,8 @@ namespace Tools.Controllers
 
                     if (group.Count() <= 1)
                         continue;
-
                     var keep = group.First();
+                    retainedRows.Add(keep); 
                     keep.NRQuantity = group.Sum(x => x.NRQuantity);
                     var subjectValues = group.Select(x => x.SubjectName?.Trim())
                                  .Where(v => !string.IsNullOrEmpty(v))
@@ -115,14 +116,12 @@ namespace Tools.Controllers
                     .FirstOrDefaultAsync();
                 if (!string.IsNullOrEmpty(innerEnv))
                 {
-                    Console.WriteLine(innerEnv);
                     try
                     {
                         var envelopeDict = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(innerEnv);
                         if (envelopeDict != null && envelopeDict.TryGetValue("Inner", out var innerValue) &&
                          !string.IsNullOrWhiteSpace(innerValue))
                         {
-                            Console.WriteLine("Entering into inner");
                             var innerSizes = envelopeDict["Inner"]
                                 .Split(',', StringSplitOptions.RemoveEmptyEntries)
                                 .Select(e => e.Trim().ToUpper().Replace("E", "")) // get number from E10 → 10
@@ -138,8 +137,6 @@ namespace Tools.Controllers
                         }
                         else
                         {
-                            Console.WriteLine("Entering in this loop");
-
                             var innerSizes = envelopeDict["Outer"]
                                 .Split(',', StringSplitOptions.RemoveEmptyEntries)
                                 .Select(e => e.Trim().ToUpper().Replace("E", "")) // get number from E10 → 10
@@ -151,7 +148,6 @@ namespace Tools.Controllers
                             if (innerSizes.Any())
                             {
                                 smallestInner = innerSizes.First();
-                                Console.WriteLine(smallestInner);
                             }
                         }
                     }
@@ -164,7 +160,6 @@ namespace Tools.Controllers
                
                 if (smallestInner > 0)
                 {
-                    Console.WriteLine(smallestInner);
                     if (projectconfig.Enhancement > 0)
                     {
                         foreach (var d in data)
@@ -184,7 +179,6 @@ namespace Tools.Controllers
                         {
                             if (d.NRQuantity > 0)
                             {
-                                Console.WriteLine(d.NRQuantity);
                                 d.Quantity = (int)Math.Ceiling(d.NRQuantity / (double)smallestInner) * smallestInner;
                             }
                         }
@@ -287,12 +281,19 @@ namespace Tools.Controllers
                         }
 
                         // Highlight deleted rows
-                        if (deletedRows.Any(x => x.Id == item.Id))
+                        using (var range = ws.Cells[rowIdx, 1, rowIdx, col - 1])
                         {
-                            using (var range = ws.Cells[rowIdx, 1, rowIdx, col - 1])
+                            range.Style.Fill.PatternType = ExcelFillStyle.Solid;
+
+                            if (deletedRows.Any(x => x.Id == item.Id))
                             {
-                                range.Style.Fill.PatternType = ExcelFillStyle.Solid;
-                                range.Style.Fill.BackgroundColor.SetColor(Color.Red);
+                                // 🔴 Deleted row
+                                range.Style.Fill.BackgroundColor.SetColor(Color.LightCoral);
+                            }
+                            else if (retainedRows.Any(x => x.Id == item.Id))
+                            {
+                                // 🟢 Retained merged row
+                                range.Style.Fill.BackgroundColor.SetColor(Color.LightGreen);
                             }
                         }
 
@@ -300,6 +301,7 @@ namespace Tools.Controllers
                     }
 
                     ws.Cells[ws.Dimension.Address].AutoFitColumns();
+                    ws.View.FreezePanes(2, 1);
                     var wsClean = package.Workbook.Worksheets.Add("Clean NRData");
 
                     // Write headers (same as base properties)
@@ -327,7 +329,7 @@ namespace Tools.Controllers
                     }
 
                     wsClean.Cells[wsClean.Dimension.Address].AutoFitColumns();
-
+                    ws.View.FreezePanes(2, 1);
                     package.SaveAs(new FileInfo(filePath));
                     _logger.LogEvent($"Duplicates report has been created", "Duplicates", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, ProjectId);
                 }
