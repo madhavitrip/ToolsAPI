@@ -298,7 +298,7 @@ namespace Tools.Controllers
                     User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
                     project.ProjectId
                 );
-
+                Console.WriteLine($"GroupId: {project.GroupId}, TypeId: {project.TypeId}");
                 return CreatedAtAction("GetProject", new { id = project.ProjectId }, project);
             }
             catch (Exception ex)
