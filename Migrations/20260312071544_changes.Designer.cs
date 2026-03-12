@@ -12,8 +12,8 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace Tools.Migrations
 {
     [DbContext(typeof(ERPToolsDbContext))]
-    [Migration("20260311192506_Initial")]
-    partial class Initial
+    [Migration("20260312071544_changes")]
+    partial class changes
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
@@ -228,39 +228,55 @@ namespace Tools.Migrations
                     MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
 
                     b.Property<string>("BookletSerial")
-                        .IsRequired()
                         .HasColumnType("longtext");
 
                     b.Property<string>("CatchNo")
-                        .IsRequired()
                         .HasColumnType("longtext");
 
                     b.Property<string>("CenterCode")
-                        .IsRequired()
                         .HasColumnType("longtext");
 
                     b.Property<int>("CenterEnv")
                         .HasColumnType("int");
 
+                    b.Property<int>("CenterSort")
+                        .HasColumnType("int");
+
                     b.Property<int?>("CenterSortModified")
                         .HasColumnType("int");
+
+                    b.Property<string>("CourseName")
+                        .HasColumnType("longtext");
 
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("datetime(6)");
 
                     b.Property<string>("Env")
-                        .IsRequired()
                         .HasColumnType("longtext");
 
                     b.Property<int>("EnvQuantity")
                         .HasColumnType("int");
 
+                    b.Property<string>("ExamDate")
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("ExamTime")
+                        .HasColumnType("longtext");
+
                     b.Property<int?>("ExtraId")
                         .HasColumnType("int");
 
-                    b.Property<string>("NodalCodeRef")
-                        .IsRequired()
+                    b.Property<int>("NRQuantity")
+                        .HasColumnType("int");
+
+                    b.Property<string>("NodalCode")
                         .HasColumnType("longtext");
+
+                    b.Property<string>("NodalCodeRef")
+                        .HasColumnType("longtext");
+
+                    b.Property<double>("NodalSort")
+                        .HasColumnType("double");
 
                     b.Property<double?>("NodalSortModified")
                         .HasColumnType("double");
@@ -271,13 +287,17 @@ namespace Tools.Migrations
                     b.Property<int>("ProjectId")
                         .HasColumnType("int");
 
+                    b.Property<int>("Quantity")
+                        .HasColumnType("int");
+
                     b.Property<string>("Route")
-                        .IsRequired()
                         .HasColumnType("longtext");
 
                     b.Property<string>("RouteRef")
-                        .IsRequired()
                         .HasColumnType("longtext");
+
+                    b.Property<int>("RouteSort")
+                        .HasColumnType("int");
 
                     b.Property<int?>("RouteSortModified")
                         .HasColumnType("int");

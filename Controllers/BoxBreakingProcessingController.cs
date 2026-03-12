@@ -103,37 +103,37 @@ namespace Tools.Controllers
                     .Select(c => c.Capacity)
                     .FirstOrDefaultAsync();
 
-                // Convert EnvelopeBreakingResults to dynamic objects for processing
+                // ==============================
+                // Read from EnvelopeBreakingResults
+                // ==============================
                 var breakingReportData = new List<dynamic>();
 
                 foreach (var result in envelopeResults)
                 {
-                    var nrRow = result.NrDataId.HasValue ? 
-                        nrData.FirstOrDefault(n => n.Id == result.NrDataId) : null;
-
                     dynamic row = new System.Dynamic.ExpandoObject();
                     var rowDict = (IDictionary<string, object>)row;
 
                     rowDict["CatchNo"] = result.CatchNo;
-                    rowDict["CenterCode"] = nrRow?.CenterCode ?? (result.ExtraId == 1 ? "Nodal Extra" : result.ExtraId == 2 ? "University Extra" : "Office Extra");
-                    rowDict["CenterSort"] = nrRow?.CenterSort ?? 0;
-                    rowDict["ExamTime"] = nrRow?.ExamTime ?? "";
-                    rowDict["ExamDate"] = nrRow?.ExamDate ?? "";
-                    rowDict["Quantity"] = result.EnvQuantity;
+                    rowDict["CenterCode"] = result.CenterCode;
+                    rowDict["CenterSort"] = result.CenterSort;
+                    rowDict["ExamTime"] = result.ExamTime;
+                    rowDict["ExamDate"] = result.ExamDate;
+                    rowDict["Quantity"] = result.Quantity;
                     rowDict["TotalEnv"] = result.TotalEnv;
-                    rowDict["NRQuantity"] = nrRow?.NRQuantity ?? 0;
-                    rowDict["NodalCode"] = nrRow?.NodalCode ?? "";
-                    rowDict["NodalSort"] = nrRow?.NodalSort ?? 0;
-                    rowDict["Route"] = nrRow?.Route ?? "";
-                    rowDict["RouteSort"] = nrRow?.RouteSort ?? 0;
+                    rowDict["NRQuantity"] = result.NRQuantity;
+                    rowDict["NodalCode"] = result.NodalCode;
+                    rowDict["NodalSort"] = result.NodalSort;
+                    rowDict["Route"] = result.Route;
+                    rowDict["RouteSort"] = result.RouteSort;
                     rowDict["OmrSerial"] = "";
-                    rowDict["CourseName"] = nrRow?.CourseName ?? "";
-                    rowDict["Symbol"] = nrRow?.Symbol ?? "";
-                    rowDict["NrDataId"] = result.NrDataId;
-                    rowDict["ExtraId"] = result.ExtraId;
+                    rowDict["CourseName"] = result.CourseName ?? "";
+                    rowDict["EnvelopeBreakingResultId"] = result.Id;
 
                     breakingReportData.Add(row);
                 }
+
+                if (!breakingReportData.Any())
+                    return NotFound("No data found in envelope breaking results");
 
                 // Remove duplicates
                 var uniqueRows = breakingReportData
@@ -357,8 +357,7 @@ namespace Tools.Controllers
                     boxItemDict["OmrSerial"] = omrRange;
                     boxItemDict["InnerBundlingSerial"] = currentInnerBundlingSerial;
                     boxItemDict["CourseName"] = currentCourseName;
-                    boxItemDict["NrDataId"] = itemDict["NrDataId"];
-                    boxItemDict["ExtraId"] = itemDict["ExtraId"];
+                    boxItemDict["EnvelopeBreakingResultId"] = itemDict["EnvelopeBreakingResultId"];
 
                     finalWithBoxes.Add(boxItem);
 
@@ -383,9 +382,7 @@ namespace Tools.Controllers
                     boxResults.Add(new BoxBreakingResult
                     {
                         ProjectId = ProjectId,
-                        NrDataId = itemDict["NrDataId"] as int?,
-                        ExtraId = itemDict["ExtraId"] as int?,
-                        CatchNo = itemDict["CatchNo"]?.ToString(),
+                        EnvelopeBreakingResultId = (int)itemDict["EnvelopeBreakingResultId"],
                         Start = (int)itemDict["Start"],
                         End = (int)itemDict["End"],
                         Serial = itemDict["Serial"]?.ToString(),
@@ -468,6 +465,18 @@ namespace Tools.Controllers
                 if (!results.Any())
                     return NotFound("No box breaking results found");
 
+                // Join with EnvelopeBreakingResults to get all details
+                var envelopeBreakingResults = await _context.EnvelopeBreakingResults
+                    .Where(x => x.ProjectId == ProjectId)
+                    .ToListAsync();
+
+                var resultsWithDetails = results.Select(r =>
+                {
+                    var envelopeResult = envelopeBreakingResults.FirstOrDefault(e => e.Id == r.EnvelopeBreakingResultId);
+                    var nrRow = envelopeResult != null ? nrData.FirstOrDefault(n => n.CatchNo == envelopeResult.CatchNo) : null;
+                    return new { Result = r, EnvelopeResult = envelopeResult, NrRow = nrRow };
+                }).ToList();
+
                 // Generate Excel
                 var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
                 Directory.CreateDirectory(reportPath);
@@ -536,24 +545,39 @@ namespace Tools.Controllers
                     int row = 2;
                     int serial = 1;
 
-                    foreach (var result in results)
+                    foreach (var item in resultsWithDetails)
                     {
-                        var nrRow = result.NrDataId.HasValue ? 
-                            nrData.FirstOrDefault(n => n.Id == result.NrDataId) : null;
+                        var result = item.Result;
+                        var envelopeResult = item.EnvelopeResult;
+                        var nrRow = item.NrRow;
+
+                        // Get values from EnvelopeBreakingResults first, fallback to NRData
+                        var catchNo = envelopeResult?.CatchNo ?? nrRow?.CatchNo ?? "";
+                        var centerCode = envelopeResult?.CenterCode ?? nrRow?.CenterCode ?? "";
+                        var centerSort = envelopeResult?.CenterSort ?? nrRow?.CenterSort ?? 0;
+                        var examTime = envelopeResult?.ExamTime ?? nrRow?.ExamTime ?? "";
+                        var examDate = envelopeResult?.ExamDate ?? nrRow?.ExamDate ?? "";
+                        var quantity = envelopeResult?.Quantity ?? nrRow?.Quantity ?? 0;
+                        var nodalCode = envelopeResult?.NodalCode ?? nrRow?.NodalCode ?? "";
+                        var nodalSort = envelopeResult?.NodalSort ?? nrRow?.NodalSort ?? 0;
+                        var route = envelopeResult?.Route ?? nrRow?.Route ?? "";
+                        var routeSort = envelopeResult?.RouteSort ?? nrRow?.RouteSort ?? 0;
+                        var totalEnv = envelopeResult?.TotalEnv ?? 0;
+                        var symbol = nrRow?.Symbol ?? "";
+                        var courseName = envelopeResult?.CourseName ?? nrRow?.CourseName ?? "";
 
                         worksheet.Cells[row, 1].Value = serial++;
-                        worksheet.Cells[row, 2].Value = result.CatchNo;
-                        worksheet.Cells[row, 3].Value = result.NrDataId.HasValue ? nrRow?.CenterCode : 
-                            (result.ExtraId == 1 ? "Nodal Extra" : result.ExtraId == 2 ? "University Extra" : "Office Extra");
-                        worksheet.Cells[row, 4].Value = nrRow?.CenterSort ?? 0;
-                        worksheet.Cells[row, 5].Value = nrRow?.ExamTime ?? "";
-                        worksheet.Cells[row, 6].Value = nrRow?.ExamDate ?? "";
-                        worksheet.Cells[row, 7].Value = result.NrDataId.HasValue ? nrRow?.Quantity : 0;
-                        worksheet.Cells[row, 8].Value = nrRow?.NodalCode ?? "";
-                        worksheet.Cells[row, 9].Value = nrRow?.NodalSort ?? 0;
-                        worksheet.Cells[row, 10].Value = nrRow?.Route ?? "";
-                        worksheet.Cells[row, 11].Value = nrRow?.RouteSort ?? 0;
-                        worksheet.Cells[row, 12].Value = result.NrDataId.HasValue ? nrRow?.Quantity : 0;
+                        worksheet.Cells[row, 2].Value = catchNo;
+                        worksheet.Cells[row, 3].Value = centerCode;
+                        worksheet.Cells[row, 4].Value = centerSort;
+                        worksheet.Cells[row, 5].Value = examTime;
+                        worksheet.Cells[row, 6].Value = examDate;
+                        worksheet.Cells[row, 7].Value = quantity;
+                        worksheet.Cells[row, 8].Value = nodalCode;
+                        worksheet.Cells[row, 9].Value = nodalSort;
+                        worksheet.Cells[row, 10].Value = route;
+                        worksheet.Cells[row, 11].Value = routeSort;
+                        worksheet.Cells[row, 12].Value = totalEnv;
                         worksheet.Cells[row, 13].Value = result.Start;
                         worksheet.Cells[row, 14].Value = result.End;
                         worksheet.Cells[row, 15].Value = result.Serial;
@@ -563,12 +587,12 @@ namespace Tools.Controllers
 
                         if (symbolCol > 0)
                         {
-                            worksheet.Cells[row, symbolCol].Value = nrRow?.Symbol ?? "";
+                            worksheet.Cells[row, symbolCol].Value = symbol;
                         }
 
                         if (courseCol > 0)
                         {
-                            worksheet.Cells[row, courseCol].Value = nrRow?.CourseName ?? "";
+                            worksheet.Cells[row, courseCol].Value = courseName;
                         }
 
                         worksheet.Cells[row, boxCol].Value = result.BoxNo;
@@ -600,7 +624,7 @@ namespace Tools.Controllers
                 {
                     message = "Report generated successfully",
                     filePath = filePath,
-                    recordsCount = results.Count
+                    recordsCount = resultsWithDetails.Count
                 });
             }
             catch (Exception ex)

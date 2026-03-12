@@ -10,7 +10,7 @@ namespace Tools.Models
         public int Id { get; set; }
 
         public int ProjectId { get; set; }
-        public int? NrDataId { get; set; }      // NULL if this is an extra
+        public int NrDataId { get; set; }      // Always set - for extras, use the base NRData's NrDataId
         public int? ExtraId { get; set; }       // NULL if regular NRData (1=Nodal, 2=University, 3=Office)
         public string? CatchNo { get; set; }
 
@@ -34,13 +34,6 @@ namespace Tools.Models
         public int RouteSort { get; set; }
         public int NRQuantity { get; set; }
         public string? CourseName { get; set; }
-
-        // Modified sort values (for extras with different sort values)
-        public double? NodalSortModified { get; set; }
-        public int? CenterSortModified { get; set; }
-        public int? RouteSortModified { get; set; }
-        public string? NodalCodeRef { get; set; }
-        public string? RouteRef { get; set; }
 
         // Metadata
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;

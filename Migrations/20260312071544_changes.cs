@@ -7,7 +7,7 @@ using Microsoft.EntityFrameworkCore.Migrations;
 namespace Tools.Migrations
 {
     /// <inheritdoc />
-    public partial class Initial : Migration
+    public partial class changes : Migration
     {
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
@@ -15,91 +15,7 @@ namespace Tools.Migrations
             migrationBuilder.AlterDatabase()
                 .Annotation("MySql:CharSet", "utf8mb4");
 
-            migrationBuilder.CreateTable(
-                name: "BoxBreakingResults",
-                columns: table => new
-                {
-                    Id = table.Column<int>(type: "int", nullable: false)
-                        .Annotation("MySql:ValueGenerationStrategy", MySqlValueGenerationStrategy.IdentityColumn),
-                    ProjectId = table.Column<int>(type: "int", nullable: false),
-                    NrDataId = table.Column<int>(type: "int", nullable: true),
-                    ExtraId = table.Column<int>(type: "int", nullable: true),
-                    CatchNo = table.Column<string>(type: "longtext", nullable: false)
-                        .Annotation("MySql:CharSet", "utf8mb4"),
-                    Start = table.Column<int>(type: "int", nullable: false),
-                    End = table.Column<int>(type: "int", nullable: false),
-                    Serial = table.Column<string>(type: "longtext", nullable: false)
-                        .Annotation("MySql:CharSet", "utf8mb4"),
-                    TotalPages = table.Column<int>(type: "int", nullable: false),
-                    BoxNo = table.Column<string>(type: "varchar(255)", nullable: false)
-                        .Annotation("MySql:CharSet", "utf8mb4"),
-                    OmrSerial = table.Column<string>(type: "longtext", nullable: false)
-                        .Annotation("MySql:CharSet", "utf8mb4"),
-                    InnerBundlingSerial = table.Column<int>(type: "int", nullable: true),
-                    SerialNumber = table.Column<int>(type: "int", nullable: false),
-                    CreatedAt = table.Column<DateTime>(type: "datetime(6)", nullable: false),
-                    UploadBatch = table.Column<int>(type: "int", nullable: false)
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_BoxBreakingResults", x => x.Id);
-                })
-                .Annotation("MySql:CharSet", "utf8mb4");
-
-            migrationBuilder.CreateTable(
-                name: "BoxCapacity",
-                columns: table => new
-                {
-                    BoxCapacityId = table.Column<int>(type: "int", nullable: false)
-                        .Annotation("MySql:ValueGenerationStrategy", MySqlValueGenerationStrategy.IdentityColumn),
-                    Capacity = table.Column<int>(type: "int", nullable: false)
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_BoxCapacity", x => x.BoxCapacityId);
-                })
-                .Annotation("MySql:CharSet", "utf8mb4");
-
-            migrationBuilder.CreateTable(
-                name: "ConflictingFields",
-                columns: table => new
-                {
-                    Id = table.Column<int>(type: "int", nullable: false)
-                        .Annotation("MySql:ValueGenerationStrategy", MySqlValueGenerationStrategy.IdentityColumn),
-                    CatchNo = table.Column<string>(type: "longtext", nullable: false)
-                        .Annotation("MySql:CharSet", "utf8mb4"),
-                    ProjectId = table.Column<int>(type: "int", nullable: false),
-                    UniqueField = table.Column<string>(type: "longtext", nullable: false)
-                        .Annotation("MySql:CharSet", "utf8mb4"),
-                    ConflictingField = table.Column<string>(type: "longtext", nullable: false)
-                        .Annotation("MySql:CharSet", "utf8mb4")
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_ConflictingFields", x => x.Id);
-                })
-                .Annotation("MySql:CharSet", "utf8mb4");
-
-            migrationBuilder.CreateTable(
-                name: "EnvelopeBreakages",
-                columns: table => new
-                {
-                    EnvelopeId = table.Column<int>(type: "int", nullable: false)
-                        .Annotation("MySql:ValueGenerationStrategy", MySqlValueGenerationStrategy.IdentityColumn),
-                    ProjectId = table.Column<int>(type: "int", nullable: false),
-                    NrDataId = table.Column<int>(type: "int", nullable: false),
-                    InnerEnvelope = table.Column<string>(type: "longtext", nullable: false)
-                        .Annotation("MySql:CharSet", "utf8mb4"),
-                    OuterEnvelope = table.Column<string>(type: "longtext", nullable: false)
-                        .Annotation("MySql:CharSet", "utf8mb4"),
-                    TotalEnvelope = table.Column<int>(type: "int", nullable: false)
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_EnvelopeBreakages", x => x.EnvelopeId);
-                })
-                .Annotation("MySql:CharSet", "utf8mb4");
-
+           
             migrationBuilder.CreateTable(
                 name: "EnvelopeBreakingResults",
                 columns: table => new
@@ -109,26 +25,39 @@ namespace Tools.Migrations
                     ProjectId = table.Column<int>(type: "int", nullable: false),
                     NrDataId = table.Column<int>(type: "int", nullable: true),
                     ExtraId = table.Column<int>(type: "int", nullable: true),
-                    CatchNo = table.Column<string>(type: "longtext", nullable: false)
+                    CatchNo = table.Column<string>(type: "longtext", nullable: true)
                         .Annotation("MySql:CharSet", "utf8mb4"),
                     EnvQuantity = table.Column<int>(type: "int", nullable: false),
                     CenterEnv = table.Column<int>(type: "int", nullable: false),
                     TotalEnv = table.Column<int>(type: "int", nullable: false),
-                    Env = table.Column<string>(type: "longtext", nullable: false)
+                    Env = table.Column<string>(type: "longtext", nullable: true)
                         .Annotation("MySql:CharSet", "utf8mb4"),
                     SerialNumber = table.Column<int>(type: "int", nullable: false),
-                    BookletSerial = table.Column<string>(type: "longtext", nullable: false)
+                    BookletSerial = table.Column<string>(type: "longtext", nullable: true)
                         .Annotation("MySql:CharSet", "utf8mb4"),
-                    CenterCode = table.Column<string>(type: "longtext", nullable: false)
+                    CenterCode = table.Column<string>(type: "longtext", nullable: true)
                         .Annotation("MySql:CharSet", "utf8mb4"),
-                    Route = table.Column<string>(type: "longtext", nullable: false)
+                    CenterSort = table.Column<int>(type: "int", nullable: false),
+                    ExamTime = table.Column<string>(type: "longtext", nullable: true)
+                        .Annotation("MySql:CharSet", "utf8mb4"),
+                    ExamDate = table.Column<string>(type: "longtext", nullable: true)
+                        .Annotation("MySql:CharSet", "utf8mb4"),
+                    Quantity = table.Column<int>(type: "int", nullable: false),
+                    NodalCode = table.Column<string>(type: "longtext", nullable: true)
+                        .Annotation("MySql:CharSet", "utf8mb4"),
+                    NodalSort = table.Column<double>(type: "double", nullable: false),
+                    Route = table.Column<string>(type: "longtext", nullable: true)
+                        .Annotation("MySql:CharSet", "utf8mb4"),
+                    RouteSort = table.Column<int>(type: "int", nullable: false),
+                    NRQuantity = table.Column<int>(type: "int", nullable: false),
+                    CourseName = table.Column<string>(type: "longtext", nullable: true)
                         .Annotation("MySql:CharSet", "utf8mb4"),
                     NodalSortModified = table.Column<double>(type: "double", nullable: true),
                     CenterSortModified = table.Column<int>(type: "int", nullable: true),
                     RouteSortModified = table.Column<int>(type: "int", nullable: true),
-                    NodalCodeRef = table.Column<string>(type: "longtext", nullable: false)
+                    NodalCodeRef = table.Column<string>(type: "longtext", nullable: true)
                         .Annotation("MySql:CharSet", "utf8mb4"),
-                    RouteRef = table.Column<string>(type: "longtext", nullable: false)
+                    RouteRef = table.Column<string>(type: "longtext", nullable: true)
                         .Annotation("MySql:CharSet", "utf8mb4"),
                     CreatedAt = table.Column<DateTime>(type: "datetime(6)", nullable: false),
                     UploadBatch = table.Column<int>(type: "int", nullable: false)

@@ -30,17 +30,11 @@ namespace Tools.Controllers
             _apiSettings = apiSettings.Value;
         }
 
-        /// <summary>
-        /// POST: Process and store EnvelopeBreaking data to database
-        /// This mimics the EnvelopeBreakage GET endpoint but saves to DB first
-        /// Captures ALL logic including extras with modified sort values
-        /// </summary>
         [HttpPost("ProcessEnvelopeBreaking")]
         public async Task<IActionResult> ProcessEnvelopeBreaking(int ProjectId)
         {
             try
             {
-                // Fetch all data
                 var envCaps = await _context.EnvelopesTypes
                     .Select(e => new { e.EnvelopeName, e.Capacity })
                     .ToListAsync();
@@ -84,15 +78,14 @@ namespace Tools.Controllers
                 string prevExtraMergeField = null;
                 int centerEnvCounter = 0;
                 int extraCenterEnvCounter = 0;
-                var nodalExtrasAddedForNodalCatch = new HashSet<(string NodalCode, string CatchNo)>();
-                var catchExtrasAdded = new HashSet<(int ExtraId, string CatchNo)>();
+                var nodalExtrasAddedForNodalCatch = new HashSet<(string, string)>();
+                var catchExtrasAdded = new HashSet<(int, string)>();
                 var extrasconfig = await _context.ExtraConfigurations
                     .Where(p => p.ProjectId == ProjectId)
                     .ToListAsync();
 
-                // Helper method to add extra envelopes with MODIFIED sort values
-                void AddExtraWithEnv(ExtraEnvelopes extra, string examDate, string examTime, string course, int NrQuantity, 
-                    string NodalCode, string CenterCode, int CenterSort, double NodalSort, int RouteSort, string Route)
+                void AddExtraWithEnv(ExtraEnvelopes extra, string examDate, string examTime, string course, int NrQuantity,
+                    string NodalCode, string CenterCode, int CenterSort, double NodalSort, int RouteSort, string Route, int nrDataId)
                 {
                     var extraConfig = extrasconfig.FirstOrDefault(e => e.ExtraType == extra.ExtraId);
                     int envCapacity = 0;
@@ -129,28 +122,27 @@ namespace Tools.Controllers
                         }
                         extraCenterEnvCounter++;
 
-                        // CRITICAL: Modify sort values based on ExtraId
                         int modifiedCenterSort = extra.ExtraId switch
                         {
-                            1 => 10000,      // Nodal Extra
-                            2 => 100000,     // University Extra
-                            3 => 1000000,    // Office Extra
+                            1 => 10000,
+                            2 => 100000,
+                            3 => 1000000,
                             _ => CenterSort
                         };
 
                         double modifiedNodalSort = extra.ExtraId switch
                         {
-                            1 => (int)NodalSort + 0.1,  // Nodal Extra: add 0.1 to previous NodalSort
-                            2 => 100000,                 // University Extra
-                            3 => 1000000,                // Office Extra
+                            1 => NodalSort + 0.1,
+                            2 => 100000,
+                            3 => 1000000,
                             _ => NodalSort
                         };
 
                         int modifiedRouteSort = extra.ExtraId switch
                         {
-                            1 => RouteSort,   // Nodal Extra: keep same RouteSort
-                            2 => 10000,       // University Extra
-                            3 => 100000,      // Office Extra
+                            1 => RouteSort,
+                            2 => 10000,
+                            3 => 100000,
                             _ => RouteSort
                         };
 
@@ -159,6 +151,7 @@ namespace Tools.Controllers
 
                         extraDict["ExtraAttached"] = true;
                         extraDict["ExtraId"] = extra.ExtraId;
+                        extraDict["NrDataId"] = nrDataId;
                         extraDict["CatchNo"] = extra.CatchNo;
                         extraDict["Quantity"] = extra.Quantity;
                         extraDict["EnvQuantity"] = envQuantity;
@@ -183,13 +176,11 @@ namespace Tools.Controllers
                         extraDict["NodalSort"] = modifiedNodalSort;
                         extraDict["CenterSort"] = modifiedCenterSort;
                         extraDict["RouteSort"] = modifiedRouteSort;
-                        extraDict["NrDataId"] = (int?)null;
 
                         resultList.Add(extraRow);
                     }
                 }
 
-                // Process NRData
                 for (int i = 0; i < nrData.Count; i++)
                 {
                     var current = nrData[i];
@@ -198,15 +189,14 @@ namespace Tools.Controllers
                     if (catchNoChanged)
                     {
                         var prevNrData = nrData[i - 1];
-                        // Add final extras for previous CatchNo
                         if (!nodalExtrasAddedForNodalCatch.Contains((prevNrData.NodalCode, prevCatchNo)))
                         {
                             var extrasToAdd = extras.Where(e => e.ExtraId == 1 && e.CatchNo == prevCatchNo).ToList();
                             foreach (var extra in extrasToAdd)
                             {
                                 AddExtraWithEnv(extra, prevNrData.ExamDate, prevNrData.ExamTime, prevNrData.CourseName,
-                                    prevNrData.NRQuantity, prevNrData.NodalCode, prevNrData.CenterCode, prevNrData.CenterSort, 
-                                    prevNrData.NodalSort, prevNrData.RouteSort, prevNrData.Route);
+                                    prevNrData.NRQuantity, prevNrData.NodalCode, prevNrData.CenterCode, prevNrData.CenterSort,
+                                    prevNrData.NodalSort, prevNrData.RouteSort, prevNrData.Route, prevNrData.Id);
                             }
                             nodalExtrasAddedForNodalCatch.Add((prevNrData.NodalCode, prevCatchNo));
                         }
@@ -219,15 +209,14 @@ namespace Tools.Controllers
                                 foreach (var extra in extrasToAdd)
                                 {
                                     AddExtraWithEnv(extra, prevNrData.ExamDate, prevNrData.ExamTime, prevNrData.CourseName,
-                                        prevNrData.NRQuantity, prevNrData.NodalCode, prevNrData.CenterCode, prevNrData.CenterSort, 
-                                        prevNrData.NodalSort, prevNrData.RouteSort, prevNrData.Route);
+                                        prevNrData.NRQuantity, prevNrData.NodalCode, prevNrData.CenterCode, prevNrData.CenterSort,
+                                        prevNrData.NodalSort, prevNrData.RouteSort, prevNrData.Route, prevNrData.Id);
                                 }
                                 catchExtrasAdded.Add((extraId, prevCatchNo));
                             }
                         }
                     }
 
-                    // Nodal Extra when NodalCode changes (but not CatchNo)
                     if (!catchNoChanged && prevNodalCode != null && current.NodalCode != prevNodalCode)
                     {
                         if (!nodalExtrasAddedForNodalCatch.Contains((prevNodalCode, current.CatchNo)))
@@ -236,14 +225,13 @@ namespace Tools.Controllers
                             foreach (var extra in extrasToAdd)
                             {
                                 AddExtraWithEnv(extra, current.ExamDate, current.ExamTime, current.CourseName,
-                                    current.NRQuantity, prevNodalCode, current.CenterCode, current.CenterSort, 
-                                    prevNodalSort, prevRouteSort, prevRoute);
+                                    current.NRQuantity, prevNodalCode, current.CenterCode, current.CenterSort,
+                                    prevNodalSort, prevRouteSort, prevRoute, current.Id);
                             }
                             nodalExtrasAddedForNodalCatch.Add((prevNodalCode, current.CatchNo));
                         }
                     }
 
-                    // Add current NRData row with TotalEnv replication
                     int totalEnv = envDict.TryGetValue(current.Id, out var envData) && envData.TotalEnvelope > 0
                         ? envData.TotalEnvelope
                         : 1;
@@ -353,7 +341,6 @@ namespace Tools.Controllers
                     prevCatchNo = current.CatchNo;
                 }
 
-                // Final extras for the last CatchNo
                 if (prevCatchNo != null)
                 {
                     var lastNrData = nrData.LastOrDefault();
@@ -365,8 +352,8 @@ namespace Tools.Controllers
                             foreach (var extra in extrasToAdd)
                             {
                                 AddExtraWithEnv(extra, lastNrData.ExamDate, lastNrData.ExamTime, lastNrData.CourseName,
-                                    lastNrData.NRQuantity, lastNrData.NodalCode, lastNrData.CenterCode, lastNrData.CenterSort, 
-                                    lastNrData.NodalSort, lastNrData.RouteSort, lastNrData.Route);
+                                    lastNrData.NRQuantity, lastNrData.NodalCode, lastNrData.CenterCode, lastNrData.CenterSort,
+                                    lastNrData.NodalSort, lastNrData.RouteSort, lastNrData.Route, lastNrData.Id);
                             }
                         }
 
@@ -378,28 +365,25 @@ namespace Tools.Controllers
                                 foreach (var extra in extrasToAdd)
                                 {
                                     AddExtraWithEnv(extra, lastNrData.ExamDate, lastNrData.ExamTime, lastNrData.CourseName,
-                                        lastNrData.NRQuantity, lastNrData.NodalCode, lastNrData.CenterCode, lastNrData.CenterSort, 
-                                        lastNrData.NodalSort, lastNrData.RouteSort, lastNrData.Route);
+                                        lastNrData.NRQuantity, lastNrData.NodalCode, lastNrData.CenterCode, lastNrData.CenterSort,
+                                        lastNrData.NodalSort, lastNrData.RouteSort, lastNrData.Route, lastNrData.Id);
                                 }
                             }
                         }
                     }
                 }
 
-                // Get current batch number
                 var maxBatch = await _context.EnvelopeBreakingResults
                     .Where(r => r.ProjectId == ProjectId)
                     .MaxAsync(r => (int?)r.UploadBatch) ?? 0;
                 int currentBatch = maxBatch + 1;
 
-                // Calculate SerialNumber and BookletSerial
                 int currentStartNumber = projectconfig.OmrSerialNumber;
                 bool assignBookletSerial = currentStartNumber > 0;
                 bool resetOmrSerialOnCatchChange = projectconfig.ResetOmrSerialOnCatchChange;
                 string prevCatchForSerial = null;
                 int serial = 1;
 
-                // Save to database
                 var envelopeResults = new List<EnvelopeBreakingResult>();
 
                 foreach (var item in resultList)
@@ -408,11 +392,16 @@ namespace Tools.Controllers
                     bool isExtra = (bool)dict["ExtraAttached"];
                     string catchNo = dict["CatchNo"]?.ToString();
 
-                    // Reset serial and booklet number when CatchNo changes
+                    // ✅ Reset serial number whenever CatchNo changes (not just for OmrSerial)
+                    if (prevCatchForSerial != null && catchNo != prevCatchForSerial)
+                    {
+                        serial = 1;
+                    }
+
+                    // ✅ Reset OmrSerial only if the flag is set
                     if (resetOmrSerialOnCatchChange && prevCatchForSerial != null && catchNo != prevCatchForSerial)
                     {
                         currentStartNumber = projectconfig.OmrSerialNumber;
-                        serial = 1;
                     }
 
                     int? nrDataId = null;
@@ -421,6 +410,7 @@ namespace Tools.Controllers
                     if (isExtra)
                     {
                         extraId = (int?)dict["ExtraId"];
+                        nrDataId = (int?)dict["NrDataId"];
                     }
                     else
                     {
@@ -435,17 +425,14 @@ namespace Tools.Controllers
                         currentStartNumber += envQuantity;
                     }
 
-                    // Calculate modified sort values for extras
                     double? modifiedNodalSort = null;
                     int? modifiedCenterSort = null;
                     int? modifiedRouteSort = null;
-                    string? nodalCodeRef = null;
-                    string? routeRef = null;
+                    string nodalCodeRef = null;
+                    string routeRef = null;
 
                     if (isExtra)
                     {
-                        // For extras, the modified values were already calculated in AddExtraWithEnv
-                        // We just need to store them as-is from the dict
                         modifiedCenterSort = (int?)dict["CenterSort"];
                         modifiedNodalSort = Convert.ToDouble(dict["NodalSort"]);
                         modifiedRouteSort = (int?)dict["RouteSort"];
@@ -456,7 +443,7 @@ namespace Tools.Controllers
                     envelopeResults.Add(new EnvelopeBreakingResult
                     {
                         ProjectId = ProjectId,
-                        NrDataId = nrDataId,
+                        NrDataId = nrDataId ?? 0,
                         ExtraId = extraId,
                         CatchNo = catchNo,
                         EnvQuantity = (int)dict["EnvQuantity"],
@@ -476,11 +463,6 @@ namespace Tools.Controllers
                         RouteSort = (int)dict["RouteSort"],
                         NRQuantity = (int)dict["NRQuantity"],
                         CourseName = dict["CourseName"]?.ToString(),
-                        NodalSortModified = modifiedNodalSort,
-                        CenterSortModified = modifiedCenterSort,
-                        RouteSortModified = modifiedRouteSort,
-                        NodalCodeRef = nodalCodeRef,
-                        RouteRef = routeRef,
                         UploadBatch = currentBatch
                     });
 
@@ -509,11 +491,6 @@ namespace Tools.Controllers
                 return StatusCode(500, new { error = ex.Message });
             }
         }
-
-        /// <summary>
-        /// GET: Retrieve EnvelopeBreaking data from database and generate Excel
-        /// Applies sorting and calculates SerialNumber
-        /// </summary>
         [HttpGet("GetEnvelopeBreakingReport")]
         public async Task<IActionResult> GetEnvelopeBreakingReport(int ProjectId, int? uploadBatch = null)
         {
@@ -576,14 +553,14 @@ namespace Tools.Controllers
                     rowDict["CatchNo"] = result.CatchNo ?? "";
                     rowDict["CenterCode"] = result.CenterCode ?? "";
                     // Use modified values if they exist (for extras), otherwise use original
-                    rowDict["CenterSort"] = result.CenterSortModified ?? result.CenterSort;
+                    rowDict["CenterSort"] = result.CenterSort;
                     rowDict["ExamTime"] = result.ExamTime ?? "";
                     rowDict["ExamDate"] = result.ExamDate ?? "";
                     rowDict["Quantity"] = result.Quantity;
                     rowDict["NodalCode"] = result.NodalCode ?? "";
-                    rowDict["NodalSort"] = result.NodalSortModified ?? result.NodalSort;
+                    rowDict["NodalSort"] = result.NodalSort;
                     rowDict["Route"] = result.Route ?? "";
-                    rowDict["RouteSort"] = result.RouteSortModified ?? result.RouteSort;
+                    rowDict["RouteSort"] =  result.RouteSort;
                     rowDict["NRQuantity"] = result.NRQuantity;
                     rowDict["CourseName"] = result.CourseName ?? "";
 
@@ -678,7 +655,7 @@ namespace Tools.Controllers
                     var ws = package.Workbook.Worksheets.Add("Envelope Report");
 
                     var headers = new[] { "Serial Number", "Catch No", "Center Code", "Center Sort", "Quantity", "EnvQuantity",
-                        "Center Env", "Total Env", "Env", "NRQuantity", "Nodal Code", "Nodal Sort", "Route", "Route Sort", 
+                        "Center Env", "Total Env", "Env", "NRQuantity", "Nodal Code", "Nodal Sort", "Route", "Route Sort",
                         "Exam Time", "Exam Date", "BookletSerial", "CourseName" };
 
                     for (int i = 0; i < headers.Length; i++)
