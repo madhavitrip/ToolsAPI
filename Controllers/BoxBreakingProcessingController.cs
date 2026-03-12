@@ -1,22 +1,16 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
-using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using ERPToolsAPI.Data;
-using Tools.Models;
-using System.Text.Json;
+using Microsoft.Extensions.Options;
 using OfficeOpenXml;
 using System.Reflection;
+using Tools.Data;
+using Tools.Models;
 using Tools.Services;
-using Microsoft.Extensions.Options;
 
 namespace Tools.Controllers
 {
-    [Route("api/[controller]")]
     [ApiController]
+    [Route("api/[controller]")]
     public class BoxBreakingProcessingController : ControllerBase
     {
         private readonly ERPToolsDbContext _context;
@@ -30,10 +24,6 @@ namespace Tools.Controllers
             _apiSettings = apiSettings.Value;
         }
 
-        /// <summary>
-        /// POST: Process and store BoxBreaking data to database
-        /// This mimics the Replication GET endpoint but saves to DB first
-        /// </summary>
         [HttpPost("ProcessBoxBreaking")]
         public async Task<IActionResult> ProcessBoxBreaking(int ProjectId)
         {
@@ -104,7 +94,7 @@ namespace Tools.Controllers
                     .FirstOrDefaultAsync();
 
                 // ==============================
-                // Read from EnvelopeBreakingResults
+                // Read from EnvelopeBreakingResults and build data rows
                 // ==============================
                 var breakingReportData = new List<dynamic>();
 
@@ -113,6 +103,7 @@ namespace Tools.Controllers
                     dynamic row = new System.Dynamic.ExpandoObject();
                     var rowDict = (IDictionary<string, object>)row;
 
+                    // Get data from EnvelopeBreakingResults first
                     rowDict["CatchNo"] = result.CatchNo;
                     rowDict["CenterCode"] = result.CenterCode;
                     rowDict["CenterSort"] = result.CenterSort;
@@ -125,9 +116,22 @@ namespace Tools.Controllers
                     rowDict["NodalSort"] = result.NodalSort;
                     rowDict["Route"] = result.Route;
                     rowDict["RouteSort"] = result.RouteSort;
-                    rowDict["OmrSerial"] = "";
                     rowDict["CourseName"] = result.CourseName ?? "";
                     rowDict["EnvelopeBreakingResultId"] = result.Id;
+                    rowDict["NrDataId"] = result.NrDataId;
+
+                    // Fallback to NRData if needed
+                    var nrRow = nrData.FirstOrDefault(n => n.Id == result.NrDataId);
+                    if (nrRow != null)
+                    {
+                        rowDict["Symbol"] = nrRow.Symbol ?? "";
+                        rowDict["Pages"] = nrRow.Pages;
+                    }
+                    else
+                    {
+                        rowDict["Symbol"] = "";
+                        rowDict["Pages"] = 0;
+                    }
 
                     breakingReportData.Add(row);
                 }
@@ -251,11 +255,10 @@ namespace Tools.Controllers
                 foreach (var item in sortedList)
                 {
                     var itemDict = (IDictionary<string, object>)item;
-                    var nrRow = nrData.FirstOrDefault(n => n.CatchNo == itemDict["CatchNo"]?.ToString());
-                    int pages = nrRow?.Pages ?? 0;
+                    int pages = (int)itemDict["Pages"];
                     int quantity = (int)itemDict["Quantity"];
                     int totalPages = quantity * pages;
-                    string currentSymbol = resetOnSymbolChange ? (nrRow?.Symbol ?? "") : "";
+                    string currentSymbol = resetOnSymbolChange ? (itemDict["Symbol"]?.ToString() ?? "") : "";
                     string currentCourseName = itemDict["CourseName"]?.ToString() ?? "";
 
                     if (previousCourse != null && currentCourseName != previousCourse)
@@ -421,67 +424,37 @@ namespace Tools.Controllers
         /// <summary>
         /// GET: Retrieve BoxBreaking data from database and generate Excel
         /// </summary>
+
         [HttpGet("GetBoxBreakingReport")]
-        public async Task<IActionResult> GetBoxBreakingReport(int ProjectId, int? uploadBatch = null)
+        public async Task<IActionResult> GetBoxBreakingReport(int ProjectId)
         {
             try
             {
-                var projectconfig = await _context.ProjectConfigs
-                    .Where(p => p.ProjectId == ProjectId)
-                    .FirstOrDefaultAsync();
+                var boxResults = await _context.BoxBreakingResults
+                    .Where(r => r.ProjectId == ProjectId)
+                    .OrderByDescending(r => r.UploadBatch)
+                    .ThenBy(r => r.SerialNumber)
+                    .ToListAsync();
 
-                if (projectconfig == null)
-                    return NotFound("Project config not found");
+                if (!boxResults.Any())
+                    return NotFound("No box breaking results found");
 
-                bool resetOnSymbolChange = projectconfig.ResetOnSymbolChange;
-                bool InnerBundling = projectconfig.IsInnerBundlingDone;
+                var envelopeResults = await _context.EnvelopeBreakingResults
+                    .ToListAsync();
 
                 var nrData = await _context.NRDatas
                     .Where(p => p.ProjectId == ProjectId)
                     .ToListAsync();
 
-                // Get results from database
-                IQueryable<BoxBreakingResult> query = _context.BoxBreakingResults
-                    .Where(r => r.ProjectId == ProjectId);
-
-                if (uploadBatch.HasValue)
-                {
-                    query = query.Where(r => r.UploadBatch == uploadBatch.Value);
-                }
-                else
-                {
-                    // Get latest batch
-                    var maxBatch = await _context.BoxBreakingResults
-                        .Where(r => r.ProjectId == ProjectId)
-                        .MaxAsync(r => (int?)r.UploadBatch);
-                    if (maxBatch.HasValue)
-                    {
-                        query = query.Where(r => r.UploadBatch == maxBatch.Value);
-                    }
-                }
-
-                var results = await query.ToListAsync();
-
-                if (!results.Any())
-                    return NotFound("No box breaking results found");
-
-                // Join with EnvelopeBreakingResults to get all details
-                var envelopeBreakingResults = await _context.EnvelopeBreakingResults
-                    .Where(x => x.ProjectId == ProjectId)
-                    .ToListAsync();
-
-                var resultsWithDetails = results.Select(r =>
-                {
-                    var envelopeResult = envelopeBreakingResults.FirstOrDefault(e => e.Id == r.EnvelopeBreakingResultId);
-                    var nrRow = envelopeResult != null ? nrData.FirstOrDefault(n => n.CatchNo == envelopeResult.CatchNo) : null;
-                    return new { Result = r, EnvelopeResult = envelopeResult, NrRow = nrRow };
-                }).ToList();
-
-                // Generate Excel
                 var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
-                Directory.CreateDirectory(reportPath);
+                if (!Directory.Exists(reportPath))
+                {
+                    Directory.CreateDirectory(reportPath);
+                }
 
-                var filePath = Path.Combine(reportPath, "BoxBreakingFromDB.xlsx");
+                var filename = "BoxBreakingReport.xlsx";
+                var filePath = Path.Combine(reportPath, filename);
+
                 if (System.IO.File.Exists(filePath))
                 {
                     System.IO.File.Delete(filePath);
@@ -491,141 +464,68 @@ namespace Tools.Controllers
                 {
                     var worksheet = package.Workbook.Worksheets.Add("BoxBreaking");
 
-                    bool hasAnyOmr = results.Any(x => !string.IsNullOrWhiteSpace(x.OmrSerial));
-
                     // Headers
-                    var headers = new List<string>
-                    {
-                        "SerialNumber", "CatchNo", "CenterCode", "CenterSort", "ExamTime", "ExamDate",
-                        "Quantity", "NodalCode", "NodalSort", "Route", "RouteSort", "TotalEnv",
-                        "Start", "End", "Serial", "TotalPages"
-                    };
-
-                    int nextCol = 17;
-                    int symbolCol = -1;
-                    int courseCol = -1;
-
-                    if (resetOnSymbolChange)
-                    {
-                        headers.Add("Symbol");
-                        symbolCol = nextCol;
-                        nextCol++;
-
-                        headers.Add("CourseName");
-                        courseCol = nextCol;
-                        nextCol++;
-                    }
-
-                    headers.Add("BoxNo");
-                    int boxCol = nextCol;
-                    nextCol++;
-
-                    int omrCol = -1;
-                    if (hasAnyOmr)
-                    {
-                        headers.Add("OmrSerial");
-                        omrCol = nextCol;
-                        nextCol++;
-                    }
-
-                    int innerBundlingCol = -1;
-                    if (InnerBundling)
-                    {
-                        headers.Add("InnerBundlingSerial");
-                        innerBundlingCol = nextCol;
-                        nextCol++;
-                    }
-
-                    for (int i = 0; i < headers.Count; i++)
-                    {
-                        worksheet.Cells[1, i + 1].Value = headers[i];
-                        worksheet.Cells[1, i + 1].Style.Font.Bold = true;
-                    }
+                    worksheet.Cells[1, 1].Value = "SerialNumber";
+                    worksheet.Cells[1, 2].Value = "CatchNo";
+                    worksheet.Cells[1, 3].Value = "CenterCode";
+                    worksheet.Cells[1, 4].Value = "CenterSort";
+                    worksheet.Cells[1, 5].Value = "ExamTime";
+                    worksheet.Cells[1, 6].Value = "ExamDate";
+                    worksheet.Cells[1, 7].Value = "Quantity";
+                    worksheet.Cells[1, 8].Value = "NodalCode";
+                    worksheet.Cells[1, 9].Value = "NodalSort";
+                    worksheet.Cells[1, 10].Value = "Route";
+                    worksheet.Cells[1, 11].Value = "RouteSort";
+                    worksheet.Cells[1, 12].Value = "TotalEnv";
+                    worksheet.Cells[1, 13].Value = "Start";
+                    worksheet.Cells[1, 14].Value = "End";
+                    worksheet.Cells[1, 15].Value = "Serial";
+                    worksheet.Cells[1, 16].Value = "Pages";
+                    worksheet.Cells[1, 17].Value = "TotalPages";
+                    worksheet.Cells[1, 18].Value = "BoxNo";
+                    worksheet.Cells[1, 19].Value = "OmrSerial";
+                    worksheet.Cells[1, 20].Value = "InnerBundlingSerial";
 
                     int row = 2;
-                    int serial = 1;
-
-                    foreach (var item in resultsWithDetails)
+                    foreach (var result in boxResults)
                     {
-                        var result = item.Result;
-                        var envelopeResult = item.EnvelopeResult;
-                        var nrRow = item.NrRow;
+                        // Get EnvelopeBreakingResult data
+                        var envResult = envelopeResults.FirstOrDefault(e => e.Id == result.EnvelopeBreakingResultId);
+                        if (envResult == null)
+                            continue;
 
-                        // Get values from EnvelopeBreakingResults first, fallback to NRData
-                        var catchNo = envelopeResult?.CatchNo ?? nrRow?.CatchNo ?? "";
-                        var centerCode = envelopeResult?.CenterCode ?? nrRow?.CenterCode ?? "";
-                        var centerSort = envelopeResult?.CenterSort ?? nrRow?.CenterSort ?? 0;
-                        var examTime = envelopeResult?.ExamTime ?? nrRow?.ExamTime ?? "";
-                        var examDate = envelopeResult?.ExamDate ?? nrRow?.ExamDate ?? "";
-                        var quantity = envelopeResult?.Quantity ?? nrRow?.Quantity ?? 0;
-                        var nodalCode = envelopeResult?.NodalCode ?? nrRow?.NodalCode ?? "";
-                        var nodalSort = envelopeResult?.NodalSort ?? nrRow?.NodalSort ?? 0;
-                        var route = envelopeResult?.Route ?? nrRow?.Route ?? "";
-                        var routeSort = envelopeResult?.RouteSort ?? nrRow?.RouteSort ?? 0;
-                        var totalEnv = envelopeResult?.TotalEnv ?? 0;
-                        var symbol = nrRow?.Symbol ?? "";
-                        var courseName = envelopeResult?.CourseName ?? nrRow?.CourseName ?? "";
+                        // Get NRData for additional fields
+                        var nrRow = nrData.FirstOrDefault(n => n.Id == envResult.NrDataId);
 
-                        worksheet.Cells[row, 1].Value = serial++;
-                        worksheet.Cells[row, 2].Value = catchNo;
-                        worksheet.Cells[row, 3].Value = centerCode;
-                        worksheet.Cells[row, 4].Value = centerSort;
-                        worksheet.Cells[row, 5].Value = examTime;
-                        worksheet.Cells[row, 6].Value = examDate;
-                        worksheet.Cells[row, 7].Value = quantity;
-                        worksheet.Cells[row, 8].Value = nodalCode;
-                        worksheet.Cells[row, 9].Value = nodalSort;
-                        worksheet.Cells[row, 10].Value = route;
-                        worksheet.Cells[row, 11].Value = routeSort;
-                        worksheet.Cells[row, 12].Value = totalEnv;
+                        worksheet.Cells[row, 1].Value = result.SerialNumber;
+                        worksheet.Cells[row, 2].Value = envResult.CatchNo;
+                        worksheet.Cells[row, 3].Value = envResult.CenterCode;
+                        worksheet.Cells[row, 4].Value = envResult.CenterSort;
+                        worksheet.Cells[row, 5].Value = envResult.ExamTime;
+                        worksheet.Cells[row, 6].Value = envResult.ExamDate;
+                        worksheet.Cells[row, 7].Value = envResult.Quantity;
+                        worksheet.Cells[row, 8].Value = envResult.NodalCode;
+                        worksheet.Cells[row, 9].Value = envResult.NodalSort;
+                        worksheet.Cells[row, 10].Value = envResult.Route;
+                        worksheet.Cells[row, 11].Value = envResult.RouteSort;
+                        worksheet.Cells[row, 12].Value = envResult.TotalEnv;
                         worksheet.Cells[row, 13].Value = result.Start;
                         worksheet.Cells[row, 14].Value = result.End;
                         worksheet.Cells[row, 15].Value = result.Serial;
-                        worksheet.Cells[row, 16].Value = result.TotalPages;
-
-                        int colIdx = 17;
-
-                        if (symbolCol > 0)
-                        {
-                            worksheet.Cells[row, symbolCol].Value = symbol;
-                        }
-
-                        if (courseCol > 0)
-                        {
-                            worksheet.Cells[row, courseCol].Value = courseName;
-                        }
-
-                        worksheet.Cells[row, boxCol].Value = result.BoxNo;
-
-                        if (omrCol > 0)
-                        {
-                            worksheet.Cells[row, omrCol].Value = result.OmrSerial;
-                        }
-
-                        if (innerBundlingCol > 0)
-                        {
-                            worksheet.Cells[row, innerBundlingCol].Value = result.InnerBundlingSerial;
-                        }
+                        worksheet.Cells[row, 16].Value = nrRow?.Pages ?? 0;
+                        worksheet.Cells[row, 17].Value = result.TotalPages;
+                        worksheet.Cells[row, 18].Value = result.BoxNo;
+                        worksheet.Cells[row, 19].Value = result.OmrSerial;
+                        worksheet.Cells[row, 20].Value = result.InnerBundlingSerial;
 
                         row++;
                     }
 
-                    worksheet.Cells[worksheet.Dimension.Address].AutoFitColumns();
-                    package.SaveAs(new FileInfo(filePath));
+                    FileInfo fi = new FileInfo(filePath);
+                    package.SaveAs(fi);
                 }
 
-                _loggerService.LogEvent(
-                    $"Generated box breaking report from DB for ProjectId {ProjectId}",
-                    "BoxBreakingProcessing",
-                    User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
-                    ProjectId);
-
-                return Ok(new
-                {
-                    message = "Report generated successfully",
-                    filePath = filePath,
-                    recordsCount = resultsWithDetails.Count
-                });
+                return Ok(new { message = "Report generated successfully", filePath });
             }
             catch (Exception ex)
             {
