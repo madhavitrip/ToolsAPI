@@ -12,8 +12,8 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace Tools.Migrations
 {
     [DbContext(typeof(ERPToolsDbContext))]
-    [Migration("20250923071718_Changes in EnvelopeBreakages")]
-    partial class ChangesinEnvelopeBreakages
+    [Migration("20260311193442_changes")]
+    partial class changes
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
@@ -81,6 +81,67 @@ namespace Tools.Migrations
                     b.ToTable("UserLoginLogs");
                 });
 
+            modelBuilder.Entity("Tools.Models.BoxBreakingResult", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("BoxNo")
+                        .IsRequired()
+                        .HasColumnType("varchar(255)");
+
+                    b.Property<string>("CatchNo")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("End")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("ExtraId")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("InnerBundlingSerial")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("NrDataId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("OmrSerial")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<int>("ProjectId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Serial")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<int>("SerialNumber")
+                        .HasColumnType("int");
+
+                    b.Property<int>("Start")
+                        .HasColumnType("int");
+
+                    b.Property<int>("TotalPages")
+                        .HasColumnType("int");
+
+                    b.Property<int>("UploadBatch")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ProjectId", "NrDataId", "BoxNo");
+
+                    b.ToTable("BoxBreakingResults");
+                });
+
             modelBuilder.Entity("Tools.Models.BoxCapacity", b =>
                 {
                     b.Property<int>("BoxCapacityId")
@@ -95,6 +156,34 @@ namespace Tools.Migrations
                     b.HasKey("BoxCapacityId");
 
                     b.ToTable("BoxCapacity");
+                });
+
+            modelBuilder.Entity("Tools.Models.ConflictingFields", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("CatchNo")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("ConflictingField")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<int>("ProjectId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("UniqueField")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("ConflictingFields");
                 });
 
             modelBuilder.Entity("Tools.Models.EnvelopeBreakage", b =>
@@ -119,13 +208,87 @@ namespace Tools.Migrations
                     b.Property<int>("ProjectId")
                         .HasColumnType("int");
 
-                    b.Property<string>("TotalEnvelope")
-                        .IsRequired()
-                        .HasColumnType("longtext");
+                    b.Property<int>("TotalEnvelope")
+                        .HasColumnType("int");
 
                     b.HasKey("EnvelopeId");
 
+                    b.HasIndex("NrDataId")
+                        .IsUnique();
+
                     b.ToTable("EnvelopeBreakages");
+                });
+
+            modelBuilder.Entity("Tools.Models.EnvelopeBreakingResult", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("BookletSerial")
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("CatchNo")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("CenterCode")
+                        .HasColumnType("longtext");
+
+                    b.Property<int>("CenterEnv")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("CenterSortModified")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Env")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<int>("EnvQuantity")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("ExtraId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("NodalCodeRef")
+                        .HasColumnType("longtext");
+
+                    b.Property<double?>("NodalSortModified")
+                        .HasColumnType("double");
+
+                    b.Property<int?>("NrDataId")
+                        .HasColumnType("int");
+
+                    b.Property<int>("ProjectId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Route")
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("RouteRef")
+                        .HasColumnType("longtext");
+
+                    b.Property<int?>("RouteSortModified")
+                        .HasColumnType("int");
+
+                    b.Property<int>("SerialNumber")
+                        .HasColumnType("int");
+
+                    b.Property<int>("TotalEnv")
+                        .HasColumnType("int");
+
+                    b.Property<int>("UploadBatch")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("EnvelopeBreakingResults");
                 });
 
             modelBuilder.Entity("Tools.Models.EnvelopeType", b =>
@@ -146,6 +309,70 @@ namespace Tools.Migrations
                     b.HasKey("EnvelopeId");
 
                     b.ToTable("EnvelopesTypes");
+                });
+
+            modelBuilder.Entity("Tools.Models.ErrorLog", b =>
+                {
+                    b.Property<int>("ErrorId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("ErrorId"));
+
+                    b.Property<string>("Error")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<DateTime>("LoggedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Message")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("Occurance")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.HasKey("ErrorId");
+
+                    b.ToTable("ErrorLogs");
+                });
+
+            modelBuilder.Entity("Tools.Models.EventLog", b =>
+                {
+                    b.Property<int>("EventId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("EventId"));
+
+                    b.Property<string>("Category")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("Event")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<int>("EventTriggeredBy")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("LoggedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("NewValue")
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("OldValue")
+                        .HasColumnType("longtext");
+
+                    b.Property<int>("ProjectId")
+                        .HasColumnType("int");
+
+                    b.HasKey("EventId");
+
+                    b.ToTable("EventLogs");
                 });
 
             modelBuilder.Entity("Tools.Models.ExtraEnvelopes", b =>
@@ -284,6 +511,9 @@ namespace Tools.Migrations
                     b.Property<string>("CenterCode")
                         .HasColumnType("longtext");
 
+                    b.Property<int>("CenterSort")
+                        .HasColumnType("int");
+
                     b.Property<string>("CourseName")
                         .HasColumnType("longtext");
 
@@ -296,21 +526,56 @@ namespace Tools.Migrations
                     b.Property<string>("NRDatas")
                         .HasColumnType("longtext");
 
+                    b.Property<int>("NRQuantity")
+                        .HasColumnType("int");
+
                     b.Property<string>("NodalCode")
                         .HasColumnType("longtext");
+
+                    b.Property<int>("NodalSort")
+                        .HasColumnType("int");
+
+                    b.Property<int>("Pages")
+                        .HasColumnType("int");
 
                     b.Property<int>("ProjectId")
                         .HasColumnType("int");
 
-                    b.Property<int?>("Quantity")
+                    b.Property<int>("Quantity")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Route")
+                        .HasColumnType("longtext");
+
+                    b.Property<int>("RouteSort")
                         .HasColumnType("int");
 
                     b.Property<string>("SubjectName")
                         .HasColumnType("longtext");
 
+                    b.Property<string>("Symbol")
+                        .HasColumnType("longtext");
+
                     b.HasKey("Id");
 
                     b.ToTable("NRDatas");
+                });
+
+            modelBuilder.Entity("Tools.Models.Project", b =>
+                {
+                    b.Property<int>("ProjectId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("ProjectId"));
+
+                    b.Property<string>("UserAssigned")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.HasKey("ProjectId");
+
+                    b.ToTable("Projects");
                 });
 
             modelBuilder.Entity("Tools.Models.ProjectConfig", b =>
@@ -321,20 +586,60 @@ namespace Tools.Migrations
 
                     MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
 
-                    b.Property<string>("BoxBreaking")
+                    b.Property<string>("BoxBreakingCriteria")
                         .IsRequired()
                         .HasColumnType("longtext");
+
+                    b.Property<int>("BoxCapacity")
+                        .HasColumnType("int");
+
+                    b.Property<int>("BoxNumber")
+                        .HasColumnType("int");
+
+                    b.Property<string>("DuplicateCriteria")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("DuplicateRemoveFields")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<double>("Enhancement")
+                        .HasColumnType("double");
 
                     b.Property<string>("Envelope")
                         .IsRequired()
                         .HasColumnType("longtext");
 
+                    b.Property<string>("EnvelopeMakingCriteria")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("InnerBundlingCriteria")
+                        .HasColumnType("longtext");
+
+                    b.Property<bool>("IsInnerBundlingDone")
+                        .HasColumnType("tinyint(1)");
+
                     b.Property<string>("Modules")
                         .IsRequired()
                         .HasColumnType("longtext");
 
+                    b.Property<int>("OmrSerialNumber")
+                        .HasColumnType("int");
+
                     b.Property<int>("ProjectId")
                         .HasColumnType("int");
+
+                    b.Property<bool>("ResetOmrSerialOnCatchChange")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<bool>("ResetOnSymbolChange")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<string>("SortingBoxReport")
+                        .IsRequired()
+                        .HasColumnType("longtext");
 
                     b.HasKey("Id");
 

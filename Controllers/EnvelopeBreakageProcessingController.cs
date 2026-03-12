@@ -47,7 +47,6 @@ namespace Tools.Controllers
 
                 var nrData = await _context.NRDatas
                     .Where(p => p.ProjectId == ProjectId)
-                    .Where(p => p.ProcessingStatus == "Processed")
                     .OrderBy(p => p.CatchNo)
                     .ThenBy(p => p.RouteSort)
                     .ThenBy(p => p.NodalSort)
@@ -436,6 +435,24 @@ namespace Tools.Controllers
                         currentStartNumber += envQuantity;
                     }
 
+                    // Calculate modified sort values for extras
+                    double? modifiedNodalSort = null;
+                    int? modifiedCenterSort = null;
+                    int? modifiedRouteSort = null;
+                    string? nodalCodeRef = null;
+                    string? routeRef = null;
+
+                    if (isExtra)
+                    {
+                        // For extras, the modified values were already calculated in AddExtraWithEnv
+                        // We just need to store them as-is from the dict
+                        modifiedCenterSort = (int?)dict["CenterSort"];
+                        modifiedNodalSort = Convert.ToDouble(dict["NodalSort"]);
+                        modifiedRouteSort = (int?)dict["RouteSort"];
+                        nodalCodeRef = dict["NodalCode"]?.ToString();
+                        routeRef = dict["Route"]?.ToString();
+                    }
+
                     envelopeResults.Add(new EnvelopeBreakingResult
                     {
                         ProjectId = ProjectId,
@@ -459,6 +476,11 @@ namespace Tools.Controllers
                         RouteSort = (int)dict["RouteSort"],
                         NRQuantity = (int)dict["NRQuantity"],
                         CourseName = dict["CourseName"]?.ToString(),
+                        NodalSortModified = modifiedNodalSort,
+                        CenterSortModified = modifiedCenterSort,
+                        RouteSortModified = modifiedRouteSort,
+                        NodalCodeRef = nodalCodeRef,
+                        RouteRef = routeRef,
                         UploadBatch = currentBatch
                     });
 
@@ -490,12 +512,33 @@ namespace Tools.Controllers
 
         /// <summary>
         /// GET: Retrieve EnvelopeBreaking data from database and generate Excel
+        /// Applies sorting and calculates SerialNumber
         /// </summary>
         [HttpGet("GetEnvelopeBreakingReport")]
         public async Task<IActionResult> GetEnvelopeBreakingReport(int ProjectId, int? uploadBatch = null)
         {
             try
             {
+                var projectconfig = await _context.ProjectConfigs
+                    .Where(p => p.ProjectId == ProjectId)
+                    .FirstOrDefaultAsync();
+
+                if (projectconfig == null)
+                    return NotFound("Project config not found");
+
+                var nrData = await _context.NRDatas
+                    .Where(p => p.ProjectId == ProjectId)
+                    .ToListAsync();
+
+                var fields = await _context.Fields
+                    .Where(f => projectconfig.EnvelopeMakingCriteria.Contains(f.FieldId))
+                    .ToListAsync();
+
+                var fieldNames = fields
+                    .OrderBy(f => projectconfig.EnvelopeMakingCriteria.IndexOf(f.FieldId))
+                    .Select(f => f.Name)
+                    .ToList();
+
                 // Get results from database
                 IQueryable<EnvelopeBreakingResult> query = _context.EnvelopeBreakingResults
                     .Where(r => r.ProjectId == ProjectId);
@@ -520,6 +563,105 @@ namespace Tools.Controllers
 
                 if (!results.Any())
                     return NotFound("No envelope breaking results found");
+
+                // Build full data with all fields for sorting
+                var fullData = new List<dynamic>();
+
+                foreach (var result in results)
+                {
+                    var row = new System.Dynamic.ExpandoObject();
+                    var rowDict = (IDictionary<string, object>)row;
+
+                    // All fields already in DB - no need to join with NRData
+                    rowDict["CatchNo"] = result.CatchNo ?? "";
+                    rowDict["CenterCode"] = result.CenterCode ?? "";
+                    // Use modified values if they exist (for extras), otherwise use original
+                    rowDict["CenterSort"] = result.CenterSortModified ?? result.CenterSort;
+                    rowDict["ExamTime"] = result.ExamTime ?? "";
+                    rowDict["ExamDate"] = result.ExamDate ?? "";
+                    rowDict["Quantity"] = result.Quantity;
+                    rowDict["NodalCode"] = result.NodalCode ?? "";
+                    rowDict["NodalSort"] = result.NodalSortModified ?? result.NodalSort;
+                    rowDict["Route"] = result.Route ?? "";
+                    rowDict["RouteSort"] = result.RouteSortModified ?? result.RouteSort;
+                    rowDict["NRQuantity"] = result.NRQuantity;
+                    rowDict["CourseName"] = result.CourseName ?? "";
+
+                    // Envelope breaking fields
+                    rowDict["EnvQuantity"] = result.EnvQuantity;
+                    rowDict["CenterEnv"] = result.CenterEnv;
+                    rowDict["TotalEnv"] = result.TotalEnv;
+                    rowDict["Env"] = result.Env ?? "";
+                    rowDict["SerialNumber"] = result.SerialNumber;
+                    rowDict["BookletSerial"] = result.BookletSerial ?? "";
+
+                    fullData.Add(row);
+                }
+
+                // Apply sorting based on EnvelopeMakingCriteria
+                IOrderedEnumerable<dynamic> ordered = null;
+
+                foreach (var fieldName in fieldNames)
+                {
+                    Func<dynamic, object> keySelector = record =>
+                    {
+                        var dict = (IDictionary<string, object>)record;
+                        if (!dict.ContainsKey(fieldName)) return null;
+
+                        var val = dict[fieldName];
+                        if (val == null) return null;
+
+                        // Type-safe handling per field
+                        switch (fieldName)
+                        {
+                            case "RouteSort":
+                                if (int.TryParse(val.ToString(), out int routeSort))
+                                    return routeSort;
+                                return 0;
+                            case "CenterSort":
+                                if (int.TryParse(val.ToString(), out int centerSort))
+                                    return centerSort;
+                                return 0;
+                            case "NodalSort":
+                                if (double.TryParse(val.ToString(), out double nodalSort))
+                                    return nodalSort;
+                                return 0.0;
+                            case "ExamDate":
+                                if (DateTime.TryParseExact(val.ToString(), "dd-MM-yyyy",
+                                    System.Globalization.CultureInfo.InvariantCulture,
+                                    System.Globalization.DateTimeStyles.None, out DateTime examDate))
+                                    return examDate;
+                                return DateTime.MinValue;
+                            default:
+                                return val.ToString().Trim();
+                        }
+                    };
+
+                    if (ordered == null)
+                        ordered = fullData.OrderBy(keySelector);
+                    else
+                        ordered = ordered.ThenBy(keySelector);
+                }
+
+                var sortedList = ordered?.ToList() ?? fullData;
+
+                // Calculate SerialNumber after sorting
+                int serial = 1;
+                string prevCatchNo = null;
+
+                foreach (var item in sortedList)
+                {
+                    var dict = (IDictionary<string, object>)item;
+                    string currentCatchNo = dict["CatchNo"]?.ToString();
+
+                    if (prevCatchNo != null && currentCatchNo != prevCatchNo)
+                    {
+                        serial = 1;
+                    }
+
+                    dict["SerialNumber"] = serial++;
+                    prevCatchNo = currentCatchNo;
+                }
 
                 // Generate Excel
                 var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
@@ -546,26 +688,28 @@ namespace Tools.Controllers
                     }
 
                     int rowIdx = 2;
-                    foreach (var result in results)
+                    foreach (var item in sortedList)
                     {
-                        ws.Cells[rowIdx, 1].Value = result.SerialNumber;
-                        ws.Cells[rowIdx, 2].Value = result.CatchNo;
-                        ws.Cells[rowIdx, 3].Value = result.CenterCode;
-                        ws.Cells[rowIdx, 4].Value = result.CenterSort;
-                        ws.Cells[rowIdx, 5].Value = result.Quantity;
-                        ws.Cells[rowIdx, 6].Value = result.EnvQuantity;
-                        ws.Cells[rowIdx, 7].Value = result.CenterEnv;
-                        ws.Cells[rowIdx, 8].Value = result.TotalEnv;
-                        ws.Cells[rowIdx, 9].Value = result.Env;
-                        ws.Cells[rowIdx, 10].Value = result.NRQuantity;
-                        ws.Cells[rowIdx, 11].Value = result.NodalCode;
-                        ws.Cells[rowIdx, 12].Value = result.NodalSort;
-                        ws.Cells[rowIdx, 13].Value = result.Route;
-                        ws.Cells[rowIdx, 14].Value = result.RouteSort;
-                        ws.Cells[rowIdx, 15].Value = result.ExamTime;
-                        ws.Cells[rowIdx, 16].Value = result.ExamDate;
-                        ws.Cells[rowIdx, 17].Value = result.BookletSerial;
-                        ws.Cells[rowIdx, 18].Value = result.CourseName;
+                        var dict = (IDictionary<string, object>)item;
+
+                        ws.Cells[rowIdx, 1].Value = dict.ContainsKey("SerialNumber") ? dict["SerialNumber"] : "";
+                        ws.Cells[rowIdx, 2].Value = dict.ContainsKey("CatchNo") ? dict["CatchNo"] : "";
+                        ws.Cells[rowIdx, 3].Value = dict.ContainsKey("CenterCode") ? dict["CenterCode"] : "";
+                        ws.Cells[rowIdx, 4].Value = dict.ContainsKey("CenterSort") ? dict["CenterSort"] : 0;
+                        ws.Cells[rowIdx, 5].Value = dict.ContainsKey("Quantity") ? dict["Quantity"] : 0;
+                        ws.Cells[rowIdx, 6].Value = dict.ContainsKey("EnvQuantity") ? dict["EnvQuantity"] : 0;
+                        ws.Cells[rowIdx, 7].Value = dict.ContainsKey("CenterEnv") ? dict["CenterEnv"] : 0;
+                        ws.Cells[rowIdx, 8].Value = dict.ContainsKey("TotalEnv") ? dict["TotalEnv"] : 0;
+                        ws.Cells[rowIdx, 9].Value = dict.ContainsKey("Env") ? dict["Env"] : "";
+                        ws.Cells[rowIdx, 10].Value = dict.ContainsKey("NRQuantity") ? dict["NRQuantity"] : 0;
+                        ws.Cells[rowIdx, 11].Value = dict.ContainsKey("NodalCode") ? dict["NodalCode"] : "";
+                        ws.Cells[rowIdx, 12].Value = dict.ContainsKey("NodalSort") ? dict["NodalSort"] : 0;
+                        ws.Cells[rowIdx, 13].Value = dict.ContainsKey("Route") ? dict["Route"] : "";
+                        ws.Cells[rowIdx, 14].Value = dict.ContainsKey("RouteSort") ? dict["RouteSort"] : 0;
+                        ws.Cells[rowIdx, 15].Value = dict.ContainsKey("ExamTime") ? dict["ExamTime"] : "";
+                        ws.Cells[rowIdx, 16].Value = dict.ContainsKey("ExamDate") ? dict["ExamDate"] : "";
+                        ws.Cells[rowIdx, 17].Value = dict.ContainsKey("BookletSerial") ? dict["BookletSerial"] : "";
+                        ws.Cells[rowIdx, 18].Value = dict.ContainsKey("CourseName") ? dict["CourseName"] : "";
                         rowIdx++;
                     }
 
@@ -583,7 +727,7 @@ namespace Tools.Controllers
                 {
                     message = "Report generated successfully",
                     filePath = filePath,
-                    recordsCount = results.Count
+                    recordsCount = sortedList.Count
                 });
             }
             catch (Exception ex)
