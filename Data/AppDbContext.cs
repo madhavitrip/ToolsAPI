@@ -36,7 +36,7 @@ namespace ERPToolsAPI.Data
                 .IsUnique();
 
             modelBuilder.Entity<BoxBreakingResult>()
-                .HasIndex(e => new { e.ProjectId, e.NrDataId, e.BoxNo })
+                .HasIndex(e => new { e.ProjectId, e.BoxNo })
                 .IsUnique(false);
         }
     }
