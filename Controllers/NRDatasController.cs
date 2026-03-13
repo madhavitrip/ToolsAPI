@@ -611,11 +611,132 @@ namespace Tools.Controllers
             }
         }
 
+        [HttpPost("missing-data")]
+        public async Task<ActionResult> SaveMissingData([FromBody] MissingDataSaveRequest request)
+        {
+            if (request == null || request.ProjectId <= 0)
+            {
+                return BadRequest("Valid projectId is required.");
+            }
+
+            if (request.Data == null || !request.Data.Any())
+            {
+                return BadRequest("Missing data payload is required.");
+            }
+
+            var effectiveRows = request.Data
+                .Where(x =>
+                    HasMeaningfulText(x.CatchNo) &&
+                    (HasMeaningfulNumber(x.Pages) ||
+                     HasMeaningfulText(x.ExamDate) ||
+                     HasMeaningfulText(x.ExamTime)))
+                .ToList();
+
+            if (effectiveRows.Count<=0)
+            {
+                return BadRequest("At least one value is required to save.");
+            }
+
+            try
+            {
+                var catchNumbers = effectiveRows
+                    .Select(x => x.CatchNo!.Trim())
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+
+                var projectRows = await _context.NRDatas
+                    .Where(x => x.ProjectId == request.ProjectId && x.CatchNo != null && catchNumbers.Contains(x.CatchNo))
+                    .ToListAsync();
+
+                if (projectRows.Count<=0)
+                {
+                    return NotFound("No matching NRData rows found for the provided catch numbers.");
+                }
+
+                int updatedCatchCount = 0;
+                int updatedRowCount = 0;
+
+                foreach (var item in effectiveRows)
+                {
+                    var trimmedCatchNo = item.CatchNo!.Trim();
+                    var matchingRows = projectRows
+                        .Where(x => string.Equals(x.CatchNo, trimmedCatchNo, StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+
+                    if (!matchingRows.Any())
+                    {
+                        continue;
+                    }
+
+                    updatedCatchCount++;
+
+                    foreach (var row in matchingRows)
+                    {
+                        if (HasMeaningfulNumber(item.Pages))
+                        {
+                            row.Pages = item.Pages!.Value;
+                        }
+
+                        if (HasMeaningfulText(item.ExamDate))
+                        {
+                            row.ExamDate = item.ExamDate.Trim();
+                        }
+
+                        if (HasMeaningfulText(item.ExamTime))
+                        {
+                            row.ExamTime = item.ExamTime.Trim();
+                        }
+
+                        updatedRowCount++;
+                    }
+                }
+
+                if (updatedRowCount == 0)
+                {
+                    return NotFound("No matching NRData rows found to update.");
+                }
+
+                await _context.SaveChangesAsync();
+
+                _loggerService.LogEvent(
+                    $"Saved missing data for ProjectId {request.ProjectId}. Catches updated: {updatedCatchCount}, rows updated: {updatedRowCount}",
+                    "NRData",
+                    User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
+                    request.ProjectId);
+
+                return Ok(new
+                {
+                    message = "Missing data saved successfully",
+                    updatedCatchCount,
+                    updatedRowCount
+                });
+            }
+            catch (Exception ex)
+            {
+                _loggerService.LogError("Error saving missing data", ex.Message, nameof(NRDatasController));
+                return StatusCode(500, "Internal Server Error");
+            }
+        }
+
         public class ConflictResolutionDto
         {
             public string CatchNo { get; set; }
             public string UniqueField { get; set; }
             public string SelectedValue { get; set; }
+        }
+
+        public class MissingDataSaveRequest
+        {
+            public int ProjectId { get; set; }
+            public List<MissingDataItem> Data { get; set; } = new();
+        }
+
+        public class MissingDataItem
+        {
+            public string? CatchNo { get; set; }
+            public int? Pages { get; set; }
+            public string? ExamDate { get; set; }
+            public string? ExamTime { get; set; }
         }
 
         // DELETE: api/NRDatas/5
@@ -683,6 +804,23 @@ namespace Tools.Controllers
         private bool NRDataExists(int id)
         {
             return _context.NRDatas.Any(e => e.Id == id);
+        }
+
+        private static bool HasMeaningfulText(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return false;
+            }
+
+            var normalized = value.Trim();
+            return !string.Equals(normalized, "undefined", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(normalized, "null", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool HasMeaningfulNumber(int? value)
+        {
+            return value.HasValue && value.Value > 0;
         }
     }
 }
