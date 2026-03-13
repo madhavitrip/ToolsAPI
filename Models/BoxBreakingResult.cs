@@ -20,7 +20,6 @@ namespace Tools.Models
         public string BoxNo { get; set; }
         public string OmrSerial { get; set; }
         public int? InnerBundlingSerial { get; set; }
-        public int SerialNumber { get; set; }   // Serial number for this row
         public int Quantity { get; set; }       // Quantity for this box
 
         // Metadata

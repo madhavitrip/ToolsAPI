@@ -537,7 +537,6 @@ namespace Tools.Controllers
                         BoxNo = itemDict["BoxNo"]?.ToString(),
                         OmrSerial = itemDict["OmrSerial"]?.ToString(),
                         InnerBundlingSerial = itemDict["InnerBundlingSerial"] as int?,
-                        SerialNumber = serialNumber++,
                         Quantity = (int)itemDict["Quantity"],
                         UploadBatch = currentBatch
                     });
@@ -578,7 +577,6 @@ namespace Tools.Controllers
                 var boxResults = await _context.BoxBreakingResults
                     .Where(r => r.ProjectId == ProjectId)
                     .OrderByDescending(r => r.UploadBatch)
-                    .ThenBy(r => r.SerialNumber)
                     .ToListAsync();
 
                 if (!boxResults.Any())
@@ -610,7 +608,6 @@ namespace Tools.Controllers
                     var worksheet = package.Workbook.Worksheets.Add("BoxBreaking");
 
                     // Headers
-                    worksheet.Cells[1, 1].Value = "SerialNumber";
                     worksheet.Cells[1, 2].Value = "CatchNo";
                     worksheet.Cells[1, 3].Value = "CenterCode";
                     worksheet.Cells[1, 4].Value = "CenterSort";
@@ -642,7 +639,6 @@ namespace Tools.Controllers
                         // Get NRData for additional fields
                         var nrRow = nrData.FirstOrDefault(n => n.Id == envResult.NrDataId);
 
-                        worksheet.Cells[row, 1].Value = result.SerialNumber;
                         worksheet.Cells[row, 2].Value = envResult.CatchNo;
                         worksheet.Cells[row, 3].Value = envResult.CenterCode;
                         worksheet.Cells[row, 4].Value = envResult.CenterSort;
