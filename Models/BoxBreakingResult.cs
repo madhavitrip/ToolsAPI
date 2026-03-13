@@ -10,9 +10,7 @@ namespace Tools.Models
         public int Id { get; set; }
 
         public int ProjectId { get; set; }
-        public int? NrDataId { get; set; }      // NULL if this is an extra
-        public int? ExtraId { get; set; }       // NULL if regular NRData (1=Nodal, 2=University, 3=Office)
-        public string CatchNo { get; set; }     // Store for reference
+        public int? EnvelopeBreakingResultId { get; set; }  // Reference to EnvelopeBreakingResults (nullable for split rows)
 
         // Box breaking results (calculated fields)
         public int Start { get; set; }
@@ -22,7 +20,7 @@ namespace Tools.Models
         public string BoxNo { get; set; }
         public string OmrSerial { get; set; }
         public int? InnerBundlingSerial { get; set; }
-        public int SerialNumber { get; set; }   // Serial number for this row
+        public int Quantity { get; set; }       // Quantity for this box
 
         // Metadata
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;

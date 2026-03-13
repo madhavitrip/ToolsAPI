@@ -12,8 +12,8 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace Tools.Migrations
 {
     [DbContext(typeof(ERPToolsDbContext))]
-    [Migration("20260311201131_change")]
-    partial class change
+    [Migration("20260313053048_Box breaking")]
+    partial class Boxbreaking
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
@@ -93,23 +93,16 @@ namespace Tools.Migrations
                         .IsRequired()
                         .HasColumnType("varchar(255)");
 
-                    b.Property<string>("CatchNo")
-                        .IsRequired()
-                        .HasColumnType("longtext");
-
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("datetime(6)");
 
                     b.Property<int>("End")
                         .HasColumnType("int");
 
-                    b.Property<int?>("ExtraId")
+                    b.Property<int?>("EnvelopeBreakingResultId")
                         .HasColumnType("int");
 
                     b.Property<int?>("InnerBundlingSerial")
-                        .HasColumnType("int");
-
-                    b.Property<int?>("NrDataId")
                         .HasColumnType("int");
 
                     b.Property<string>("OmrSerial")
@@ -117,6 +110,9 @@ namespace Tools.Migrations
                         .HasColumnType("longtext");
 
                     b.Property<int>("ProjectId")
+                        .HasColumnType("int");
+
+                    b.Property<int>("Quantity")
                         .HasColumnType("int");
 
                     b.Property<string>("Serial")
@@ -137,7 +133,7 @@ namespace Tools.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("ProjectId", "NrDataId", "BoxNo");
+                    b.HasIndex("ProjectId", "BoxNo");
 
                     b.ToTable("BoxBreakingResults");
                 });
@@ -242,9 +238,6 @@ namespace Tools.Migrations
                     b.Property<int>("CenterSort")
                         .HasColumnType("int");
 
-                    b.Property<int?>("CenterSortModified")
-                        .HasColumnType("int");
-
                     b.Property<string>("CourseName")
                         .HasColumnType("longtext");
 
@@ -272,16 +265,10 @@ namespace Tools.Migrations
                     b.Property<string>("NodalCode")
                         .HasColumnType("longtext");
 
-                    b.Property<string>("NodalCodeRef")
-                        .HasColumnType("longtext");
-
                     b.Property<double>("NodalSort")
                         .HasColumnType("double");
 
-                    b.Property<double?>("NodalSortModified")
-                        .HasColumnType("double");
-
-                    b.Property<int?>("NrDataId")
+                    b.Property<int>("NrDataId")
                         .HasColumnType("int");
 
                     b.Property<int>("ProjectId")
@@ -293,13 +280,7 @@ namespace Tools.Migrations
                     b.Property<string>("Route")
                         .HasColumnType("longtext");
 
-                    b.Property<string>("RouteRef")
-                        .HasColumnType("longtext");
-
                     b.Property<int>("RouteSort")
-                        .HasColumnType("int");
-
-                    b.Property<int?>("RouteSortModified")
                         .HasColumnType("int");
 
                     b.Property<int>("SerialNumber")
