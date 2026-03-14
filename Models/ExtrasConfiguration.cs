@@ -13,6 +13,7 @@ namespace Tools.Models
         public string Mode { get; set; }
         public string Value { get; set; }
         public string EnvelopeType { get; set; }
+        public string? RangeConfig { get; set; } //Added by Akshaya to accept the range in json format
 
     }
 }
