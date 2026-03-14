@@ -12,8 +12,8 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace Tools.Migrations
 {
     [DbContext(typeof(ERPToolsDbContext))]
-    [Migration("20260312150552_js")]
-    partial class js
+    [Migration("20260313053906_Box breaking")]
+    partial class Boxbreaking
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
@@ -99,7 +99,7 @@ namespace Tools.Migrations
                     b.Property<int>("End")
                         .HasColumnType("int");
 
-                    b.Property<int>("EnvelopeBreakingResultId")
+                    b.Property<int?>("EnvelopeBreakingResultId")
                         .HasColumnType("int");
 
                     b.Property<int?>("InnerBundlingSerial")
@@ -112,12 +112,12 @@ namespace Tools.Migrations
                     b.Property<int>("ProjectId")
                         .HasColumnType("int");
 
+                    b.Property<int>("Quantity")
+                        .HasColumnType("int");
+
                     b.Property<string>("Serial")
                         .IsRequired()
                         .HasColumnType("longtext");
-
-                    b.Property<int>("SerialNumber")
-                        .HasColumnType("int");
 
                     b.Property<int>("Start")
                         .HasColumnType("int");

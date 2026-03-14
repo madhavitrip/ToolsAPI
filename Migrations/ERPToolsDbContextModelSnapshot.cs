@@ -116,9 +116,6 @@ namespace Tools.Migrations
                         .IsRequired()
                         .HasColumnType("longtext");
 
-                    b.Property<int>("SerialNumber")
-                        .HasColumnType("int");
-
                     b.Property<int>("Start")
                         .HasColumnType("int");
 

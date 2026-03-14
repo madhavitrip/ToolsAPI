@@ -1699,6 +1699,9 @@ namespace Tools.Controllers
                     worksheet.Cells[1, nextCol].Value = "BoxNo";
                     int boxCol = nextCol;
                     nextCol++;
+                    worksheet.Cells[1, nextCol].Value = "Beejak";
+                    int beejakCol = nextCol;
+                    nextCol++;
                     int omrCol = -1;                   
                     int innerBundlingCol = -1;
                     if (hasAnyOmr)
@@ -1717,6 +1720,8 @@ namespace Tools.Controllers
                     }
                     int row = 2;
                     int serial = 1;
+                    string previousCenter = null;
+                    string previousBox = null;
                     foreach (var item in finalWithBoxes)
                     {
                         var nrRow = nrData.FirstOrDefault(n => n.CatchNo == item.CatchNo);
@@ -1751,6 +1756,23 @@ namespace Tools.Controllers
                         {
                             worksheet.Cells[row, courseCol].Value = item.CourseName;
                         }
+                        worksheet.Cells[row, boxCol].Value = item.BoxNo;
+
+                        // 🔹 BEEJAK LOGIC
+                        string currentCenter = item.CenterCode?.ToString();
+                        string currentBox = item.BoxNo?.ToString();
+
+                        string beejakValue = "";
+
+                        if (currentBox != previousBox || currentCenter != previousCenter)
+                        {
+                            beejakValue = "Beejak";
+                        }
+
+                        worksheet.Cells[row, beejakCol].Value = beejakValue;
+
+                        previousCenter = currentCenter;
+                        previousBox = currentBox;
 
                         // ✅ InnerBundlingSerial column — only if InnerBundling is on
                         if (innerBundlingCol > 0)
@@ -1847,7 +1869,7 @@ namespace Tools.Controllers
             string prevNodalCode = null;
             string prevRoute = null;
             int prevRouteSort = 0;
-            int prevNodalSort = 0;
+            double prevNodalSort = 0;
             string prevCatchNo = null;
             string prevMergeField = null;
             string prevExtraMergeField = null;
@@ -1857,7 +1879,7 @@ namespace Tools.Controllers
             var catchExtrasAdded = new HashSet<(int ExtraId, string CatchNo)>();
 
             // Helper method to add extra envelopes - removed serialnumber++ from here
-            void AddExtraWithEnv(ExtraEnvelopes extra, string examDate, string examTime, string course,int NrQuantity, string NodalCode, string CenterCode, int CenterSort, int NodalSort, int RouteSort, string Route)
+            void AddExtraWithEnv(ExtraEnvelopes extra, string examDate, string examTime, string course,int NrQuantity, string NodalCode, string CenterCode, double CenterSort, double NodalSort, int RouteSort, string Route)
             {
                 var extraConfig = extrasconfig.FirstOrDefault(e => e.ExtraType == extra.ExtraId);
                 int envCapacity = 0; // default fallback

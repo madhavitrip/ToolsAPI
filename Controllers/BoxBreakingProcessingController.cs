@@ -661,7 +661,8 @@ namespace Tools.Controllers
 
                         row++;
                     }
-
+                    worksheet.Cells[worksheet.Dimension.Address].AutoFitColumns();
+                    worksheet.View.FreezePanes(2, 1);
                     FileInfo fi = new FileInfo(filePath);
                     package.SaveAs(fi);
                 }

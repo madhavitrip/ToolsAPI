@@ -85,7 +85,7 @@ namespace Tools.Controllers
                     .ToListAsync();
 
                 void AddExtraWithEnv(ExtraEnvelopes extra, string examDate, string examTime, string course, int NrQuantity,
-                    string NodalCode, string CenterCode, int CenterSort, double NodalSort, int RouteSort, string Route, int nrDataId)
+                    string NodalCode, string CenterCode, double CenterSort, double NodalSort, int RouteSort, string Route, int nrDataId)
                 {
                     var extraConfig = extrasconfig.FirstOrDefault(e => e.ExtraType == extra.ExtraId);
                     int envCapacity = 0;
@@ -122,7 +122,7 @@ namespace Tools.Controllers
                         }
                         extraCenterEnvCounter++;
 
-                        int modifiedCenterSort = extra.ExtraId switch
+                        double modifiedCenterSort = extra.ExtraId switch
                         {
                             1 => 10000,
                             2 => 100000,
@@ -379,10 +379,12 @@ namespace Tools.Controllers
                 int currentBatch = maxBatch + 1;
 
                 int currentStartNumber = projectconfig.OmrSerialNumber;
+                //int StartBookletNumber = projectconfig.BookletSerialNumber;
                 bool assignBookletSerial = currentStartNumber > 0;
                 bool resetOmrSerialOnCatchChange = projectconfig.ResetOmrSerialOnCatchChange;
                 string prevCatchForSerial = null;
                 int serial = 1;
+           
 
                 var envelopeResults = new List<EnvelopeBreakingResult>();
 
@@ -491,6 +493,78 @@ namespace Tools.Controllers
                 return StatusCode(500, new { error = ex.Message });
             }
         }
+
+
+        [HttpGet("CatchWithOmrSerialing")]
+        public async Task<IActionResult> ProcessSerialingReport(int ProjectId)
+        {
+            try
+            {
+                var data = await _context.EnvelopeBreakingResults
+                    .Where(x => x.ProjectId == ProjectId && x.BookletSerial != null)
+                    .OrderBy(x => x.Id)
+                    .ToListAsync();
+
+                var grouped = data
+                    .GroupBy(x => x.CatchNo)
+                    .Select(g =>
+                    {
+                        var firstSerial = g.First().BookletSerial;
+                        var lastSerial = g.Last().BookletSerial;
+
+                        var start = firstSerial.Split('-')[0];
+                        var end = lastSerial.Split('-')[1];
+
+                        return new
+                        {
+                            CatchNo = g.Key,
+                            SerialRange = $"{start}-{end}",
+                            ExamDate = g.First().ExamDate,
+                            ExamTime = g.First().ExamTime
+                        };
+                    })
+                    .ToList();
+
+                var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
+                Directory.CreateDirectory(reportPath);
+
+                var filePath = Path.Combine(reportPath, "CatchWiseBookletAndOmrSerialing.xlsx");
+                if (System.IO.File.Exists(filePath))
+                {
+                    System.IO.File.Delete(filePath);
+                }
+                using (var package = new ExcelPackage())
+                {
+                    var worksheet = package.Workbook.Worksheets.Add("Serial Report");
+
+                    worksheet.Cells[1, 1].Value = "Catch No";
+                    worksheet.Cells[1, 2].Value = "Booklet Serial Range";
+                    worksheet.Cells[1, 3].Value = "Exam Date";
+                    worksheet.Cells[1, 4].Value = "Exam Time";
+
+                    int row = 2;
+
+                    foreach (var item in grouped)
+                    {
+                        worksheet.Cells[row, 1].Value = item.CatchNo;
+                        worksheet.Cells[row, 2].Value = item.SerialRange;
+                        worksheet.Cells[row, 3].Value = item.ExamDate;
+                        worksheet.Cells[row, 4].Value = item.ExamTime;
+                        row++;
+                    }
+
+                    worksheet.Cells.AutoFitColumns();
+                    worksheet.View.FreezePanes(2, 1);
+                    package.SaveAs(new FileInfo(filePath));
+                }
+                return Ok(new { message = "Excel generated successfully", path = filePath });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(ex.Message);
+            }
+        }
+
         [HttpGet("GetEnvelopeBreakingReport")]
         public async Task<IActionResult> GetEnvelopeBreakingReport(int ProjectId, int? uploadBatch = null)
         {
@@ -691,6 +765,7 @@ namespace Tools.Controllers
                     }
 
                     ws.Cells[ws.Dimension.Address].AutoFitColumns();
+                    ws.View.FreezePanes(2, 1);
                     package.SaveAs(new FileInfo(filePath));
                 }
 

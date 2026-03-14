@@ -24,7 +24,7 @@ namespace Tools.Models
 
         // All fields needed for sorting in both EnvelopeBreakage and BoxBreaking
         public string? CenterCode { get; set; }
-        public int CenterSort { get; set; }
+        public double CenterSort { get; set; }
         public string? ExamTime { get; set; }
         public string? ExamDate { get; set; }
         public int Quantity { get; set; }
