@@ -4,6 +4,7 @@ using ERPToolsAPI.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace Tools.Migrations
 {
     [DbContext(typeof(ERPToolsDbContext))]
-    partial class ERPToolsDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260312113046_AddGroupIdAndTypeIdToProjects")]
+    partial class AddGroupIdAndTypeIdToProjects
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -90,16 +93,23 @@ namespace Tools.Migrations
                         .IsRequired()
                         .HasColumnType("varchar(255)");
 
+                    b.Property<string>("CatchNo")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("datetime(6)");
 
                     b.Property<int>("End")
                         .HasColumnType("int");
 
-                    b.Property<int?>("EnvelopeBreakingResultId")
+                    b.Property<int?>("ExtraId")
                         .HasColumnType("int");
 
                     b.Property<int?>("InnerBundlingSerial")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("NrDataId")
                         .HasColumnType("int");
 
                     b.Property<string>("OmrSerial")
@@ -109,12 +119,12 @@ namespace Tools.Migrations
                     b.Property<int>("ProjectId")
                         .HasColumnType("int");
 
-                    b.Property<int>("Quantity")
-                        .HasColumnType("int");
-
                     b.Property<string>("Serial")
                         .IsRequired()
                         .HasColumnType("longtext");
+
+                    b.Property<int>("SerialNumber")
+                        .HasColumnType("int");
 
                     b.Property<int>("Start")
                         .HasColumnType("int");
@@ -127,7 +137,7 @@ namespace Tools.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("ProjectId", "BoxNo");
+                    b.HasIndex("ProjectId", "NrDataId", "BoxNo");
 
                     b.ToTable("BoxBreakingResults");
                 });
@@ -232,6 +242,9 @@ namespace Tools.Migrations
                     b.Property<int>("CenterSort")
                         .HasColumnType("int");
 
+                    b.Property<int?>("CenterSortModified")
+                        .HasColumnType("int");
+
                     b.Property<string>("CourseName")
                         .HasColumnType("longtext");
 
@@ -259,10 +272,16 @@ namespace Tools.Migrations
                     b.Property<string>("NodalCode")
                         .HasColumnType("longtext");
 
+                    b.Property<string>("NodalCodeRef")
+                        .HasColumnType("longtext");
+
                     b.Property<double>("NodalSort")
                         .HasColumnType("double");
 
-                    b.Property<int>("NrDataId")
+                    b.Property<double?>("NodalSortModified")
+                        .HasColumnType("double");
+
+                    b.Property<int?>("NrDataId")
                         .HasColumnType("int");
 
                     b.Property<int>("ProjectId")
@@ -274,7 +293,13 @@ namespace Tools.Migrations
                     b.Property<string>("Route")
                         .HasColumnType("longtext");
 
+                    b.Property<string>("RouteRef")
+                        .HasColumnType("longtext");
+
                     b.Property<int>("RouteSort")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("RouteSortModified")
                         .HasColumnType("int");
 
                     b.Property<int>("SerialNumber")

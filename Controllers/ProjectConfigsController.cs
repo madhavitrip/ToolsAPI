@@ -100,9 +100,11 @@ namespace Tools.Controllers
                 projectConfig.Enhancement,
                 projectConfig.BoxNumber,
                 projectConfig.OmrSerialNumber,
+                projectConfig.BookletSerialNumber,
                 projectConfig.IsInnerBundlingDone,
                 projectConfig.ResetOnSymbolChange,
                 projectConfig.ResetOmrSerialOnCatchChange,
+                projectConfig.ResetBookletSerialOnCatchChange,
 
                 EnvelopeMakingCriteria = new
                 {

@@ -24,5 +24,7 @@ namespace Tools.Models
         public bool IsInnerBundlingDone { get; set; }
         public List<int>? InnerBundlingCriteria { get; set; }
         public bool ResetOmrSerialOnCatchChange { get; set; }
+        public int? BookletSerialNumber { get; set; }
+        public bool? ResetBookletSerialOnCatchChange { get; set; }
     }
 }
