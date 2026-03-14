@@ -1,0 +1,33 @@
+﻿using System.ComponentModel.DataAnnotations.Schema;
+using System.ComponentModel.DataAnnotations;
+
+namespace Tools.Models
+{
+    public class MProjectConfigs
+    {
+        
+        [Key]
+        [DatabaseGenerated(DatabaseGeneratedOption.Identity)]
+        public int Id { get; set; }
+        public List<int> Modules { get; set; }
+        public int TypeId { get; set; }
+        public int GroupId { get; set; }
+        public string Envelope { get; set; }
+        public List<int> BoxBreakingCriteria { get; set; }
+        public List<int> DuplicateRemoveFields { get; set; }
+        public List<int> SortingBoxReport { get; set; }
+        public List<int> EnvelopeMakingCriteria { get; set; }
+        public int BoxCapacity { get; set; }
+        public List<int> DuplicateCriteria { get; set; }
+        public double Enhancement { get; set; }
+        public int BoxNumber { get; set; }
+        public int OmrSerialNumber { get; set; }
+        public bool ResetOnSymbolChange { get; set; }
+        public bool IsInnerBundlingDone { get; set; }
+        public List<int>? InnerBundlingCriteria { get; set; }
+        public bool ResetOmrSerialOnCatchChange { get; set; }
+        public int? BookletSerialNumber { get; set; }
+        public bool? ResetBookletSerialOnCatchChange { get; set; }
+
+    }
+}
