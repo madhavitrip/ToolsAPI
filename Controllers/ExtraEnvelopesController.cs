@@ -180,6 +180,40 @@ namespace Tools.Controllers
                                     calculatedQuantity = 0; // Or apply fallback logic
                                 }
                                 break;
+                                //Range added by Akshaya 
+                            case "Range":
+
+                                if (string.IsNullOrEmpty(config.RangeConfig))
+                                {
+                                    calculatedQuantity = 0;
+                                    break;
+                                }
+
+                                try
+                                {
+                                    var rangeConfig = JsonSerializer.Deserialize<RangeConfigModel>(config.RangeConfig);
+
+                                    if (rangeConfig?.ranges != null)
+                                    {
+                                        var range = rangeConfig.ranges
+                                            .FirstOrDefault(r => data.Quantity >= r.from && data.Quantity <= r.to);
+
+                                        if (range != null)
+                                        {
+                                            calculatedQuantity = range.value;
+                                        }
+                                        else
+                                        {
+                                            calculatedQuantity = 0;
+                                        }
+                                    }
+                                }
+                                catch
+                                {
+                                    return BadRequest($"Invalid RangeConfig JSON for ExtraType {config.ExtraType}");
+                                }
+
+                                break;
 
                         }
 
@@ -402,7 +436,18 @@ namespace Tools.Controllers
                 return StatusCode(500, "Internal server error");
             }
         }
+        public class RangeConfigModel
+        {
+            public string rangeType { get; set; }
+            public List<RangeItem> ranges { get; set; }
+        }
 
+        public class RangeItem
+        {
+            public int from { get; set; }
+            public int to { get; set; }
+            public int value { get; set; }
+        }
         private Dictionary<string, object> ExtraEnvelopeToDictionary(
        Tools.Models.NRData baseRow,
        ExtraEnvelopes extra,
