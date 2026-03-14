@@ -119,6 +119,7 @@ namespace Tools.Controllers
                     rowDict["RouteSort"] = result.RouteSort;
                     rowDict["CourseName"] = result.CourseName ?? "";
                     rowDict["BookletSerial"] = result.BookletSerial ?? "";
+                    rowDict["OmrSerial"] = result.OmrSerial;
                     rowDict["EnvelopeBreakingResultId"] = result.Id;
                     rowDict["NrDataId"] = result.NrDataId;
 
@@ -256,6 +257,7 @@ namespace Tools.Controllers
                 int runningPages = 0;
                 string prevMergeKey = null;
                 long runningOmrPointer = 0;
+                long runningBooklet = 0;
                 string previousCatchForOmr = null;
                 string previousCourse = null;
                 int innerBundlingSerial = 0;
@@ -273,8 +275,9 @@ namespace Tools.Controllers
 
                     // Check if this row has OMR serial data (stored in BookletSerial field)
                     string bookletSerial = itemDict["BookletSerial"]?.ToString() ?? "";
-                    bool hasOmr = !string.IsNullOrWhiteSpace(bookletSerial) && bookletSerial != "0";
-
+                    string omrSerial = itemDict["OmrSerial"]?.ToString();
+                    bool hasOmr = !string.IsNullOrWhiteSpace(omrSerial) && omrSerial != "0";
+                    bool hasBooklet = !string.IsNullOrWhiteSpace(bookletSerial) && bookletSerial != "0";
                     // Reset boxNo when CourseName changes
                     if (resetOnSymbolChange && previousCourse != null && currentCourseName != previousCourse)
                     {
@@ -288,12 +291,20 @@ namespace Tools.Controllers
                         previousCatchForOmr = itemDict["CatchNo"]?.ToString();
                         
                         // If this row has OMR serial, extract the starting number from BookletSerial
-                        if (hasOmr && bookletSerial.Contains("-"))
+                        if (hasOmr && omrSerial.Contains("-"))
                         {
-                            var parts = bookletSerial.Split('-');
+                            var parts = omrSerial.Split('-');
                             if (long.TryParse(parts[0], out long omrStart))
                             {
                                 runningOmrPointer = omrStart;
+                            }
+                        }
+                        if (hasBooklet && bookletSerial.Contains("-"))
+                        {
+                            var parts = bookletSerial.Split('-');
+                            if (long.TryParse(parts[0], out long bookletStart))
+                            {
+                                runningBooklet = bookletStart;
                             }
                         }
                     }
@@ -406,7 +417,7 @@ namespace Tools.Controllers
                                     currentStart = end + 1;
                                     string serial = $"{start} to {end}";
                                     string omrRange = "";
-
+                                    string bookletRange = "";
                                     if (hasOmr)
                                     {
                                         long omrStart = runningOmrPointer;
@@ -414,7 +425,13 @@ namespace Tools.Controllers
                                         omrRange = $"{omrStart}-{omrEnd}";
                                         runningOmrPointer = omrEnd + 1;
                                     }
-
+                                    if (hasBooklet)
+                                    {
+                                        long bookletStart = runningBooklet;
+                                        long bookletEnd = bookletStart + chunkQty - 1;
+                                        bookletRange = $"{bookletStart}-{bookletEnd}";
+                                        runningBooklet = bookletEnd + 1;
+                                    }
                                     object boxNoValue = resetOnSymbolChange
                                         ? (object)$"{boxNo}{currentSymbol}"
                                         : boxNo;
@@ -439,6 +456,7 @@ namespace Tools.Controllers
                                     boxItemDict["TotalPages"] = chunkPages;
                                     boxItemDict["BoxNo"] = boxNoValue;
                                     boxItemDict["OmrSerial"] = omrRange;
+                                    boxItemDict["BookletSerial"] = bookletRange;
                                     boxItemDict["InnerBundlingSerial"] = currentInnerBundlingSerial;
                                     boxItemDict["CourseName"] = currentCourseName;
                                     boxItemDict["EnvelopeBreakingResultId"] = itemDict["EnvelopeBreakingResultId"];
@@ -461,13 +479,21 @@ namespace Tools.Controllers
                         // Normal case
                         runningPages += totalPages;
                         string normalOmrRange = "";
-
+                        string normalBookletRange = "";
                         if (hasOmr)
                         {
                             long normalOmrStart = runningOmrPointer;
                             long normalOmrEnd = normalOmrStart + (int)itemDict["Quantity"] - 1;
                             normalOmrRange = $"{normalOmrStart}-{normalOmrEnd}";
                             runningOmrPointer = normalOmrEnd + 1;
+                        }
+
+                        if (hasBooklet)
+                        {
+                            long normalBookletStart = runningBooklet;
+                            long normalBookletEnd = normalBookletStart + (int)itemDict["Quantity"] - 1;
+                            normalBookletRange = $"{normalBookletStart}-{normalBookletEnd}";
+                            runningBooklet = normalBookletEnd + 1;
                         }
 
                         object normalBoxNoValue = resetOnSymbolChange
@@ -494,6 +520,7 @@ namespace Tools.Controllers
                         normalBoxItemDict["TotalPages"] = totalPages;
                         normalBoxItemDict["BoxNo"] = normalBoxNoValue;
                         normalBoxItemDict["OmrSerial"] = normalOmrRange;
+                        normalBoxItemDict["BookletSerial"] = normalBookletRange;
                         normalBoxItemDict["InnerBundlingSerial"] = currentInnerBundlingSerial;
                         normalBoxItemDict["CourseName"] = currentCourseName;
                         normalBoxItemDict["EnvelopeBreakingResultId"] = itemDict["EnvelopeBreakingResultId"];
@@ -524,6 +551,34 @@ namespace Tools.Controllers
                 {
                     var itemDict = (IDictionary<string, object>)item;
 
+                    // Store BoxNo in symbol-boxno format when resetOnSymbolChange is true
+                    string boxNoValue = itemDict["BoxNo"]?.ToString() ?? "";
+                    string boxNoForStorage = boxNoValue;
+                    
+                    if (resetOnSymbolChange && !string.IsNullOrEmpty(boxNoValue))
+                    {
+                        // Extract numeric part and symbol from boxNoValue (format: "123ABC")
+                        int numericEnd = 0;
+                        for (int i = 0; i < boxNoValue.Length; i++)
+                        {
+                            if (char.IsDigit(boxNoValue[i]))
+                            {
+                                numericEnd = i + 1;
+                            }
+                            else
+                            {
+                                break;
+                            }
+                        }
+                        
+                        if (numericEnd > 0)
+                        {
+                            string boxNum = boxNoValue.Substring(0, numericEnd);
+                            string symbol = boxNoValue.Substring(numericEnd);
+                            boxNoForStorage = $"{symbol}-{boxNum}";
+                        }
+                    }
+
                     boxResults.Add(new BoxBreakingResult
                     {
                         ProjectId = ProjectId,
@@ -534,8 +589,9 @@ namespace Tools.Controllers
                         End = (int)itemDict["End"],
                         Serial = itemDict["Serial"]?.ToString(),
                         TotalPages = (int)itemDict["TotalPages"],
-                        BoxNo = itemDict["BoxNo"]?.ToString(),
+                        BoxNo = boxNoForStorage,
                         OmrSerial = itemDict["OmrSerial"]?.ToString(),
+                        BookletSerial = itemDict["BookletSerial"]?.ToString(),
                         InnerBundlingSerial = itemDict["InnerBundlingSerial"] as int?,
                         Quantity = (int)itemDict["Quantity"],
                         UploadBatch = currentBatch
@@ -589,6 +645,12 @@ namespace Tools.Controllers
                     .Where(p => p.ProjectId == ProjectId)
                     .ToListAsync();
 
+                var projectconfig = await _context.ProjectConfigs
+                    .Where(p => p.ProjectId == ProjectId)
+                    .FirstOrDefaultAsync();
+
+                bool resetOnSymbolChange = projectconfig?.ResetOnSymbolChange ?? false;
+
                 var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
                 if (!Directory.Exists(reportPath))
                 {
@@ -607,26 +669,27 @@ namespace Tools.Controllers
                 {
                     var worksheet = package.Workbook.Worksheets.Add("BoxBreaking");
 
-                    // Headers
-                    worksheet.Cells[1, 2].Value = "CatchNo";
-                    worksheet.Cells[1, 3].Value = "CenterCode";
-                    worksheet.Cells[1, 4].Value = "CenterSort";
-                    worksheet.Cells[1, 5].Value = "ExamTime";
-                    worksheet.Cells[1, 6].Value = "ExamDate";
-                    worksheet.Cells[1, 7].Value = "Quantity";
-                    worksheet.Cells[1, 8].Value = "NodalCode";
-                    worksheet.Cells[1, 9].Value = "NodalSort";
-                    worksheet.Cells[1, 10].Value = "Route";
-                    worksheet.Cells[1, 11].Value = "RouteSort";
-                    worksheet.Cells[1, 12].Value = "TotalEnv";
-                    worksheet.Cells[1, 13].Value = "Start";
-                    worksheet.Cells[1, 14].Value = "End";
-                    worksheet.Cells[1, 15].Value = "Serial";
-                    worksheet.Cells[1, 16].Value = "Pages";
-                    worksheet.Cells[1, 17].Value = "TotalPages";
-                    worksheet.Cells[1, 18].Value = "BoxNo";
-                    worksheet.Cells[1, 19].Value = "OmrSerial";
-                    worksheet.Cells[1, 20].Value = "InnerBundlingSerial";
+                    // Build headers dynamically based on resetOnSymbolChange
+                    var headers = new List<string>
+                    {
+                        "CatchNo", "CenterCode", "CenterSort", "ExamTime", "ExamDate", "Quantity",
+                        "NodalCode", "NodalSort", "Route", "RouteSort", "TotalEnv", "Start", "End",
+                        "Serial", "Pages", "TotalPages", "BoxNo", "OmrSerial", "BookletSerial", "InnerBundlingSerial"
+                    };
+
+                    // Add Symbol and CourseName columns if resetOnSymbolChange is true
+                    if (resetOnSymbolChange)
+                    {
+                        headers.Add("Symbol");
+                        headers.Add("CourseName");
+                    }
+
+                    // Write headers
+                    for (int i = 0; i < headers.Count; i++)
+                    {
+                        worksheet.Cells[1, i + 1].Value = headers[i];
+                        worksheet.Cells[1, i + 1].Style.Font.Bold = true;
+                    }
 
                     int row = 2;
                     foreach (var result in boxResults)
@@ -639,25 +702,38 @@ namespace Tools.Controllers
                         // Get NRData for additional fields
                         var nrRow = nrData.FirstOrDefault(n => n.Id == envResult.NrDataId);
 
-                        worksheet.Cells[row, 2].Value = envResult.CatchNo;
-                        worksheet.Cells[row, 3].Value = envResult.CenterCode;
-                        worksheet.Cells[row, 4].Value = envResult.CenterSort;
-                        worksheet.Cells[row, 5].Value = envResult.ExamTime;
-                        worksheet.Cells[row, 6].Value = envResult.ExamDate;
-                        worksheet.Cells[row, 7].Value = result.Quantity;
-                        worksheet.Cells[row, 8].Value = envResult.NodalCode;
-                        worksheet.Cells[row, 9].Value = envResult.NodalSort;
-                        worksheet.Cells[row, 10].Value = envResult.Route;
-                        worksheet.Cells[row, 11].Value = envResult.RouteSort;
-                        worksheet.Cells[row, 12].Value = envResult.TotalEnv;
-                        worksheet.Cells[row, 13].Value = result.Start;
-                        worksheet.Cells[row, 14].Value = result.End;
-                        worksheet.Cells[row, 15].Value = result.Serial;
-                        worksheet.Cells[row, 16].Value = nrRow?.Pages ?? 0;
-                        worksheet.Cells[row, 17].Value = result.TotalPages;
-                        worksheet.Cells[row, 18].Value = result.BoxNo;
-                        worksheet.Cells[row, 19].Value = result.OmrSerial;
-                        worksheet.Cells[row, 20].Value = result.InnerBundlingSerial;
+                        int col = 1;
+                        worksheet.Cells[row, col++].Value = envResult.CatchNo;
+                        worksheet.Cells[row, col++].Value = envResult.CenterCode;
+                        worksheet.Cells[row, col++].Value = envResult.CenterSort;
+                        worksheet.Cells[row, col++].Value = envResult.ExamTime;
+                        worksheet.Cells[row, col++].Value = envResult.ExamDate;
+                        worksheet.Cells[row, col++].Value = result.Quantity;
+                        worksheet.Cells[row, col++].Value = envResult.NodalCode;
+                        worksheet.Cells[row, col++].Value = envResult.NodalSort;
+                        worksheet.Cells[row, col++].Value = envResult.Route;
+                        worksheet.Cells[row, col++].Value = envResult.RouteSort;
+                        worksheet.Cells[row, col++].Value = envResult.TotalEnv;
+                        worksheet.Cells[row, col++].Value = result.Start;
+                        worksheet.Cells[row, col++].Value = result.End;
+                        worksheet.Cells[row, col++].Value = result.Serial;
+                        worksheet.Cells[row, col++].Value = nrRow?.Pages ?? 0;
+                        worksheet.Cells[row, col++].Value = result.TotalPages;
+                        
+                        // BoxNo: display as stored (symbol-boxno format if resetOnSymbolChange)
+                        string boxNoDisplay = result.BoxNo;
+                        worksheet.Cells[row, col++].Value = boxNoDisplay;
+                        
+                        worksheet.Cells[row, col++].Value = result.OmrSerial;
+                        worksheet.Cells[row, col++].Value = result.BookletSerial;
+                        worksheet.Cells[row, col++].Value = result.InnerBundlingSerial;
+
+                        // Add Symbol and CourseName if resetOnSymbolChange is true
+                        if (resetOnSymbolChange)
+                        {
+                            worksheet.Cells[row, col++].Value = nrRow?.Symbol ?? "";
+                            worksheet.Cells[row, col++].Value = nrRow?.CourseName ?? "";
+                        }
 
                         row++;
                     }
@@ -666,6 +742,12 @@ namespace Tools.Controllers
                     FileInfo fi = new FileInfo(filePath);
                     package.SaveAs(fi);
                 }
+
+                _loggerService.LogEvent(
+                    $"Generated box breaking report for ProjectId {ProjectId}",
+                    "BoxBreakingProcessing",
+                    User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
+                    ProjectId);
 
                 return Ok(new { message = "Report generated successfully", filePath });
             }

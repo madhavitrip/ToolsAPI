@@ -378,10 +378,12 @@ namespace Tools.Controllers
                     .MaxAsync(r => (int?)r.UploadBatch) ?? 0;
                 int currentBatch = maxBatch + 1;
 
-                int currentStartNumber = projectconfig.OmrSerialNumber;
-                //int StartBookletNumber = projectconfig.BookletSerialNumber;
+                int currentStartNumber = projectconfig?.BookletSerialNumber ?? 0;
+                int StartOmrNumber = projectconfig.OmrSerialNumber;
                 bool assignBookletSerial = currentStartNumber > 0;
+                bool assignOmrSerial = StartOmrNumber > 0;
                 bool resetOmrSerialOnCatchChange = projectconfig.ResetOmrSerialOnCatchChange;
+                bool resetBookletSerialOnCatchChange = projectconfig?.ResetBookletSerialOnCatchChange??false;
                 string prevCatchForSerial = null;
                 int serial = 1;
            
@@ -406,6 +408,11 @@ namespace Tools.Controllers
                         currentStartNumber = projectconfig.OmrSerialNumber;
                     }
 
+                    if (resetBookletSerialOnCatchChange && prevCatchForSerial != null && catchNo != prevCatchForSerial)
+                    {
+                        currentStartNumber = projectconfig?.BookletSerialNumber??0;
+                    }
+
                     int? nrDataId = null;
                     int? extraId = null;
 
@@ -420,10 +427,18 @@ namespace Tools.Controllers
                     }
 
                     string bookletSerial = "";
+                    string omrSerial = "";
                     if (assignBookletSerial)
                     {
                         int envQuantity = (int)dict["EnvQuantity"];
                         bookletSerial = $"{currentStartNumber}-{currentStartNumber + envQuantity - 1}";
+                        currentStartNumber += envQuantity;
+                    }
+
+                    if (assignOmrSerial)
+                    {
+                        int envQuantity = (int)dict["EnvQuantity"];
+                        omrSerial = $"{currentStartNumber}-{currentStartNumber + envQuantity - 1}";
                         currentStartNumber += envQuantity;
                     }
 
@@ -435,12 +450,58 @@ namespace Tools.Controllers
 
                     if (isExtra)
                     {
-                        modifiedCenterSort = (int?)dict["CenterSort"];
-                        modifiedNodalSort = Convert.ToDouble(dict["NodalSort"]);
-                        modifiedRouteSort = (int?)dict["RouteSort"];
+                        // Safe casting for nullable int fields
+                        if (dict["CenterSort"] is double dModCenterSort)
+                            modifiedCenterSort = (int)dModCenterSort;
+                        else if (dict["CenterSort"] is int iModCenterSort)
+                            modifiedCenterSort = iModCenterSort;
+                        else if (int.TryParse(dict["CenterSort"]?.ToString(), out int parsedModCenterSort))
+                            modifiedCenterSort = parsedModCenterSort;
+
+                        // Safe casting for double
+                        if (dict["NodalSort"] is double dModNodalSort)
+                            modifiedNodalSort = dModNodalSort;
+                        else if (dict["NodalSort"] is int iModNodalSort)
+                            modifiedNodalSort = (double)iModNodalSort;
+                        else if (double.TryParse(dict["NodalSort"]?.ToString(), out double parsedModNodalSort))
+                            modifiedNodalSort = parsedModNodalSort;
+
+                        // Safe casting for nullable int fields
+                        if (dict["RouteSort"] is double dModRouteSort)
+                            modifiedRouteSort = (int)dModRouteSort;
+                        else if (dict["RouteSort"] is int iModRouteSort)
+                            modifiedRouteSort = iModRouteSort;
+                        else if (int.TryParse(dict["RouteSort"]?.ToString(), out int parsedModRouteSort))
+                            modifiedRouteSort = parsedModRouteSort;
+
                         nodalCodeRef = dict["NodalCode"]?.ToString();
                         routeRef = dict["Route"]?.ToString();
                     }
+
+                    // Safe casting for numeric fields that might come as double
+                    int centerSort = 0;
+                    if (dict["CenterSort"] is double dCenterSort)
+                        centerSort = (int)dCenterSort;
+                    else if (dict["CenterSort"] is int iCenterSort)
+                        centerSort = iCenterSort;
+                    else if (int.TryParse(dict["CenterSort"]?.ToString(), out int parsedCenterSort))
+                        centerSort = parsedCenterSort;
+
+                    int routeSort = 0;
+                    if (dict["RouteSort"] is double dRouteSort)
+                        routeSort = (int)dRouteSort;
+                    else if (dict["RouteSort"] is int iRouteSort)
+                        routeSort = iRouteSort;
+                    else if (int.TryParse(dict["RouteSort"]?.ToString(), out int parsedRouteSort))
+                        routeSort = parsedRouteSort;
+
+                    double nodalSort = 0.0;
+                    if (dict["NodalSort"] is double dNodalSort)
+                        nodalSort = dNodalSort;
+                    else if (dict["NodalSort"] is int iNodalSort)
+                        nodalSort = (double)iNodalSort;
+                    else if (double.TryParse(dict["NodalSort"]?.ToString(), out double parsedNodalSort))
+                        nodalSort = parsedNodalSort;
 
                     envelopeResults.Add(new EnvelopeBreakingResult
                     {
@@ -454,15 +515,16 @@ namespace Tools.Controllers
                         Env = dict["Env"]?.ToString(),
                         SerialNumber = serial++,
                         BookletSerial = bookletSerial,
+                        OmrSerial = omrSerial,
                         CenterCode = dict["CenterCode"]?.ToString(),
-                        CenterSort = (int)dict["CenterSort"],
+                        CenterSort = centerSort,
                         ExamTime = dict["ExamTime"]?.ToString(),
                         ExamDate = dict["ExamDate"]?.ToString(),
                         Quantity = (int)dict["Quantity"],
                         NodalCode = dict["NodalCode"]?.ToString(),
-                        NodalSort = Convert.ToDouble(dict["NodalSort"]),
+                        NodalSort = nodalSort,
                         Route = dict["Route"]?.ToString(),
-                        RouteSort = (int)dict["RouteSort"],
+                        RouteSort = routeSort,
                         NRQuantity = (int)dict["NRQuantity"],
                         CourseName = dict["CourseName"]?.ToString(),
                         UploadBatch = currentBatch
@@ -501,7 +563,7 @@ namespace Tools.Controllers
             try
             {
                 var data = await _context.EnvelopeBreakingResults
-                    .Where(x => x.ProjectId == ProjectId && x.BookletSerial != null)
+                    .Where(x => x.ProjectId == ProjectId && (x.BookletSerial != null || x.OmrSerial != null))
                     .OrderBy(x => x.Id)
                     .ToListAsync();
 
@@ -509,16 +571,19 @@ namespace Tools.Controllers
                     .GroupBy(x => x.CatchNo)
                     .Select(g =>
                     {
-                        var firstSerial = g.First().BookletSerial;
-                        var lastSerial = g.Last().BookletSerial;
-
+                        var firstSerial = g.First().OmrSerial;
+                        var lastSerial = g.Last().OmrSerial;
+                        var firstBooklet = g.First().BookletSerial;
+                        var lastBooklet = g.Last().BookletSerial;
                         var start = firstSerial.Split('-')[0];
                         var end = lastSerial.Split('-')[1];
-
+                        var first = firstBooklet.Split('-')[0];
+                        var last = lastBooklet.Split('-')[0];
                         return new
                         {
                             CatchNo = g.Key,
-                            SerialRange = $"{start}-{end}",
+                            OmrSerialRange = $"{start}-{end}",
+                            BookletSerialRange = $"{first}-{last}",
                             ExamDate = g.First().ExamDate,
                             ExamTime = g.First().ExamTime
                         };
@@ -538,16 +603,18 @@ namespace Tools.Controllers
                     var worksheet = package.Workbook.Worksheets.Add("Serial Report");
 
                     worksheet.Cells[1, 1].Value = "Catch No";
-                    worksheet.Cells[1, 2].Value = "Booklet Serial Range";
-                    worksheet.Cells[1, 3].Value = "Exam Date";
-                    worksheet.Cells[1, 4].Value = "Exam Time";
+                    worksheet.Cells[1, 2].Value = "Omr Serial Range";
+                    worksheet.Cells[1, 3].Value = "Booklet Serial Range";
+                    worksheet.Cells[1, 4].Value = "Exam Date";
+                    worksheet.Cells[1, 5].Value = "Exam Time";
 
                     int row = 2;
 
                     foreach (var item in grouped)
                     {
                         worksheet.Cells[row, 1].Value = item.CatchNo;
-                        worksheet.Cells[row, 2].Value = item.SerialRange;
+                        worksheet.Cells[row, 2].Value = item.OmrSerialRange;
+                        worksheet.Cells[row,3].Value = item.BookletSerialRange;
                         worksheet.Cells[row, 3].Value = item.ExamDate;
                         worksheet.Cells[row, 4].Value = item.ExamTime;
                         row++;
@@ -645,7 +712,7 @@ namespace Tools.Controllers
                     rowDict["Env"] = result.Env ?? "";
                     rowDict["SerialNumber"] = result.SerialNumber;
                     rowDict["BookletSerial"] = result.BookletSerial ?? "";
-
+                    rowDict["OmrSerial"] = result.OmrSerial;
                     fullData.Add(row);
                 }
 
@@ -730,7 +797,7 @@ namespace Tools.Controllers
 
                     var headers = new[] { "Serial Number", "Catch No", "Center Code", "Center Sort", "Quantity", "EnvQuantity",
                         "Center Env", "Total Env", "Env", "NRQuantity", "Nodal Code", "Nodal Sort", "Route", "Route Sort",
-                        "Exam Time", "Exam Date", "BookletSerial", "CourseName" };
+                        "Exam Time", "Exam Date", "BookletSerial","OmrSerial", "CourseName" };
 
                     for (int i = 0; i < headers.Length; i++)
                     {
@@ -760,7 +827,8 @@ namespace Tools.Controllers
                         ws.Cells[rowIdx, 15].Value = dict.ContainsKey("ExamTime") ? dict["ExamTime"] : "";
                         ws.Cells[rowIdx, 16].Value = dict.ContainsKey("ExamDate") ? dict["ExamDate"] : "";
                         ws.Cells[rowIdx, 17].Value = dict.ContainsKey("BookletSerial") ? dict["BookletSerial"] : "";
-                        ws.Cells[rowIdx, 18].Value = dict.ContainsKey("CourseName") ? dict["CourseName"] : "";
+                        ws.Cells[rowIdx, 18].Value = dict.ContainsKey("OmrSerial");
+                        ws.Cells[rowIdx, 19].Value = dict.ContainsKey("CourseName") ? dict["CourseName"] : "";
                         rowIdx++;
                     }
 
