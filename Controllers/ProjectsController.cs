@@ -122,12 +122,16 @@ namespace Tools.Controllers
                     (p, l) => new
                     {
                       p.ProjectId,
+                      p.GroupId,
+                      p.TypeId,
                       LatestLoggedAt = l.LatestLoggedAt
                     })
                  .OrderByDescending(x => x.LatestLoggedAt)   // ⭐ Order by latest access
                   .Select(x => new
                   {
                    x.ProjectId,
+                   x.GroupId,
+                   x.TypeId,
                    TimeAgo = GetTimeAgo(x.LatestLoggedAt)
                   })
                .ToList();

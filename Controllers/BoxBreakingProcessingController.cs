@@ -192,13 +192,6 @@ namespace Tools.Controllers
                         var dict = (IDictionary<string, object>)x;
                         if (!dict.ContainsKey(fieldName))
                         {
-                            _loggerService.LogEvent(
-                                $"SORT WARNING: Field '{fieldName}' missing in row",
-                                "BoxBreakingProcessing",
-                                User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
-                                ProjectId
-                            );
-
                             return null;
                         }
                         var val = dict[fieldName];
