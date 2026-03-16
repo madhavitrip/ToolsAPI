@@ -1499,6 +1499,7 @@ namespace Tools.Controllers
                 var nrDataList = await _context.NRDatas
                     .Where(d => d.ProjectId == ProjectId)
                     .ToListAsync();
+
                 var conflictList = await _context.ConflictingFields
                     .Where(c => c.ProjectId == ProjectId)
                     .ToListAsync();
@@ -1507,34 +1508,40 @@ namespace Tools.Controllers
                 {
                     return NotFound($"No NRData found for ProjectId {ProjectId}");
                 }
+
                 var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
+
                 if (Directory.Exists(reportPath))
                 {
-                    Directory.Delete(reportPath, true); // 'true' allows recursive deletion of files and subdirectories
+                    Directory.Delete(reportPath, true);
                 }
 
                 _context.NRDatas.RemoveRange(nrDataList);
+
                 if (conflictList.Any())
                 {
                     _context.ConflictingFields.RemoveRange(conflictList);
                 }
+
                 await _context.SaveChangesAsync();
+
+                int userId = 0;
+                int.TryParse(User.Identity?.Name, out userId);
 
                 _loggerService.LogEvent(
                     $"Deleted all NRData and conflict records for ProjectId {ProjectId}",
                     "NRData",
-                    User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,ProjectId
+                    userId,
+                    ProjectId
                 );
 
                 return NoContent();
             }
             catch (Exception ex)
             {
-                _loggerService.LogError("Error deleting NRData", ex.Message, nameof(NRDatasController));
-                return StatusCode(500, "Internal Server Error");
+                return StatusCode(500, ex.ToString());
             }
         }
-
         private bool NRDataExists(int id)
         {
             return _context.NRDatas.Any(e => e.Id == id);
