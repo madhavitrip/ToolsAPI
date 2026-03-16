@@ -402,7 +402,48 @@ namespace Tools.Controllers
             try
             {
                 int projectId = inputData.GetProperty("projectId").GetInt32();
-                var dataArray = inputData.GetProperty("data").EnumerateArray();
+                var dataElement = inputData.GetProperty("data");
+
+                // Replace mode: when uploading for a project, we overwrite existing project data
+                // so repeated uploads don't append duplicates.
+                //
+                // Delete dependent/generated tables first (FK safety), then NRDatas.
+                // Wrapped in a transaction so a failed insert doesn't wipe existing data.
+                int deletedBoxBreaking = 0;
+                int deletedEnvelopeBreakage = 0;
+                int deletedEnvelopeBreaking = 0;
+                int deletedExtras = 0;
+                int deletedConflicts = 0;
+                int deletedNrDatas = 0;
+
+                var strategy = _context.Database.CreateExecutionStrategy();
+                return await strategy.ExecuteAsync(async () =>
+                {
+                    await using var tx = await _context.Database.BeginTransactionAsync();
+
+                    deletedBoxBreaking = await _context.BoxBreakingResults
+                        .Where(x => x.ProjectId == projectId)
+                        .ExecuteDeleteAsync();
+
+                    deletedEnvelopeBreakage = await _context.EnvelopeBreakages
+                        .Where(x => x.ProjectId == projectId)
+                        .ExecuteDeleteAsync();
+
+                    deletedEnvelopeBreaking = await _context.EnvelopeBreakingResults
+                        .Where(x => x.ProjectId == projectId)
+                        .ExecuteDeleteAsync();
+
+                    deletedExtras = await _context.ExtrasEnvelope
+                        .Where(x => x.ProjectId == projectId)
+                        .ExecuteDeleteAsync();
+
+                    deletedConflicts = await _context.ConflictingFields
+                        .Where(x => x.ProjectId == projectId)
+                        .ExecuteDeleteAsync();
+
+                    deletedNrDatas = await _context.NRDatas
+                        .Where(x => x.ProjectId == projectId)
+                        .ExecuteDeleteAsync();
 
                 var extraConfigs = await _context.ExtraConfigurations
                     .Where(x => x.ProjectId == projectId)
@@ -416,7 +457,7 @@ namespace Tools.Controllers
                     .GetProperties()
                     .ToDictionary(p => p.Name.ToLower(), p => p);
 
-                foreach (var item in dataArray)
+                foreach (var item in dataElement.EnumerateArray())
                 {
                     var nRData = new NRData
                     {
@@ -528,17 +569,29 @@ namespace Tools.Controllers
 
                 await _context.SaveChangesAsync();
 
+                    await tx.CommitAsync();
+
                 _loggerService.LogEvent(
-                    $"Created NRData/Extras for Project {projectId}",
+                    $"Replaced NRData upload for Project {projectId}. Deleted: NRDatas={deletedNrDatas}, ExtrasEnvelope={deletedExtras}, Conflicts={deletedConflicts}, EnvelopeBreaking={deletedEnvelopeBreaking}, EnvelopeBreakage={deletedEnvelopeBreakage}, BoxBreaking={deletedBoxBreaking}. Inserted: NRDatas={nrDatasToAdd.Count}, ExtrasEnvelope={extraEnvelopesToAdd.Count}.",
                     "NRData",
                     User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
                     projectId);
 
                 return Ok(new
                 {
-                    message = "Data inserted successfully",
+                    message = "Data replaced successfully",
+                    deleted = new
+                    {
+                        nrDatas = deletedNrDatas,
+                        extrasEnvelope = deletedExtras,
+                        conflicts = deletedConflicts,
+                        envelopeBreakingResults = deletedEnvelopeBreaking,
+                        envelopeBreakages = deletedEnvelopeBreakage,
+                        boxBreakingResults = deletedBoxBreaking
+                    },
                     NRDataCount = nrDatasToAdd.Count,
                     ExtraEnvelopeCount = extraEnvelopesToAdd.Count
+                });
                 });
             }
             catch (DbUpdateException dbEx)
