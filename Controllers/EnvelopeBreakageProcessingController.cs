@@ -40,7 +40,7 @@ namespace Tools.Controllers
                     .ToListAsync();
 
                 var nrData = await _context.NRDatas
-                    .Where(p => p.ProjectId == ProjectId)
+                    .Where(p => p.ProjectId == ProjectId && p.Status == true)
                     .OrderBy(p => p.CatchNo)
                     .ThenBy(p => p.RouteSort)
                     .ThenBy(p => p.NodalSort)
@@ -645,7 +645,7 @@ namespace Tools.Controllers
                     return NotFound("Project config not found");
 
                 var nrData = await _context.NRDatas
-                    .Where(p => p.ProjectId == ProjectId)
+                    .Where(p => p.ProjectId == ProjectId && p.Status == true)
                     .ToListAsync();
 
                 var fields = await _context.Fields

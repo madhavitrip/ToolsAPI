@@ -34,7 +34,7 @@ namespace Tools.Controllers
         [HttpGet]
         public async Task<ActionResult<IEnumerable<ExtraEnvelopes>>> GetExtrasEnvelope(int ProjectId)
         {
-            var NrData = await _context.NRDatas.Where(p => p.ProjectId == ProjectId).ToListAsync();
+            var NrData = await _context.NRDatas.Where(p => p.ProjectId == ProjectId && p.Status == true).ToListAsync();
 
             return await _context.ExtrasEnvelope.ToListAsync();
         }
@@ -102,7 +102,7 @@ namespace Tools.Controllers
             try
             {
                 var nrDataList = await _context.NRDatas
-                    .Where(d => d.ProjectId == ProjectId)
+                    .Where(d => d.ProjectId == ProjectId && d.Status == true)
                     .ToListAsync();
 
                 var groupedNR = nrDataList

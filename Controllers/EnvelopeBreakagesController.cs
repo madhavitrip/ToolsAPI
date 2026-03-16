@@ -41,7 +41,7 @@ namespace Tools.Controllers
         public async Task<ActionResult> GetEnvelopeBreakages(int ProjectId)
         {
             var NRData = await _context.NRDatas
-                .Where(p => p.ProjectId == ProjectId)
+                .Where(p => p.ProjectId == ProjectId && p.Status == true)
                 .ToListAsync();
 
             var Envelope = await _context.EnvelopeBreakages
@@ -299,7 +299,7 @@ namespace Tools.Controllers
                     return NotFound("No envelope config found.");
 
                 var nrDataList = await _context.NRDatas
-                    .Where(s => s.ProjectId == ProjectId)
+                    .Where(s => s.ProjectId == ProjectId && s.Status == true)
                     .ToListAsync();
 
                 if (!nrDataList.Any())
@@ -462,7 +462,7 @@ namespace Tools.Controllers
             try
             {
                 var nrDataList = await _context.NRDatas
-                    .Where(x => x.ProjectId == ProjectId)
+                    .Where(x => x.ProjectId == ProjectId && x.Status == true)
                     .ToListAsync();
 
                 if (!nrDataList.Any())
@@ -736,7 +736,7 @@ namespace Tools.Controllers
                 // 1️⃣ Get NRData from Database
                 // ==============================
                 var nrDataList = await _context.NRDatas
-                    .Where(x => x.ProjectId == ProjectId)
+                    .Where(x => x.ProjectId == ProjectId && x.Status == true)
                     .ToListAsync();
 
                 if (!nrDataList.Any())
@@ -987,7 +987,7 @@ namespace Tools.Controllers
                 .ToDictionary(x => x.EnvelopeName, x => x.Capacity);
 
             var nrData = await _context.NRDatas
-                .Where(p => p.ProjectId == ProjectId)
+                .Where(p => p.ProjectId == ProjectId && p.Status == true)
                 .ToListAsync();
             var missingPages = nrData
          .Where(x => x.Pages == null || x.Pages <= 0)
@@ -1825,7 +1825,7 @@ namespace Tools.Controllers
                 .ToListAsync();
 
             var nrData = await _context.NRDatas
-                .Where(p => p.ProjectId == ProjectId)
+                .Where(p => p.ProjectId == ProjectId && p.Status == true)
                 .OrderBy(p=>p.CatchNo)
                 .ThenBy(p => p.RouteSort)
                 .ThenBy(p => p.NodalSort)

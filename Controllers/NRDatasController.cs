@@ -71,7 +71,7 @@ namespace Tools.Controllers
             string? sortOrder = null)
         {
             IQueryable<NRData> query = _context.NRDatas
-             .Where(d => d.ProjectId == projectId);
+             .Where(d => d.ProjectId == projectId && d.Status == true);
 
             // ⭐ APPLY SEARCH IF KEY + SEARCH PROVIDED
             if (!string.IsNullOrWhiteSpace(search) && !string.IsNullOrWhiteSpace(key))
@@ -242,6 +242,7 @@ namespace Tools.Controllers
             var selectedRows = await _context.NRDatas
                 .Where(item =>
                     item.ProjectId == ProjectId &&
+                    item.Status == true &&
                     item.CatchNo != null &&
                     normalizedRequestedCatchNos.Contains(item.CatchNo.Trim().ToLower()))
                 .ToListAsync();
@@ -321,7 +322,8 @@ namespace Tools.Controllers
 
                     foreach (var row in groupRows.Where(item => item.Id != primaryRow.Id))
                     {
-                        _context.NRDatas.Remove(row);
+                        row.Status = false;              // soft delete
+                        row.NRDataId = primaryRow.Id; // reference merged row
                         rowsDeleted++;
                     }
 
