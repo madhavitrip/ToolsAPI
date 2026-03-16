@@ -14,10 +14,13 @@ namespace ERPToolsAPI.Data
         public DbSet <NRData> NRDatas { get; set; }
         public DbSet <Field> Fields { get; set; }
         public DbSet <ProjectConfig> ProjectConfigs { get; set; }
+        public DbSet<MProjectConfigs> MProjectConfigs { get; set; }
+
         public DbSet <ToolRecord> ToolRecords { get; set; }
         public DbSet <Module> Modules { get; set; }
         public DbSet <ToolConfig> ToolConfigs { get; set; }
         public DbSet<ExtrasConfiguration> ExtraConfigurations { get; set; }
+        public DbSet<MExtraConfigurations> MExtraConfigurations { get; set; }
         public DbSet<ExtraEnvelopes> ExtrasEnvelope { get; set; }
         public DbSet<ExtraType> ExtraType { get; set; }
         public DbSet<EnvelopeBreakage> EnvelopeBreakages { get; set; }

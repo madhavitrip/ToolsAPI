@@ -21,7 +21,7 @@ namespace Tools.Models
         public string? Env { get; set; }         // "1/2", "2/2"
         public int SerialNumber { get; set; }
         public string? BookletSerial { get; set; }
-
+        public string? OmrSerial { get; set; }
         // All fields needed for sorting in both EnvelopeBreakage and BoxBreaking
         public string? CenterCode { get; set; }
         public double CenterSort { get; set; }

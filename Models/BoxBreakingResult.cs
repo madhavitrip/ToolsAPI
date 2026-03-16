@@ -19,6 +19,7 @@ namespace Tools.Models
         public int TotalPages { get; set; }
         public string BoxNo { get; set; }
         public string OmrSerial { get; set; }
+        public string BookletSerial { get; set; }
         public int? InnerBundlingSerial { get; set; }
         public int Quantity { get; set; }       // Quantity for this box
 
