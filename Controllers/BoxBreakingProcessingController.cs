@@ -135,7 +135,7 @@ namespace Tools.Controllers
                         rowDict["Symbol"] = "";
                         rowDict["Pages"] = 0;
                     }
-
+                  
                     breakingReportData.Add(row);
                 }
 
@@ -155,7 +155,7 @@ namespace Tools.Controllers
                     })
                     .Select(g => g.First())
                     .ToList();
-
+               
                 // Step 2: Calculate Start, End, Serial (BEFORE sorting)
                 var enrichedList = new List<dynamic>();
                 string previousCatchNo = null;
@@ -178,8 +178,10 @@ namespace Tools.Controllers
 
                     previousCatchNo = catchNo;
                     previousEnd = end;
+                   
                 }
-
+              
+               
                 // Step 3: Apply sorting using dictionary access (not reflection)
                 IOrderedEnumerable<dynamic> ordered = null;
 
@@ -188,8 +190,17 @@ namespace Tools.Controllers
                     Func<dynamic, object> keySelector = x =>
                     {
                         var dict = (IDictionary<string, object>)x;
-                        if (!dict.ContainsKey(fieldName)) return null;
+                        if (!dict.ContainsKey(fieldName))
+                        {
+                            _loggerService.LogEvent(
+                                $"SORT WARNING: Field '{fieldName}' missing in row",
+                                "BoxBreakingProcessing",
+                                User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
+                                ProjectId
+                            );
 
+                            return null;
+                        }
                         var val = dict[fieldName];
                         if (val == null) return null;
 
@@ -222,7 +233,7 @@ namespace Tools.Controllers
                                 return parsedDate;
                         }
 
-                        return val.ToString().Trim();
+                        return val.ToString().Trim().ToLowerInvariant();
                     };
 
                     if (ordered == null)
@@ -232,7 +243,9 @@ namespace Tools.Controllers
                 }
 
                 var sortedList = ordered?.ToList() ?? enrichedList;
+               
 
+              
                 // Get envelope size from config
                 var envelopeObj = JsonSerializer.Deserialize<Dictionary<string, string>>(projectconfig.Envelope);
                 int envelopeSize = 0;
@@ -265,9 +278,11 @@ namespace Tools.Controllers
 
                 foreach (var item in sortedList)
                 {
+                    // RIGHT AFTER: var sortedList = ordered?.ToList() ?? enrichedList;
                     var itemDict = (IDictionary<string, object>)item;
-                    
-                    var nrRow = nrData.FirstOrDefault(n => n.Id == itemDict["NrDataId"] as int?);
+
+                    string catchNo = itemDict["CatchNo"]?.ToString();
+                    var nrRow = nrData.FirstOrDefault(n => n.CatchNo == catchNo);
                     int pages = nrRow?.Pages ?? 0;
                     int totalPages = ((int)itemDict["Quantity"]) * pages;
                     string currentSymbol = resetOnSymbolChange ? (nrRow?.Symbol ?? "") : "";
@@ -538,6 +553,8 @@ namespace Tools.Controllers
                 }
 
                 // Get current batch number
+                // RIGHT AFTER: the foreach (var item in sortedList) loop ends
+               
                 var maxBoxBatch = await _context.BoxBreakingResults
                     .Where(r => r.ProjectId == ProjectId)
                     .MaxAsync(r => (int?)r.UploadBatch) ?? 0;
@@ -578,7 +595,7 @@ namespace Tools.Controllers
                             boxNoForStorage = $"{symbol}-{boxNum}";
                         }
                     }
-
+                 
                     boxResults.Add(new BoxBreakingResult
                     {
                         ProjectId = ProjectId,
@@ -597,7 +614,7 @@ namespace Tools.Controllers
                         UploadBatch = currentBatch
                     });
                 }
-
+             
                 _context.BoxBreakingResults.AddRange(boxResults);
                 await _context.SaveChangesAsync();
 
@@ -626,20 +643,19 @@ namespace Tools.Controllers
         /// </summary>
 
         [HttpGet("GetBoxBreakingReport")]
-        public async Task<IActionResult> GetBoxBreakingReport(int ProjectId)
+        public async Task<IActionResult> GetBoxBreakingReport(int ProjectId, int UploadBatch)
         {
             try
             {
                 var boxResults = await _context.BoxBreakingResults
-                    .Where(r => r.ProjectId == ProjectId)
-                    .OrderByDescending(r => r.UploadBatch)
+                    .Where(r => r.ProjectId == ProjectId && r.UploadBatch == UploadBatch)
+                    .OrderBy(r => r.Id)
                     .ToListAsync();
 
                 if (!boxResults.Any())
                     return NotFound("No box breaking results found");
 
-                var envelopeResults = await _context.EnvelopeBreakingResults
-                    .ToListAsync();
+                var envelopeResults = await _context.EnvelopeBreakingResults.ToListAsync();
 
                 var nrData = await _context.NRDatas
                     .Where(p => p.ProjectId == ProjectId)
@@ -669,19 +685,32 @@ namespace Tools.Controllers
                 {
                     var worksheet = package.Workbook.Worksheets.Add("BoxBreaking");
 
-                    // Build headers dynamically based on resetOnSymbolChange
                     var headers = new List<string>
-                    {
-                        "CatchNo", "CenterCode", "CenterSort", "ExamTime", "ExamDate", "Quantity",
-                        "NodalCode", "NodalSort", "Route", "RouteSort", "TotalEnv", "Start", "End",
-                        "Serial", "Pages", "TotalPages", "BoxNo", "OmrSerial", "BookletSerial", "InnerBundlingSerial"
-                    };
+            {
+                "SerialNo","CatchNo","CenterCode","CenterSort","ExamTime","ExamDate","Quantity",
+                "NodalCode","NodalSort","Route","RouteSort","TotalEnv","Start","End",
+                "Serial","Pages","TotalPages","BoxNo","Beejak"
+            };
 
-                    // Add Symbol and CourseName columns if resetOnSymbolChange is true
                     if (resetOnSymbolChange)
                     {
                         headers.Add("Symbol");
                         headers.Add("CourseName");
+                    }
+
+                    if(projectconfig.BookletSerialNumber > 0)
+                    {
+                        headers.Add("BookletSerial");
+                    }
+
+                    if(projectconfig.OmrSerialNumber > 0)
+                    {
+                        headers.Add("OmrSerial");
+                    }
+
+                    if (projectconfig.IsInnerBundlingDone)
+                    {
+                        headers.Add("InnerBundlingSerial");
                     }
 
                     // Write headers
@@ -692,17 +721,22 @@ namespace Tools.Controllers
                     }
 
                     int row = 2;
+                    int serial = 1;
+
+                    // Track first center box
+                    var processedCenters = new HashSet<string>();
+
                     foreach (var result in boxResults)
                     {
-                        // Get EnvelopeBreakingResult data
                         var envResult = envelopeResults.FirstOrDefault(e => e.Id == result.EnvelopeBreakingResultId);
                         if (envResult == null)
                             continue;
 
-                        // Get NRData for additional fields
                         var nrRow = nrData.FirstOrDefault(n => n.Id == envResult.NrDataId);
 
                         int col = 1;
+
+                        worksheet.Cells[row, col++].Value = serial++;
                         worksheet.Cells[row, col++].Value = envResult.CatchNo;
                         worksheet.Cells[row, col++].Value = envResult.CenterCode;
                         worksheet.Cells[row, col++].Value = envResult.CenterSort;
@@ -719,26 +753,47 @@ namespace Tools.Controllers
                         worksheet.Cells[row, col++].Value = result.Serial;
                         worksheet.Cells[row, col++].Value = nrRow?.Pages ?? 0;
                         worksheet.Cells[row, col++].Value = result.TotalPages;
-                        
-                        // BoxNo: display as stored (symbol-boxno format if resetOnSymbolChange)
+
                         string boxNoDisplay = result.BoxNo;
                         worksheet.Cells[row, col++].Value = boxNoDisplay;
-                        
-                        worksheet.Cells[row, col++].Value = result.OmrSerial;
-                        worksheet.Cells[row, col++].Value = result.BookletSerial;
-                        worksheet.Cells[row, col++].Value = result.InnerBundlingSerial;
 
-                        // Add Symbol and CourseName if resetOnSymbolChange is true
+
+                        // Beejak logic
+                        bool isFirstBoxOfCentre = false;
+
+                        if (!processedCenters.Contains(envResult.CenterCode))
+                        {
+                            processedCenters.Add(envResult.CenterCode);
+                            isFirstBoxOfCentre = true;
+                        }
+
+                        worksheet.Cells[row, col++].Value = isFirstBoxOfCentre ? "Beejak" : "";
+
                         if (resetOnSymbolChange)
                         {
                             worksheet.Cells[row, col++].Value = nrRow?.Symbol ?? "";
                             worksheet.Cells[row, col++].Value = nrRow?.CourseName ?? "";
                         }
 
+                        if (projectconfig.BookletSerialNumber >0) {
+                            worksheet.Cells[row, col++].Value = result.BookletSerial;
+                        }
+
+                        if (projectconfig.OmrSerialNumber > 0) {
+                            worksheet.Cells[row, col++].Value = result.OmrSerial;
+                        }
+
+                        if (projectconfig.IsInnerBundlingDone)
+                        {
+                            worksheet.Cells[row, col++].Value = result.InnerBundlingSerial;
+                        }
+
                         row++;
                     }
+
                     worksheet.Cells[worksheet.Dimension.Address].AutoFitColumns();
                     worksheet.View.FreezePanes(2, 1);
+
                     FileInfo fi = new FileInfo(filePath);
                     package.SaveAs(fi);
                 }
