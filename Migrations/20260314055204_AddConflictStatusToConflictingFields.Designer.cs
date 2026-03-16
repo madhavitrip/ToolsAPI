@@ -4,6 +4,7 @@ using ERPToolsAPI.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace Tools.Migrations
 {
     [DbContext(typeof(ERPToolsDbContext))]
-    partial class ERPToolsDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260314055204_AddConflictStatusToConflictingFields")]
+    partial class AddConflictStatusToConflictingFields
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -156,18 +159,20 @@ namespace Tools.Migrations
 
                     MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
 
+                    b.Property<string>("CatchNo")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
                     b.Property<string>("ConflictingField")
                         .IsRequired()
                         .HasColumnType("longtext");
 
-                    b.Property<int>("NRDataId")
-                        .HasColumnType("int");
-
                     b.Property<int>("ProjectId")
                         .HasColumnType("int");
 
-                    b.Property<int>("Status")
-                        .HasColumnType("int");
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("longtext");
 
                     b.Property<string>("UniqueField")
                         .IsRequired()
@@ -231,8 +236,8 @@ namespace Tools.Migrations
                     b.Property<int>("CenterEnv")
                         .HasColumnType("int");
 
-                    b.Property<double>("CenterSort")
-                        .HasColumnType("double");
+                    b.Property<int>("CenterSort")
+                        .HasColumnType("int");
 
                     b.Property<string>("CourseName")
                         .HasColumnType("longtext");
@@ -453,9 +458,6 @@ namespace Tools.Migrations
                     b.Property<int>("ProjectId")
                         .HasColumnType("int");
 
-                    b.Property<string>("RangeConfig")
-                        .HasColumnType("longtext");
-
                     b.Property<string>("Value")
                         .IsRequired()
                         .HasColumnType("longtext");
@@ -516,8 +518,8 @@ namespace Tools.Migrations
                     b.Property<string>("CenterCode")
                         .HasColumnType("longtext");
 
-                    b.Property<double>("CenterSort")
-                        .HasColumnType("double");
+                    b.Property<int>("CenterSort")
+                        .HasColumnType("int");
 
                     b.Property<string>("CourseName")
                         .HasColumnType("longtext");
@@ -537,8 +539,8 @@ namespace Tools.Migrations
                     b.Property<string>("NodalCode")
                         .HasColumnType("longtext");
 
-                    b.Property<double>("NodalSort")
-                        .HasColumnType("double");
+                    b.Property<int>("NodalSort")
+                        .HasColumnType("int");
 
                     b.Property<int>("Pages")
                         .HasColumnType("int");
@@ -597,9 +599,6 @@ namespace Tools.Migrations
 
                     MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
 
-                    b.Property<int?>("BookletSerialNumber")
-                        .HasColumnType("int");
-
                     b.Property<string>("BoxBreakingCriteria")
                         .IsRequired()
                         .HasColumnType("longtext");
@@ -644,9 +643,6 @@ namespace Tools.Migrations
 
                     b.Property<int>("ProjectId")
                         .HasColumnType("int");
-
-                    b.Property<bool?>("ResetBookletSerialOnCatchChange")
-                        .HasColumnType("tinyint(1)");
 
                     b.Property<bool>("ResetOmrSerialOnCatchChange")
                         .HasColumnType("tinyint(1)");

@@ -18,6 +18,17 @@ namespace Tools.Controllers
     [ApiController]
     public class NRDatasController : ControllerBase
     {
+        private const string CatchUniqueFieldConflict = "catch_unique_field";
+        private const string CenterMultipleNodalsConflict = "center_multiple_nodals";
+        private const string CollegeMultipleNodalsConflict = "college_multiple_nodals";
+        private const string CollegeMultipleCentersConflict = "college_multiple_centers";
+        private const string RequiredFieldEmptyConflict = "required_field_empty";
+        private const string ZeroNrQuantityConflict = "zero_nr_quantity";
+        private const string NodalCodeDigitMismatchConflict = "nodal_code_digit_mismatch";
+        private const int ConflictStatusPending = 0;
+        private const int ConflictStatusResolved = 1;
+        private const int ConflictStatusIgnored = 2;
+
         private readonly ERPToolsDbContext _context;
         private readonly ILoggerService _loggerService;
 
@@ -385,192 +396,53 @@ namespace Tools.Controllers
         [HttpGet("ErrorReport")]
         public async Task<ActionResult> GetDuplicateswrtCatch(int ProjectId)
         {
-            // 1️⃣ Fetch NR Data
             var nrData = await _context.NRDatas
-                .Where(p => p.ProjectId == ProjectId)
+                .Where(item => item.ProjectId == ProjectId)
                 .ToListAsync();
+            if (nrData.Count == 0)
+            {
+                return Ok(new
+                {
+                    ErrorsFound = false,
+                    Errors = new List<ConflictReportItem>()
+                });
+            }
 
-            if (!nrData.Any())
-                return NotFound("No NRData found for this project.");
-
-            // 2️⃣ Fetch Project Configuration
+            var rowsWithMeta = BuildConflictRows(nrData);
             var projectConfig = await _context.ProjectConfigs
-                .FirstOrDefaultAsync(p => p.ProjectId == ProjectId);
+                .FirstOrDefaultAsync(item => item.ProjectId == ProjectId);
 
-            if (projectConfig == null)
-                return BadRequest("Project configuration not found.");
-
-            // 3️⃣ Extract FieldIds from ProjectConfig JSON
-            List<int> fieldIds = new List<int>();
-
-            List<int> ParseIds(string json)
+            var fieldIds = new List<int>();
+            if (projectConfig != null)
             {
-                if (string.IsNullOrWhiteSpace(json))
-                    return new List<int>();
-
-                try
-                {
-                    return JsonSerializer.Deserialize<List<int>>(json);
-                }
-                catch
-                {
-                    return new List<int>();
-                }
+                fieldIds.AddRange(projectConfig.DuplicateCriteria ?? new List<int>());
+                fieldIds.AddRange(projectConfig.EnvelopeMakingCriteria ?? new List<int>());
+                fieldIds.AddRange(projectConfig.BoxBreakingCriteria ?? new List<int>());
+                fieldIds.AddRange(projectConfig.InnerBundlingCriteria ?? new List<int>());
             }
 
-            fieldIds.AddRange(projectConfig.DuplicateCriteria ?? new List<int>());
-            fieldIds.AddRange(projectConfig.EnvelopeMakingCriteria ?? new List<int>());
-            fieldIds.AddRange(projectConfig.BoxBreakingCriteria ?? new List<int>());
-            fieldIds.AddRange(projectConfig.InnerBundlingCriteria ?? new List<int>());
-
-            fieldIds = fieldIds.Distinct().ToList();
-
-            // 4️⃣ Get Field Names from Fields table
             var requiredFields = await _context.Fields
-                .Where(f => fieldIds.Contains(f.FieldId))
-                .Select(f => f.Name.Trim())
+                .Where(field => fieldIds.Distinct().Contains(field.FieldId))
+                .Select(field => field.Name.Trim())
                 .ToListAsync();
 
-            // 5️⃣ Unique fields (already configured)
+            if (!requiredFields.Contains("NRQuantity", StringComparer.OrdinalIgnoreCase))
+            {
+                requiredFields.Add("NRQuantity");
+            }
+
             var uniqueFields = await _context.Fields
-                .Where(f => f.IsUnique == true)
-                .Select(f => f.Name.Trim())
+                .Where(field => field.IsUnique == true)
+                .Select(field => field.Name.Trim())
                 .ToListAsync();
 
-            var props = typeof(NRData).GetProperties(BindingFlags.Public | BindingFlags.Instance);
+            var errorReport = BuildConflictReport(rowsWithMeta, requiredFields, uniqueFields);
 
-            var catchProp = props.FirstOrDefault(p =>
-                string.Equals(p.Name, "CatchNo", StringComparison.OrdinalIgnoreCase));
-
-            var centreProp = props.FirstOrDefault(p =>
-                string.Equals(p.Name, "CenterCode", StringComparison.OrdinalIgnoreCase));
-
-            var nodalProp = props.FirstOrDefault(p =>
-                string.Equals(p.Name, "NodalCode", StringComparison.OrdinalIgnoreCase));
-
-            if (catchProp == null)
-                return BadRequest("CatchNo field not found in NRData.");
-
-            var errorReport = new List<object>();
-
-            // ---------------------------------------------------
-            // 6️⃣ CatchNo vs Unique Field Conflict Check
-            // ---------------------------------------------------
-
-            foreach (var uniqueField in uniqueFields)
-            {
-                var uniqueProp = props.FirstOrDefault(p =>
-                    string.Equals(p.Name, uniqueField, StringComparison.OrdinalIgnoreCase));
-
-                if (uniqueProp == null)
-                    continue;
-
-                var catchGroups = nrData
-                    .GroupBy(d => catchProp.GetValue(d)?.ToString()?.Trim() ?? "")
-                    .Where(g => !string.IsNullOrEmpty(g.Key));
-
-                foreach (var group in catchGroups)
-                {
-                    var catchNo = group.Key;
-
-                    var uniqueValues = group
-                        .Select(r => uniqueProp.GetValue(r)?.ToString()?.Trim() ?? "")
-                        .Distinct()
-                        .Where(v => !string.IsNullOrEmpty(v))
-                        .ToList();
-
-                    if (uniqueValues.Count > 1)
-                    {
-                        errorReport.Add(new
-                        {
-                            CatchNo = catchNo,
-                            UniqueField = uniqueField,
-                            ConflictingValues = uniqueValues
-                        });
-
-                        var conflictRecord = new ConflictingFields
-                        {
-                            CatchNo = catchNo,
-                            ProjectId = ProjectId,
-                            UniqueField = uniqueField,
-                            ConflictingField = JsonSerializer.Serialize(uniqueValues)
-                        };
-
-                        _context.ConflictingFields.Add(conflictRecord);
-                    }
-                }
-            }
-
-            // ---------------------------------------------------
-            // 7️⃣ CentreCode mapped to multiple NodalCodes
-            // ---------------------------------------------------
-
-            if (centreProp != null && nodalProp != null)
-            {
-                var centreGroups = nrData
-                    .GroupBy(d => centreProp.GetValue(d)?.ToString()?.Trim() ?? "")
-                    .Where(g => !string.IsNullOrEmpty(g.Key));
-
-                foreach (var group in centreGroups)
-                {
-                    var nodalValues = group
-                        .Select(r => nodalProp.GetValue(r)?.ToString()?.Trim() ?? "")
-                        .Distinct()
-                        .Where(v => !string.IsNullOrEmpty(v))
-                        .ToList();
-
-                    if (nodalValues.Count > 1)
-                    {
-                        errorReport.Add(new
-                        {
-                            CentreCode = group.Key,
-                            Error = "CentreCode mapped to multiple NodalCodes",
-                            NodalCodes = nodalValues
-                        });
-                    }
-                }
-            }
-
-            // ---------------------------------------------------
-            // 8️⃣ Required Fields Empty Check
-            // ---------------------------------------------------
-
-            foreach (var field in requiredFields)
-            {
-                var prop = props.FirstOrDefault(p =>
-                    string.Equals(p.Name, field, StringComparison.OrdinalIgnoreCase));
-
-                if (prop == null)
-                    continue;
-
-                var emptyRows = nrData
-                    .Where(r => string.IsNullOrWhiteSpace(prop.GetValue(r)?.ToString()))
-                    .Select(r => catchProp.GetValue(r)?.ToString())
-                    .ToList();
-
-                if (emptyRows.Any())
-                {
-                    errorReport.Add(new
-                    {
-                        Field = field,
-                        Error = "Required field is empty",
-                        CatchNos = emptyRows
-                    });
-                }
-            }
-
-            await _context.SaveChangesAsync();
-
-            // ---------------------------------------------------
-            // 9️⃣ Final Response
-            // ---------------------------------------------------
-
-            if (!errorReport.Any())
-                return Ok("All validations passed. No errors found.");
+            await SyncConflictStatuses(ProjectId, errorReport);
 
             return Ok(new
             {
-                ErrorsFound = true,
+                ErrorsFound = errorReport.Count > 0,
                 Errors = errorReport
             });
         }
@@ -587,20 +459,25 @@ namespace Tools.Controllers
         {
             try
             {
-                var NRdata = await _context.NRDatas.Where(a => a.CatchNo == payload.CatchNo && a.ProjectId == ProjectId).ToListAsync();
-                if (!NRdata.Any())
-                    return NotFound("No matching records found");
-
-                // Use reflection to update the dynamic conflicting field
-                foreach (var item in NRdata)
+                if (payload == null || string.IsNullOrWhiteSpace(payload.ConflictType) || string.IsNullOrWhiteSpace(payload.SelectedValue))
                 {
-                    var property = item.GetType().GetProperty(payload.UniqueField);
-                    if (property != null && property.CanWrite)
-                    {
-                        property.SetValue(item, payload.SelectedValue);
-                    }
+                    return BadRequest("Conflict type and selected value are required.");
                 }
+
+                var rowsToUpdate = await GetRowsForConflict(ProjectId, payload);
+                if (!rowsToUpdate.Any())
+                {
+                    return NotFound("No matching records found");
+                }
+
+                foreach (var item in rowsToUpdate)
+                {
+                    ApplyConflictResolution(item, payload);
+                }
+
                 await _context.SaveChangesAsync();
+                await UpsertConflictStatus(ProjectId, payload, ConflictStatusResolved);
+
                 _loggerService.LogEvent($"Updated NRdata for CatchNo {payload.CatchNo} and ProjectId {ProjectId}", "NRData", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,ProjectId);
                 return Ok("Conflict resolved successfully");
             }
@@ -609,6 +486,738 @@ namespace Tools.Controllers
                 _loggerService.LogError("Error saving Nrdata", ex.Message, nameof(NRDatasController));
                 return StatusCode(500, "Internal Server Error");
             }
+        }
+
+        [HttpPut("conflicts/status")]
+        public async Task<ActionResult> UpdateConflictStatus(int ProjectId, [FromBody] ConflictStatusUpdateDto payload)
+        {
+            if (payload == null || string.IsNullOrWhiteSpace(payload.ConflictType))
+            {
+                return BadRequest("Conflict details are required.");
+            }
+
+            var normalizedStatus = NormalizeStatusCode(payload.Status);
+            if (normalizedStatus == ConflictStatusIgnored && !CanIgnoreConflict(payload.ConflictType))
+            {
+                return BadRequest("Ignore is not allowed for this conflict type.");
+            }
+
+            await UpsertConflictStatus(ProjectId, payload, normalizedStatus);
+
+            return Ok(new
+            {
+                message = $"Conflict marked as {NormalizeStatusLabel(normalizedStatus)}.",
+                status = NormalizeStatusLabel(normalizedStatus)
+            });
+        }
+
+        private static List<NRDataConflictProjection> BuildConflictRows(IEnumerable<NRData> rows)
+        {
+            return rows.Select(row =>
+            {
+                var jsonValues = ParseNrDatas(row.NRDatas);
+                var collegeData = GetCollegeData(row);
+                return new NRDataConflictProjection
+                {
+                    Row = row,
+                    CatchNo = NormalizeText(row.CatchNo),
+                    ExamDate = NormalizeText(row.ExamDate),
+                    ExamTime = NormalizeText(row.ExamTime),
+                    CenterCode = NormalizeText(row.CenterCode),
+                    NodalCode = NormalizeText(row.NodalCode),
+                    NrQuantity = row.NRQuantity,
+                    ImportRowNo = ParseImportRowNo(jsonValues),
+                    CollegeName = collegeData.CollegeName,
+                    CollegeCode = collegeData.CollegeCode,
+                };
+            }).ToList();
+        }
+
+        private List<ConflictReportItem> BuildConflictReport(
+            List<NRDataConflictProjection> rowsWithMeta,
+            List<string> requiredFields,
+            List<string> uniqueFields)
+        {
+            var conflicts = new List<ConflictReportItem>();
+
+            AddCatchUniqueFieldConflicts(conflicts, rowsWithMeta, uniqueFields);
+            AddCenterMultipleNodalConflicts(conflicts, rowsWithMeta);
+            AddCollegeMappingConflicts(conflicts, rowsWithMeta);
+            AddRequiredFieldConflicts(conflicts, rowsWithMeta, requiredFields);
+            AddZeroQuantityConflicts(conflicts, rowsWithMeta);
+            AddNodalCodeDigitMismatchConflicts(conflicts, rowsWithMeta);
+
+            return conflicts;
+        }
+
+        private void AddCatchUniqueFieldConflicts(
+            List<ConflictReportItem> conflicts,
+            List<NRDataConflictProjection> rowsWithMeta,
+            IEnumerable<string> uniqueFields)
+        {
+            var catchGroups = rowsWithMeta
+                .Where(item => !string.IsNullOrWhiteSpace(item.CatchNo))
+                .GroupBy(item => item.CatchNo)
+                .ToList();
+
+            foreach (var uniqueField in uniqueFields.Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                var uniqueProperty = GetNRDataProperty(uniqueField);
+                if (uniqueProperty == null)
+                {
+                    continue;
+                }
+
+                foreach (var group in catchGroups)
+                {
+                    var uniqueValues = DistinctNonEmpty(group.Select(item => uniqueProperty.GetValue(item.Row)?.ToString()));
+                    if (uniqueValues.Count <= 1)
+                    {
+                        continue;
+                    }
+
+                    conflicts.Add(new ConflictReportItem
+                    {
+                        ConflictType = CatchUniqueFieldConflict,
+                        CatchNo = group.Key,
+                        CatchNos = new List<string> { group.Key },
+                        RowIds = group.Select(item => item.Row.Id).Distinct().OrderBy(id => id).ToList(),
+                        ImportRowNos = group.Where(item => item.ImportRowNo.HasValue).Select(item => item.ImportRowNo!.Value).Distinct().OrderBy(id => id).ToList(),
+                        UniqueField = uniqueField,
+                        ConflictingValues = uniqueValues,
+                        CanIgnore = true,
+                        CanResolve = true,
+                        Summary = $"Catch No {group.Key} has multiple {uniqueField} values."
+                    });
+                }
+            }
+        }
+
+        private static void AddCenterMultipleNodalConflicts(
+            List<ConflictReportItem> conflicts,
+            List<NRDataConflictProjection> rowsWithMeta)
+        {
+            var centerGroups = rowsWithMeta
+                .Where(item => !string.IsNullOrWhiteSpace(item.CenterCode))
+                .GroupBy(item => item.CenterCode);
+
+            foreach (var group in centerGroups)
+            {
+                var nodalValues = DistinctNonEmpty(group.Select(item => item.NodalCode));
+                if (nodalValues.Count <= 1)
+                {
+                    continue;
+                }
+
+                conflicts.Add(new ConflictReportItem
+                {
+                    ConflictType = CenterMultipleNodalsConflict,
+                    CentreCode = group.Key,
+                    CatchNos = DistinctNonEmpty(group.Select(item => item.CatchNo)),
+                    RowIds = group.Select(item => item.Row.Id).Distinct().OrderBy(id => id).ToList(),
+                    ImportRowNos = group.Where(item => item.ImportRowNo.HasValue).Select(item => item.ImportRowNo!.Value).Distinct().OrderBy(id => id).ToList(),
+                    UniqueField = "NodalCode",
+                    NodalCodes = nodalValues,
+                    ConflictingValues = nodalValues,
+                    CanIgnore = false,
+                    CanResolve = true,
+                    Summary = $"Centre {group.Key} is linked with multiple nodal codes."
+                });
+            }
+        }
+
+        private static void AddCollegeMappingConflicts(
+            List<ConflictReportItem> conflicts,
+            List<NRDataConflictProjection> rowsWithMeta)
+        {
+            BuildCollegeConflicts(conflicts, rowsWithMeta, "CollegeName", CollegeMultipleNodalsConflict, "NodalCode", useNodalValues: true);
+            BuildCollegeConflicts(conflicts, rowsWithMeta, "CollegeCode", CollegeMultipleNodalsConflict, "NodalCode", useNodalValues: true);
+            BuildCollegeConflicts(conflicts, rowsWithMeta, "CollegeName", CollegeMultipleCentersConflict, "CenterCode", useNodalValues: false);
+            BuildCollegeConflicts(conflicts, rowsWithMeta, "CollegeCode", CollegeMultipleCentersConflict, "CenterCode", useNodalValues: false);
+        }
+
+        private static void AddRequiredFieldConflicts(
+            List<ConflictReportItem> conflicts,
+            List<NRDataConflictProjection> rowsWithMeta,
+            IEnumerable<string> requiredFields)
+        {
+            foreach (var field in requiredFields.Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                var property = GetNRDataProperty(field);
+                if (property == null)
+                {
+                    continue;
+                }
+
+                var emptyRows = rowsWithMeta
+                    .Where(item => string.IsNullOrWhiteSpace(property.GetValue(item.Row)?.ToString()));
+
+                foreach (var emptyRow in emptyRows)
+                {
+                    conflicts.Add(new ConflictReportItem
+                    {
+                        ConflictType = RequiredFieldEmptyConflict,
+                        Field = field,
+                        CatchNo = emptyRow.CatchNo,
+                        CatchNos = string.IsNullOrWhiteSpace(emptyRow.CatchNo) ? new List<string>() : new List<string> { emptyRow.CatchNo },
+                        RowIds = new List<int> { emptyRow.Row.Id },
+                        ImportRowNos = emptyRow.ImportRowNo.HasValue ? new List<int> { emptyRow.ImportRowNo.Value } : new List<int>(),
+                        CanIgnore = false,
+                        CanResolve = true,
+                        Summary = BuildRequiredFieldSummary(field, emptyRow),
+                    });
+                }
+            }
+        }
+
+        private static void AddZeroQuantityConflicts(
+            List<ConflictReportItem> conflicts,
+            List<NRDataConflictProjection> rowsWithMeta)
+        {
+            var zeroQuantityCatchNos = DistinctNonEmpty(
+                rowsWithMeta
+                    .Where(item => item.NrQuantity == 0)
+                    .Select(item => item.CatchNo));
+
+            if (zeroQuantityCatchNos.Count == 0)
+            {
+                return;
+            }
+
+            conflicts.Add(new ConflictReportItem
+            {
+                ConflictType = ZeroNrQuantityConflict,
+                Field = "NRQuantity",
+                CatchNos = zeroQuantityCatchNos,
+                RowIds = rowsWithMeta
+                    .Where(item => item.NrQuantity == 0)
+                    .Select(item => item.Row.Id)
+                    .Distinct()
+                    .OrderBy(id => id)
+                    .ToList(),
+                ImportRowNos = rowsWithMeta
+                    .Where(item => item.NrQuantity == 0 && item.ImportRowNo.HasValue)
+                    .Select(item => item.ImportRowNo!.Value)
+                    .Distinct()
+                    .OrderBy(id => id)
+                    .ToList(),
+                CanIgnore = true,
+                CanResolve = true,
+                Summary = $"NRQuantity is 0 for {zeroQuantityCatchNos.Count} catch number(s)."
+            });
+        }
+
+        private static void AddNodalCodeDigitMismatchConflicts(
+            List<ConflictReportItem> conflicts,
+            List<NRDataConflictProjection> rowsWithMeta)
+        {
+            var nodalRows = rowsWithMeta
+                .Where(item => !string.IsNullOrWhiteSpace(item.NodalCode))
+                .ToList();
+            var rowsWithDigitCount = nodalRows
+                .Select(item => new
+                {
+                    Row = item,
+                    DigitCount = GetDigitCount(item.NodalCode),
+                })
+                .Where(item => item.DigitCount > 0)
+                .ToList();
+
+            var distinctLengths = rowsWithDigitCount
+                .Select(item => item.DigitCount)
+                .Distinct()
+                .OrderBy(length => length)
+                .ToList();
+
+            if (distinctLengths.Count <= 1)
+            {
+                return;
+            }
+
+            var expectedDigitCount = rowsWithDigitCount
+                .GroupBy(item => item.DigitCount)
+                .OrderByDescending(group => group.Count())
+                .ThenBy(group => group.Key)
+                .Select(group => group.Key)
+                .First();
+
+            foreach (var item in rowsWithDigitCount.Where(item => item.DigitCount != expectedDigitCount))
+            {
+                conflicts.Add(new ConflictReportItem
+                {
+                    ConflictType = NodalCodeDigitMismatchConflict,
+                    CatchNo = item.Row.CatchNo,
+                    CatchNos = string.IsNullOrWhiteSpace(item.Row.CatchNo) ? new List<string>() : new List<string> { item.Row.CatchNo },
+                    RowIds = new List<int> { item.Row.Row.Id },
+                    ImportRowNos = item.Row.ImportRowNo.HasValue ? new List<int> { item.Row.ImportRowNo.Value } : new List<int>(),
+                    NodalCode = item.Row.NodalCode,
+                    NodalCodeGroup = expectedDigitCount.ToString(),
+                    UniqueField = "NodalCode",
+                    ConflictingValues = new List<string> { item.Row.NodalCode },
+                    CanIgnore = false,
+                    CanResolve = true,
+                    Summary = $"Nodal code {item.Row.NodalCode} has {item.DigitCount} digits; expected {expectedDigitCount} digits."
+                });
+            }
+        }
+
+        private async Task<List<NRData>> GetRowsForConflict(int projectId, ConflictActionDto payload)
+        {
+            var projectRows = await _context.NRDatas
+                .Where(item => item.ProjectId == projectId)
+                .ToListAsync();
+
+            var catchNoSet = new HashSet<string>(
+                (payload.CatchNos ?? new List<string>())
+                    .Where(value => !string.IsNullOrWhiteSpace(value))
+                    .Select(value => value.Trim()),
+                StringComparer.OrdinalIgnoreCase);
+
+            if (!string.IsNullOrWhiteSpace(payload.CatchNo))
+            {
+                catchNoSet.Add(payload.CatchNo.Trim());
+            }
+
+            return (payload.ConflictType ?? string.Empty).Trim().ToLowerInvariant() switch
+            {
+                CatchUniqueFieldConflict => projectRows
+                    .Where(item => string.Equals(item.CatchNo, payload.CatchNo, StringComparison.OrdinalIgnoreCase))
+                    .ToList(),
+                CenterMultipleNodalsConflict => projectRows
+                    .Where(item => string.Equals(item.CenterCode, payload.CentreCode, StringComparison.OrdinalIgnoreCase))
+                    .ToList(),
+                CollegeMultipleNodalsConflict => projectRows
+                    .Where(item => MatchesCollege(item, payload))
+                    .ToList(),
+                CollegeMultipleCentersConflict => projectRows
+                    .Where(item => MatchesCollege(item, payload))
+                    .ToList(),
+                RequiredFieldEmptyConflict => projectRows
+                    .Where(item => (payload.RowIds ?? new List<int>()).Contains(item.Id))
+                    .ToList(),
+                ZeroNrQuantityConflict => projectRows
+                    .Where(item => item.CatchNo != null && catchNoSet.Contains(item.CatchNo) && item.NRQuantity == 0)
+                    .ToList(),
+                NodalCodeDigitMismatchConflict => projectRows
+                    .Where(item => (payload.RowIds ?? new List<int>()).Contains(item.Id))
+                    .ToList(),
+                _ => new List<NRData>(),
+            };
+        }
+
+        private void ApplyConflictResolution(NRData item, ConflictResolutionDto payload)
+        {
+            var conflictType = (payload.ConflictType ?? string.Empty).Trim().ToLowerInvariant();
+            switch (conflictType)
+            {
+                case CatchUniqueFieldConflict:
+                    SetPropertyValue(item, payload.UniqueField, payload.SelectedValue);
+                    break;
+                case CenterMultipleNodalsConflict:
+                case CollegeMultipleNodalsConflict:
+                case NodalCodeDigitMismatchConflict:
+                    item.NodalCode = payload.SelectedValue.Trim();
+                    break;
+                case CollegeMultipleCentersConflict:
+                    item.CenterCode = payload.SelectedValue.Trim();
+                    break;
+                case RequiredFieldEmptyConflict:
+                    SetPropertyValue(item, payload.Field, payload.SelectedValue);
+                    break;
+                case ZeroNrQuantityConflict:
+                    SetPropertyValue(item, payload.Field ?? "NRQuantity", payload.SelectedValue);
+                    break;
+                default:
+                    throw new InvalidOperationException($"Unsupported conflict type '{payload.ConflictType}'.");
+            }
+        }
+
+        private static void SetPropertyValue(NRData item, string? propertyName, string? selectedValue)
+        {
+            if (string.IsNullOrWhiteSpace(propertyName))
+            {
+                throw new InvalidOperationException("Target field is required.");
+            }
+
+            var property = item.GetType().GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+            if (property == null || !property.CanWrite)
+            {
+                throw new InvalidOperationException($"Field '{propertyName}' cannot be updated.");
+            }
+
+            var targetType = Nullable.GetUnderlyingType(property.PropertyType) ?? property.PropertyType;
+            object? convertedValue = string.IsNullOrWhiteSpace(selectedValue)
+                ? null
+                : Convert.ChangeType(selectedValue.Trim(), targetType);
+
+            property.SetValue(item, convertedValue);
+        }
+
+        private async Task SyncConflictStatuses(int projectId, List<ConflictReportItem> conflicts)
+        {
+            var existingRecords = await _context.ConflictingFields
+                .Where(item => item.ProjectId == projectId)
+                .ToListAsync();
+
+            var existingLookup = existingRecords
+                .GroupBy(GetConflictStorageKey)
+                .ToDictionary(group => group.Key, group => group.OrderByDescending(item => item.Id).First());
+
+            var newRecords = new List<ConflictingFields>();
+
+            foreach (var conflict in conflicts)
+            {
+                var storageKey = BuildConflictStorageKey(projectId, conflict);
+                if (existingLookup.TryGetValue(storageKey, out var existingRecord))
+                {
+                    conflict.Status = NormalizeStatusLabel(existingRecord.Status);
+                    continue;
+                }
+
+                conflict.Status = "pending";
+                newRecords.Add(BuildConflictEntity(projectId, conflict, ConflictStatusPending));
+            }
+
+            if (newRecords.Count > 0)
+            {
+                _context.ConflictingFields.AddRange(newRecords);
+                await _context.SaveChangesAsync();
+            }
+        }
+
+        private async Task UpsertConflictStatus(int projectId, ConflictActionDto payload, int status)
+        {
+            var entity = BuildConflictEntity(projectId, payload, status);
+            var storageKey = GetConflictStorageKey(entity);
+
+            var existingRecord = await _context.ConflictingFields
+                .Where(item => item.ProjectId == projectId)
+                .ToListAsync();
+
+            var matchedRecord = existingRecord
+                .OrderByDescending(item => item.Id)
+                .FirstOrDefault(item => GetConflictStorageKey(item) == storageKey);
+
+            if (matchedRecord == null)
+            {
+                _context.ConflictingFields.Add(entity);
+            }
+            else
+            {
+                matchedRecord.Status = status;
+            }
+
+            await _context.SaveChangesAsync();
+        }
+
+        private static ConflictingFields BuildConflictEntity(int projectId, ConflictActionDto payload, int status)
+        {
+            var storagePayload = BuildConflictStoragePayload(payload);
+
+            return new ConflictingFields
+            {
+                NRDataId = ResolveStorageNrDataId(payload),
+                ProjectId = projectId,
+                UniqueField = ResolveStorageUniqueField(payload),
+                ConflictingField = JsonSerializer.Serialize(storagePayload),
+                Status = status,
+            };
+        }
+
+        private static string BuildConflictStorageKey(int projectId, ConflictActionDto payload)
+        {
+            var entity = BuildConflictEntity(projectId, payload, ConflictStatusPending);
+            return GetConflictStorageKey(entity);
+        }
+
+        private static string GetConflictStorageKey(ConflictingFields entity)
+        {
+            return $"{entity.ProjectId}|{entity.NRDataId}|{entity.UniqueField}|{entity.ConflictingField}";
+        }
+
+        private static int ResolveStorageNrDataId(ConflictActionDto payload)
+        {
+            return (payload.RowIds ?? new List<int>())
+                .Where(id => id > 0)
+                .Distinct()
+                .OrderBy(id => id)
+                .FirstOrDefault();
+        }
+
+        private static string ResolveStorageUniqueField(ConflictActionDto payload)
+        {
+            var uniqueField = NormalizeText(payload.UniqueField);
+            if (!string.IsNullOrWhiteSpace(uniqueField))
+            {
+                return uniqueField;
+            }
+
+            var field = NormalizeText(payload.Field);
+            if (!string.IsNullOrWhiteSpace(field))
+            {
+                return field;
+            }
+
+            return NormalizeText(payload.ConflictType);
+        }
+
+        private static bool CanIgnoreConflict(string? conflictType)
+        {
+            var normalized = NormalizeText(conflictType);
+            return string.Equals(normalized, CatchUniqueFieldConflict, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(normalized, ZeroNrQuantityConflict, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static PropertyInfo? GetNRDataProperty(string? propertyName)
+        {
+            return typeof(NRData).GetProperty(
+                propertyName ?? string.Empty,
+                BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+        }
+
+        private static string BuildRequiredFieldSummary(string field, NRDataConflictProjection row)
+        {
+            var catchLabel = string.IsNullOrWhiteSpace(row.CatchNo)
+                ? string.Empty
+                : $" (Catch No {row.CatchNo})";
+
+            var rowLabel = row.ImportRowNo?.ToString() ?? row.Row.Id.ToString();
+            return $"{field} is missing for row {rowLabel}{catchLabel}.";
+        }
+
+        private static bool MatchesCollege(NRData item, ConflictActionDto payload)
+        {
+            var collegeData = GetCollegeData(item);
+
+            if (string.Equals(payload.CollegeKeyType, "CollegeCode", StringComparison.OrdinalIgnoreCase))
+            {
+                return string.Equals(collegeData.CollegeCode, payload.CollegeCode?.Trim(), StringComparison.OrdinalIgnoreCase);
+            }
+
+            return string.Equals(collegeData.CollegeName, payload.CollegeName?.Trim(), StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static (string CollegeName, string CollegeCode) GetCollegeData(NRData row)
+        {
+            var jsonValues = ParseNrDatas(row.NRDatas);
+            return (
+                ReadValue(jsonValues, row, "CollegeName", "College Name", "college name", "colleage name", "colleageName", "College"),
+                ReadValue(jsonValues, row, "CollegeCode", "College Code", "college code", "colleage code", "colleageCode", "collegecode")
+            );
+        }
+
+        private static Dictionary<string, string> ParseNrDatas(string? nrDatas)
+        {
+            if (string.IsNullOrWhiteSpace(nrDatas))
+            {
+                return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            }
+
+            try
+            {
+                var parsed = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(nrDatas);
+                return parsed?.ToDictionary(
+                    item => item.Key,
+                    item => item.Value.ValueKind == JsonValueKind.String ? item.Value.GetString() ?? string.Empty : item.Value.ToString(),
+                    StringComparer.OrdinalIgnoreCase)
+                    ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            }
+        }
+
+        private static string ReadValue(Dictionary<string, string> jsonValues, NRData row, params string[] keys)
+        {
+            foreach (var key in keys)
+            {
+                var property = row.GetType().GetProperty(key, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+                var propertyValue = NormalizeText(property?.GetValue(row)?.ToString());
+                if (!string.IsNullOrWhiteSpace(propertyValue))
+                {
+                    return propertyValue;
+                }
+
+                if (jsonValues.TryGetValue(key, out var jsonValue))
+                {
+                    var normalizedJsonValue = NormalizeText(jsonValue);
+                    if (!string.IsNullOrWhiteSpace(normalizedJsonValue))
+                    {
+                        return normalizedJsonValue;
+                    }
+                }
+            }
+
+            var normalizedKeys = keys
+                .Select(key => key.Replace(" ", string.Empty))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            var fallbackEntry = jsonValues
+                .FirstOrDefault(item => normalizedKeys.Contains(item.Key.Replace(" ", string.Empty)) && !string.IsNullOrWhiteSpace(NormalizeText(item.Value)));
+
+            return NormalizeText(fallbackEntry.Value);
+        }
+
+        private static int? ParseImportRowNo(Dictionary<string, string> jsonValues)
+        {
+            var rawValue = ReadDictionaryValue(
+                jsonValues,
+                "ImportRowNo",
+                "Import Row No",
+                "ImportRow",
+                "Import Row",
+                "ExcelRowNo",
+                "Excel Row No",
+                "RowNo",
+                "Row No");
+
+            return int.TryParse(rawValue, out var importRowNo) ? importRowNo : null;
+        }
+
+        private static string ReadDictionaryValue(Dictionary<string, string> jsonValues, params string[] keys)
+        {
+            foreach (var key in keys)
+            {
+                if (jsonValues.TryGetValue(key, out var directValue))
+                {
+                    var normalized = NormalizeText(directValue);
+                    if (!string.IsNullOrWhiteSpace(normalized))
+                    {
+                        return normalized;
+                    }
+                }
+            }
+
+            var normalizedKeys = keys
+                .Select(key => key.Replace(" ", string.Empty))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            var fallbackEntry = jsonValues.FirstOrDefault(item =>
+                normalizedKeys.Contains(item.Key.Replace(" ", string.Empty)) &&
+                !string.IsNullOrWhiteSpace(NormalizeText(item.Value)));
+
+            return NormalizeText(fallbackEntry.Value);
+        }
+
+        private static void BuildCollegeConflicts(
+            List<ConflictReportItem> conflicts,
+            List<NRDataConflictProjection> rows,
+            string identifierType,
+            string conflictType,
+            string uniqueField,
+            bool useNodalValues)
+        {
+            var groupedRows = rows
+                .Where(item => !string.IsNullOrWhiteSpace(identifierType == "CollegeCode" ? item.CollegeCode : item.CollegeName))
+                .GroupBy(item => identifierType == "CollegeCode" ? item.CollegeCode : item.CollegeName);
+
+            foreach (var group in groupedRows)
+            {
+                var values = useNodalValues
+                    ? DistinctNonEmpty(group.Select(item => item.NodalCode))
+                    : DistinctNonEmpty(group.Select(item => item.CenterCode));
+
+                if (values.Count <= 1)
+                {
+                    continue;
+                }
+
+                conflicts.Add(new ConflictReportItem
+                {
+                    ConflictType = conflictType,
+                    CollegeKeyType = identifierType,
+                    CollegeName = identifierType == "CollegeName" ? group.Key : null,
+                    CollegeCode = identifierType == "CollegeCode" ? group.Key : null,
+                    CatchNos = DistinctNonEmpty(group.Select(item => item.CatchNo)),
+                    RowIds = group.Select(item => item.Row.Id).Distinct().OrderBy(id => id).ToList(),
+                    UniqueField = uniqueField,
+                    NodalCodes = useNodalValues ? values : new List<string>(),
+                    CenterCodes = useNodalValues ? new List<string>() : values,
+                    ConflictingValues = values,
+                    CanIgnore = false,
+                    CanResolve = true,
+                    Summary = useNodalValues
+                        ? $"College {group.Key} is linked with multiple nodal codes."
+                        : $"College {group.Key} is linked with multiple exam centres."
+                });
+            }
+        }
+
+        private static List<string> DistinctNonEmpty(IEnumerable<string?> values)
+        {
+            return values
+                .Select(NormalizeText)
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+
+        private static string NormalizeText(string? value)
+        {
+            return string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
+        }
+
+        private static string NormalizeCode(string? value)
+        {
+            var normalized = NormalizeText(value);
+            if (string.IsNullOrWhiteSpace(normalized))
+            {
+                return string.Empty;
+            }
+
+            if (normalized.All(char.IsDigit))
+            {
+                var stripped = normalized.TrimStart('0');
+                return string.IsNullOrWhiteSpace(stripped) ? "0" : stripped;
+            }
+
+            return normalized.ToUpperInvariant();
+        }
+
+        private static string GetNodalDigitSignature(string? value)
+        {
+            var normalized = NormalizeText(value);
+            if (string.IsNullOrWhiteSpace(normalized))
+            {
+                return string.Empty;
+            }
+
+            var digitsOnly = new string(normalized.Where(char.IsDigit).ToArray());
+            if (!string.IsNullOrWhiteSpace(digitsOnly))
+            {
+                var stripped = digitsOnly.TrimStart('0');
+                return string.IsNullOrWhiteSpace(stripped) ? "0" : stripped;
+            }
+
+            return NormalizeCode(normalized);
+        }
+
+        private static int GetDigitCount(string? value)
+        {
+            return NormalizeText(value).Count(char.IsDigit);
+        }
+
+        private static int NormalizeStatusCode(string? status)
+        {
+            var normalized = NormalizeText(status).ToLowerInvariant();
+            return normalized switch
+            {
+                "resolved" => ConflictStatusResolved,
+                "ignored" => ConflictStatusIgnored,
+                _ => ConflictStatusPending,
+            };
+        }
+
+        private static string NormalizeStatusLabel(int status)
+        {
+            return status switch
+            {
+                ConflictStatusResolved => "resolved",
+                ConflictStatusIgnored => "ignored",
+                _ => "pending",
+            };
         }
 
         [HttpPost("missing-data")]
@@ -718,11 +1327,130 @@ namespace Tools.Controllers
             }
         }
 
-        public class ConflictResolutionDto
+        public class ConflictActionDto
         {
-            public string CatchNo { get; set; }
-            public string UniqueField { get; set; }
-            public string SelectedValue { get; set; }
+            public string? ConflictType { get; set; }
+            public string? CatchNo { get; set; }
+            public List<string> CatchNos { get; set; } = new();
+            public List<int> RowIds { get; set; } = new();
+            public List<int> ImportRowNos { get; set; } = new();
+            public string? UniqueField { get; set; }
+            public string? Field { get; set; }
+            public string? CentreCode { get; set; }
+            public string? NodalCode { get; set; }
+            public string? NodalCodeGroup { get; set; }
+            public string? CollegeName { get; set; }
+            public string? CollegeCode { get; set; }
+            public string? CollegeKeyType { get; set; }
+            public List<string> ConflictingValues { get; set; } = new();
+            public List<string> NodalCodes { get; set; } = new();
+            public List<string> CenterCodes { get; set; } = new();
+        }
+
+        public class ConflictResolutionDto : ConflictActionDto
+        {
+            public string? SelectedValue { get; set; }
+        }
+
+        public class ConflictStatusUpdateDto : ConflictActionDto
+        {
+            public string? Status { get; set; }
+        }
+
+        public class ConflictReportItem : ConflictActionDto
+        {
+            public bool CanIgnore { get; set; }
+            public bool CanResolve { get; set; }
+            public string Status { get; set; } = "pending";
+            public string? Summary { get; set; }
+        }
+
+        private static Dictionary<string, object> BuildConflictStoragePayload(ConflictActionDto payload)
+        {
+            var conflictType = NormalizeText(payload.ConflictType);
+            var storagePayload = new Dictionary<string, object>
+            {
+                ["ConflictType"] = conflictType,
+            };
+
+            AddIfHasText(storagePayload, "UniqueField", payload.UniqueField);
+            AddIfHasText(storagePayload, "Field", payload.Field);
+
+            switch (conflictType)
+            {
+                case CatchUniqueFieldConflict:
+                    AddIfHasText(storagePayload, "CatchNo", payload.CatchNo);
+                    AddIfHasItems(storagePayload, "ConflictingValues", DistinctNonEmpty(payload.ConflictingValues ?? new List<string>()));
+                    break;
+                case CenterMultipleNodalsConflict:
+                    AddIfHasText(storagePayload, "CentreCode", payload.CentreCode);
+                    AddIfHasItems(storagePayload, "ConflictingValues", DistinctNonEmpty(payload.ConflictingValues ?? new List<string>()));
+                    break;
+                case CollegeMultipleNodalsConflict:
+                case CollegeMultipleCentersConflict:
+                    AddIfHasText(storagePayload, "CollegeName", payload.CollegeName);
+                    AddIfHasText(storagePayload, "CollegeCode", payload.CollegeCode);
+                    AddIfHasText(storagePayload, "CollegeKeyType", payload.CollegeKeyType);
+                    AddIfHasItems(storagePayload, "ConflictingValues", DistinctNonEmpty(payload.ConflictingValues ?? new List<string>()));
+                    break;
+                case RequiredFieldEmptyConflict:
+                    AddIfHasItems(storagePayload, "ImportRowNos", (payload.ImportRowNos ?? new List<int>()).Distinct().OrderBy(id => id).ToList());
+                    break;
+                case ZeroNrQuantityConflict:
+                    AddIfHasItems(storagePayload, "CatchNos", DistinctNonEmpty(payload.CatchNos ?? new List<string>()));
+                    AddIfHasItems(storagePayload, "ImportRowNos", (payload.ImportRowNos ?? new List<int>()).Distinct().OrderBy(id => id).ToList());
+                    break;
+                case NodalCodeDigitMismatchConflict:
+                    AddIfHasText(storagePayload, "NodalCodeGroup", payload.NodalCodeGroup);
+                    AddIfHasItems(storagePayload, "ImportRowNos", (payload.ImportRowNos ?? new List<int>()).Distinct().OrderBy(id => id).ToList());
+                    AddIfHasText(storagePayload, "NodalCode", payload.NodalCode);
+                    AddIfHasItems(storagePayload, "ConflictingValues", DistinctNonEmpty(payload.ConflictingValues ?? new List<string>()));
+                    break;
+                default:
+                    AddIfHasText(storagePayload, "CatchNo", payload.CatchNo);
+                    AddIfHasItems(storagePayload, "CatchNos", DistinctNonEmpty(payload.CatchNos ?? new List<string>()));
+                    AddIfHasItems(storagePayload, "RowIds", (payload.RowIds ?? new List<int>()).Distinct().OrderBy(id => id).ToList());
+                    AddIfHasText(storagePayload, "CentreCode", payload.CentreCode);
+                    AddIfHasText(storagePayload, "CollegeName", payload.CollegeName);
+                    AddIfHasText(storagePayload, "CollegeCode", payload.CollegeCode);
+                    AddIfHasText(storagePayload, "CollegeKeyType", payload.CollegeKeyType);
+                    AddIfHasText(storagePayload, "NodalCodeGroup", payload.NodalCodeGroup);
+                    AddIfHasItems(storagePayload, "ConflictingValues", DistinctNonEmpty(payload.ConflictingValues ?? new List<string>()));
+                    break;
+            }
+
+            return storagePayload;
+        }
+
+        private static void AddIfHasText(Dictionary<string, object> payload, string key, string? value)
+        {
+            var normalized = NormalizeText(value);
+            if (!string.IsNullOrWhiteSpace(normalized))
+            {
+                payload[key] = normalized;
+            }
+        }
+
+        private static void AddIfHasItems<T>(Dictionary<string, object> payload, string key, List<T> values)
+        {
+            if (values != null && values.Count > 0)
+            {
+                payload[key] = values;
+            }
+        }
+
+        private class NRDataConflictProjection
+        {
+            public required NRData Row { get; set; }
+            public string CatchNo { get; set; } = string.Empty;
+            public string ExamDate { get; set; } = string.Empty;
+            public string ExamTime { get; set; } = string.Empty;
+            public string CenterCode { get; set; } = string.Empty;
+            public string NodalCode { get; set; } = string.Empty;
+            public int NrQuantity { get; set; }
+            public int? ImportRowNo { get; set; }
+            public string CollegeName { get; set; } = string.Empty;
+            public string CollegeCode { get; set; } = string.Empty;
         }
 
         public class MissingDataSaveRequest
@@ -768,9 +1496,11 @@ namespace Tools.Controllers
         {
             try
             {
-                // Fetch all NRData records for the given project
                 var nrDataList = await _context.NRDatas
                     .Where(d => d.ProjectId == ProjectId)
+                    .ToListAsync();
+                var conflictList = await _context.ConflictingFields
+                    .Where(c => c.ProjectId == ProjectId)
                     .ToListAsync();
 
                 if (!nrDataList.Any())
@@ -782,12 +1512,16 @@ namespace Tools.Controllers
                 {
                     Directory.Delete(reportPath, true); // 'true' allows recursive deletion of files and subdirectories
                 }
-                // Remove all records
+
                 _context.NRDatas.RemoveRange(nrDataList);
+                if (conflictList.Any())
+                {
+                    _context.ConflictingFields.RemoveRange(conflictList);
+                }
                 await _context.SaveChangesAsync();
 
                 _loggerService.LogEvent(
-                    $"Deleted all NRData for ProjectId {ProjectId}",
+                    $"Deleted all NRData and conflict records for ProjectId {ProjectId}",
                     "NRData",
                     User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,ProjectId
                 );
