@@ -12,6 +12,8 @@ namespace ERPToolsAPI.Data
         public DbSet <BoxCapacity> BoxCapacity { get; set; }
         public DbSet <EnvelopeType> EnvelopesTypes { get; set; }
         public DbSet <NRData> NRDatas { get; set; }
+
+        public DbSet<ChangedNRData> ChangedNRData { get; set; }
         public DbSet <Field> Fields { get; set; }
         public DbSet <ProjectConfig> ProjectConfigs { get; set; }
         public DbSet<MProjectConfigs> MProjectConfigs { get; set; }
