@@ -61,7 +61,14 @@ namespace Tools.Controllers
 
         // GET: api/NRDatas/GetByProjectId/5
         [HttpGet("GetByProjectId/{projectId}")]
-        public async Task<ActionResult> GetByProjectId(int projectId, int pageSize, int pageNo, string?search=null, string? key = null)
+        public async Task<ActionResult> GetByProjectId(
+            int projectId,
+            int pageSize,
+            int pageNo,
+            string? search = null,
+            string? key = null,
+            string? sortField = null,
+            string? sortOrder = null)
         {
             IQueryable<NRData> query = _context.NRDatas
              .Where(d => d.ProjectId == projectId);
@@ -108,15 +115,42 @@ namespace Tools.Controllers
                         return BadRequest($"Key '{key}' is not searchable.");
                 }
             }
+
+            // Server-side sorting so it works across all pages.
+            var normalizedSortField = NormalizeText(sortField);
+            var normalizedSortOrder = NormalizeText(sortOrder).ToLowerInvariant();
+            var isAscending = normalizedSortOrder != "descend";
+
+            if (!string.IsNullOrWhiteSpace(normalizedSortField))
+            {
+                query = normalizedSortField switch
+                {
+                    "CatchNo" => isAscending ? query.OrderBy(d => d.CatchNo) : query.OrderByDescending(d => d.CatchNo),
+                    "CenterCode" => isAscending ? query.OrderBy(d => d.CenterCode) : query.OrderByDescending(d => d.CenterCode),
+                    "ExamDate" => isAscending ? query.OrderBy(d => d.ExamDate) : query.OrderByDescending(d => d.ExamDate),
+                    "ExamTime" => isAscending ? query.OrderBy(d => d.ExamTime) : query.OrderByDescending(d => d.ExamTime),
+                    "NRQuantity" => isAscending ? query.OrderBy(d => d.NRQuantity) : query.OrderByDescending(d => d.NRQuantity),
+                    "Quantity" => isAscending ? query.OrderBy(d => d.Quantity) : query.OrderByDescending(d => d.Quantity),
+                    "NodalCode" => isAscending ? query.OrderBy(d => d.NodalCode) : query.OrderByDescending(d => d.NodalCode),
+                    "CourseName" => isAscending ? query.OrderBy(d => d.CourseName) : query.OrderByDescending(d => d.CourseName),
+                    "SubjectName" => isAscending ? query.OrderBy(d => d.SubjectName) : query.OrderByDescending(d => d.SubjectName),
+                    _ => query.OrderBy(d => d.Id),
+                };
+            }
+            else
+            {
+                query = query.OrderBy(d => d.Id);
+            }
+
             int totalCount = await query.CountAsync();
             int totalPages = (int)Math.Ceiling(totalCount / (double)pageSize);
 
             var nrDataList = await query
-                .OrderBy(d=>d.Id)
                 .Skip((pageNo - 1) * pageSize)
                 .Take(pageSize)
                 .Select(d => new
                 {
+                    d.Id,
                     d.CatchNo,
                     d.CenterCode,
                     d.ExamDate,
@@ -171,6 +205,153 @@ namespace Tools.Controllers
                 columns = properties.Select(p => p.Name).ToList(),
                 totalCount,
                 totalPages
+            });
+        }
+
+        [HttpPost("merge-catchnos")]
+        public async Task<ActionResult> MergeCatchNos(int ProjectId, [FromBody] MergeCatchNoRequest request)
+        {
+            if (request == null)
+            {
+                return BadRequest("Please select rows from 2 catch numbers to merge.");
+            }
+
+            var separator = NormalizeText(request.Separator);
+            if (separator != "/" && separator != "-")
+            {
+                return BadRequest("Separator must be '/' or '-'.");
+            }
+
+            var requestedCatchNos = (request.CatchNos ?? new List<string>())
+                .Select(NormalizeText)
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (requestedCatchNos.Count != 2)
+            {
+                return BadRequest("Please select exactly 2 catch numbers to merge.");
+            }
+
+            // Expand across the whole dataset (not just the current page selection).
+            var normalizedRequestedCatchNos = requestedCatchNos
+                .Select(value => value.Trim().ToLowerInvariant())
+                .Distinct()
+                .ToList();
+
+            var selectedRows = await _context.NRDatas
+                .Where(item =>
+                    item.ProjectId == ProjectId &&
+                    item.CatchNo != null &&
+                    normalizedRequestedCatchNos.Contains(item.CatchNo.Trim().ToLower()))
+                .ToListAsync();
+
+            if (selectedRows.Count == 0)
+            {
+                return NotFound("Selected catch numbers were not found for this project.");
+            }
+
+            var selectedCatchNos = selectedRows
+                .Select(item => NormalizeText(item.CatchNo))
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (selectedCatchNos.Count != 2)
+            {
+                return BadRequest("Please select rows from exactly 2 different catch numbers.");
+            }
+
+            var firstCatchNo = requestedCatchNos[0];
+            var secondCatchNo = requestedCatchNos[1];
+
+            var normalizedSchedules = selectedRows
+                .Select(item => new
+                {
+                    ExamDate = NormalizeText(item.ExamDate),
+                    ExamTime = NormalizeText(item.ExamTime)
+                })
+                .Distinct()
+                .ToList();
+
+            if (normalizedSchedules.Count != 1)
+            {
+                return BadRequest("Catch numbers can only be merged when ExamDate and ExamTime are the same.");
+            }
+
+            var mergedCatchNo = $"{firstCatchNo}{separator}{secondCatchNo}";
+            // Merge per-center:
+            // - If both catch numbers exist for the same center, add quantities and collapse into one row for that center.
+            // - If a center appears for only one catch number, keep rows (no add), but rewrite CatchNo to the merged form.
+            var selectedRowsByCenter = selectedRows
+                .GroupBy(item => NormalizeText(item.CenterCode), StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            int centersCollapsed = 0;
+            int rowsDeleted = 0;
+
+            foreach (var centerGroup in selectedRowsByCenter)
+            {
+                var groupRows = centerGroup.ToList();
+                if (groupRows.Count == 0)
+                {
+                    continue;
+                }
+
+                var groupCatchNos = groupRows
+                    .Select(item => NormalizeText(item.CatchNo))
+                    .Where(value => !string.IsNullOrWhiteSpace(value))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+
+                var hasFirst = groupCatchNos.Any(value => string.Equals(value, firstCatchNo, StringComparison.OrdinalIgnoreCase));
+                var hasSecond = groupCatchNos.Any(value => string.Equals(value, secondCatchNo, StringComparison.OrdinalIgnoreCase));
+
+                if (hasFirst && hasSecond)
+                {
+                    centersCollapsed++;
+
+                    var primaryRow = groupRows
+                        .OrderBy(item => item.Id)
+                        .First();
+
+                    primaryRow.CatchNo = mergedCatchNo;
+                    primaryRow.Quantity = groupRows.Sum(item => item.Quantity);
+                    primaryRow.NRQuantity = groupRows.Sum(item => item.NRQuantity);
+
+                    foreach (var row in groupRows.Where(item => item.Id != primaryRow.Id))
+                    {
+                        _context.NRDatas.Remove(row);
+                        rowsDeleted++;
+                    }
+
+                    continue;
+                }
+
+                foreach (var row in groupRows)
+                {
+                    row.CatchNo = mergedCatchNo;
+                }
+            }
+
+            await _context.SaveChangesAsync();
+
+            var actionLabel = centersCollapsed > 0
+                ? $"Catch numbers merged. Collapsed {centersCollapsed} center(s) (deleted {rowsDeleted} row(s)) and added quantities where centers matched."
+                : "Catch numbers merged. No centers had both catch numbers, so quantities were kept unchanged.";
+
+            _loggerService.LogEvent(
+                $"Merged catch numbers for ProjectId {ProjectId}: {firstCatchNo} and {secondCatchNo}",
+                "NRData",
+                User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
+                ProjectId);
+
+            return Ok(new
+            {
+                message = actionLabel,
+                catchNo = mergedCatchNo,
+                centersCollapsed,
+                rowsDeleted
             });
         }
 
@@ -674,6 +855,14 @@ namespace Tools.Controllers
             List<ConflictReportItem> conflicts,
             List<NRDataConflictProjection> rowsWithMeta)
         {
+            var positiveQuantities = rowsWithMeta
+                .Where(item => item.NrQuantity > 0)
+                .Select(item => item.NrQuantity)
+                .ToList();
+
+            var minNrQuantity = positiveQuantities.Count > 0 ? positiveQuantities.Min() : (int?)null;
+            var maxNrQuantity = positiveQuantities.Count > 0 ? positiveQuantities.Max() : (int?)null;
+
             var zeroQuantityCatchNos = DistinctNonEmpty(
                 rowsWithMeta
                     .Where(item => item.NrQuantity == 0)
@@ -701,6 +890,8 @@ namespace Tools.Controllers
                     .Distinct()
                     .OrderBy(id => id)
                     .ToList(),
+                MinNrQuantity = minNrQuantity,
+                MaxNrQuantity = maxNrQuantity,
                 CanIgnore = true,
                 CanResolve = true,
                 Summary = $"NRQuantity is 0 for {zeroQuantityCatchNos.Count} catch number(s)."
@@ -1345,6 +1536,8 @@ namespace Tools.Controllers
             public List<string> ConflictingValues { get; set; } = new();
             public List<string> NodalCodes { get; set; } = new();
             public List<string> CenterCodes { get; set; } = new();
+            public int? MinNrQuantity { get; set; }
+            public int? MaxNrQuantity { get; set; }
         }
 
         public class ConflictResolutionDto : ConflictActionDto
@@ -1465,6 +1658,13 @@ namespace Tools.Controllers
             public int? Pages { get; set; }
             public string? ExamDate { get; set; }
             public string? ExamTime { get; set; }
+        }
+
+        public class MergeCatchNoRequest
+        {
+            public List<int> RowIds { get; set; } = new();
+            public List<string> CatchNos { get; set; } = new();
+            public string? Separator { get; set; }
         }
 
         // DELETE: api/NRDatas/5
