@@ -213,7 +213,7 @@ namespace Tools.Controllers
         {
             if (request == null)
             {
-                return BadRequest("Please select rows from 2 catch numbers to merge.");
+                return BadRequest("Please select at least 2 catch numbers to merge.");
             }
 
             var separator = NormalizeText(request.Separator);
@@ -228,12 +228,11 @@ namespace Tools.Controllers
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
-            if (requestedCatchNos.Count != 2)
+            if (requestedCatchNos.Count < 2)
             {
-                return BadRequest("Please select exactly 2 catch numbers to merge.");
+                return BadRequest("Please select at least 2 catch numbers to merge.");
             }
 
-            // Expand across the whole dataset (not just the current page selection).
             var normalizedRequestedCatchNos = requestedCatchNos
                 .Select(value => value.Trim().ToLowerInvariant())
                 .Distinct()
@@ -258,13 +257,10 @@ namespace Tools.Controllers
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
-            if (selectedCatchNos.Count != 2)
+            if (selectedCatchNos.Count < 2)
             {
-                return BadRequest("Please select rows from exactly 2 different catch numbers.");
+                return BadRequest("Please select rows from at least 2 different catch numbers.");
             }
-
-            var firstCatchNo = requestedCatchNos[0];
-            var secondCatchNo = requestedCatchNos[1];
 
             var normalizedSchedules = selectedRows
                 .Select(item => new
@@ -280,24 +276,22 @@ namespace Tools.Controllers
                 return BadRequest("Catch numbers can only be merged when ExamDate and ExamTime are the same.");
             }
 
-            var mergedCatchNo = $"{firstCatchNo}{separator}{secondCatchNo}";
-            // Merge per-center:
-            // - If both catch numbers exist for the same center, add quantities and collapse into one row for that center.
-            // - If a center appears for only one catch number, keep rows (no add), but rewrite CatchNo to the merged form.
+            // Build merged catch number safely (no duplicates)
+            var mergedCatchNo = string.Join(separator,
+                requestedCatchNos.Distinct(StringComparer.OrdinalIgnoreCase));
+
             var selectedRowsByCenter = selectedRows
                 .GroupBy(item => NormalizeText(item.CenterCode), StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
             int centersCollapsed = 0;
-            int rowsDeleted = 0;
+            int rowsUpdated = 0;
 
             foreach (var centerGroup in selectedRowsByCenter)
             {
                 var groupRows = centerGroup.ToList();
-                if (groupRows.Count == 0)
-                {
+                if (!groupRows.Any())
                     continue;
-                }
 
                 var groupCatchNos = groupRows
                     .Select(item => NormalizeText(item.CatchNo))
@@ -305,10 +299,13 @@ namespace Tools.Controllers
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .ToList();
 
-                var hasFirst = groupCatchNos.Any(value => string.Equals(value, firstCatchNo, StringComparison.OrdinalIgnoreCase));
-                var hasSecond = groupCatchNos.Any(value => string.Equals(value, secondCatchNo, StringComparison.OrdinalIgnoreCase));
+                // Count how many requested catch numbers exist in this center
+                var matchingCount = requestedCatchNos
+                    .Count(req => groupCatchNos
+                        .Any(gc => string.Equals(gc, req, StringComparison.OrdinalIgnoreCase)));
 
-                if (hasFirst && hasSecond)
+                // If at least 2 match → merge
+                if (matchingCount >= 2)
                 {
                     centersCollapsed++;
 
@@ -322,28 +319,29 @@ namespace Tools.Controllers
 
                     foreach (var row in groupRows.Where(item => item.Id != primaryRow.Id))
                     {
-                        row.Status = false;              // soft delete
-                        row.NRDataId = primaryRow.Id; // reference merged row
-                        rowsDeleted++;
+                        row.Status = false;               // soft delete
+                        row.NRDataId = primaryRow.Id;     // reference to merged row
+                        rowsUpdated++;
                     }
-
-                    continue;
                 }
-
-                foreach (var row in groupRows)
+                else
                 {
-                    row.CatchNo = mergedCatchNo;
+                    // Only one catch number present → just rename
+                    foreach (var row in groupRows)
+                    {
+                        row.CatchNo = mergedCatchNo;
+                    }
                 }
             }
 
             await _context.SaveChangesAsync();
 
             var actionLabel = centersCollapsed > 0
-                ? $"Catch numbers merged. Collapsed {centersCollapsed} center(s) (deleted {rowsDeleted} row(s)) and added quantities where centers matched."
-                : "Catch numbers merged. No centers had both catch numbers, so quantities were kept unchanged.";
+                ? $"Catch numbers merged. Collapsed {centersCollapsed} center(s) (soft updated {rowsUpdated} row(s)) and added quantities where centers matched."
+                : "Catch numbers merged. No centers had multiple catch numbers, so quantities were unchanged.";
 
             _loggerService.LogEvent(
-                $"Merged catch numbers for ProjectId {ProjectId}: {firstCatchNo} and {secondCatchNo}",
+                $"Merged catch numbers for ProjectId {ProjectId}: {string.Join(",", requestedCatchNos)}",
                 "NRData",
                 User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
                 ProjectId);
@@ -353,10 +351,9 @@ namespace Tools.Controllers
                 message = actionLabel,
                 catchNo = mergedCatchNo,
                 centersCollapsed,
-                rowsDeleted
+                rowsUpdated
             });
         }
-
 
 
         // PUT: api/NRDatas/5
