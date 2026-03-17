@@ -183,7 +183,15 @@ namespace Tools.Controllers
                         }
                     }
                 }
-                _logger.LogEvent($"Duplicates has been deleted", "Duplicates", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, ProjectId);
+                var triggeredBy = LogHelper.GetTriggeredBy(User);
+                _logger.LogEvent(
+                    "Duplicates has been deleted",
+                    "Duplicates",
+                    triggeredBy,
+                    ProjectId,
+                    string.Empty,
+                    LogHelper.ToJson(new { ProjectId, DeletedCount = mergedCount })
+                );
                 await _context.SaveChangesAsync();
                 // Excel Report Path
                 var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());

@@ -7,6 +7,7 @@ using Newtonsoft.Json.Linq;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
+using Tools.Services;
 
 namespace ERPToolsAPI.Controllers
 {
@@ -16,11 +17,13 @@ namespace ERPToolsAPI.Controllers
     {
         private readonly ERPToolsDbContext _context;
         private readonly string _baseUrl;
+        private readonly ILoggerService _loggerService;
 
-        public UserLogsController(ERPToolsDbContext context,IConfiguration configuration )
+        public UserLogsController(ERPToolsDbContext context,IConfiguration configuration, ILoggerService loggerService )
         {
             _context = context;
             _baseUrl = configuration["ApiSettings:BaseUrl"];
+            _loggerService = loggerService;
         }
 
 
@@ -73,12 +76,22 @@ namespace ERPToolsAPI.Controllers
                 _context.UserLoginLogs.Add(log);
                 await _context.SaveChangesAsync();
 
+                _loggerService.LogEvent(
+                    "User logged in via tools",
+                    "UserLogs",
+                    userId,
+                    0,
+                    string.Empty,
+                    LogHelper.ToJson(new { request.UserName })
+                );
+
                 // Return token to frontend
                 return Ok(new { token = jwtToken });
 
             }
             catch (Exception ex)
             {
+                _loggerService.LogError("Error logging in via tools", ex.Message, nameof(UserLogsController));
                 return StatusCode(500, new { message = "Login failed", error = ex.Message });
             }
         }
@@ -88,23 +101,40 @@ namespace ERPToolsAPI.Controllers
         [HttpPost("log-login")]
         public IActionResult LogLogin(UserLoginLog  userLoginLog)
         {
-            var userIdClaim = User.FindFirst(ClaimTypes.Name);
-            if (userIdClaim == null) return Unauthorized();
-
-            var userId = int.Parse(userIdClaim.Value);
-            var ipAddress = HttpContext.Connection.RemoteIpAddress?.ToString();
-            var userAgent = Request.Headers["User-Agent"].ToString();
-
-            var log = new UserLoginLog
+            try
             {
-                UserId = userId,
-                LoginTime = DateTime.UtcNow
-            };
+                var userIdClaim = User.FindFirst(ClaimTypes.Name);
+                if (userIdClaim == null) return Unauthorized();
 
-            _context.UserLoginLogs.Add(log);
-            _context.SaveChanges();
+                var userId = int.Parse(userIdClaim.Value);
+                var ipAddress = HttpContext.Connection.RemoteIpAddress?.ToString();
+                var userAgent = Request.Headers["User-Agent"].ToString();
 
-            return Ok(new { message = "Login logged successfully" });
+                var log = new UserLoginLog
+                {
+                    UserId = userId,
+                    LoginTime = DateTime.UtcNow
+                };
+
+                _context.UserLoginLogs.Add(log);
+                _context.SaveChanges();
+
+                _loggerService.LogEvent(
+                    "User login logged successfully",
+                    "UserLogs",
+                    userId,
+                    0,
+                    string.Empty,
+                    LogHelper.ToJson(new { userId, ipAddress, userAgent })
+                );
+
+                return Ok(new { message = "Login logged successfully" });
+            }
+            catch (Exception ex)
+            {
+                _loggerService.LogError("Error logging user login", ex.Message, nameof(UserLogsController));
+                return StatusCode(500, new { message = "Login log failed" });
+            }
         }
     }
 }

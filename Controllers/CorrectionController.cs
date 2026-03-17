@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System.Net.Http.Json;
 using System.Text.RegularExpressions;
+using Tools.Services;
 
 [ApiController]
 [Route("api/[controller]")]
@@ -13,12 +14,14 @@ public class CorrectionController : ControllerBase
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ERPToolsDbContext _context;
     private readonly string _baseUrl;
+    private readonly ILoggerService _loggerService;
 
-    public CorrectionController(IHttpClientFactory httpClientFactory, ERPToolsDbContext context, IConfiguration configuration)
+    public CorrectionController(IHttpClientFactory httpClientFactory, ERPToolsDbContext context, IConfiguration configuration, ILoggerService loggerService)
     {
         _httpClientFactory = httpClientFactory;
         _context = context;
         _baseUrl = configuration["ApiSettings:BaseUrl"];
+        _loggerService = loggerService;
     }
 
     /* [HttpPost("correct")]
@@ -163,109 +166,127 @@ public class CorrectionController : ControllerBase
     [HttpPost("correct")]
     public async Task<IActionResult> CorrectCourseOnly([FromBody] CorrectionPayload payload)
     {
-        var client = _httpClientFactory.CreateClient();
-
-        var rows = await _context.ExcelUploads
-            .Where(x => x.GroupId == payload.GroupId)
-            .ToListAsync();
-
-        var courseList = await client.GetFromJsonAsync<List<CourseMasterItem>>($"{_baseUrl}/Course");
-        var subjectList = await client.GetFromJsonAsync<List<SubjectMasterItem>>($"{_baseUrl}/Subject");
-        var languageList = await client.GetFromJsonAsync<List<LanguageMasterItem>>($"{_baseUrl}/Language");
-        var examTypeList = await client.GetFromJsonAsync<List<ExamTypeMasterItem>>($"{_baseUrl}/ExamType");
-        var paperList = await client.GetFromJsonAsync<List<PaperTypeMasterItem>>($"{_baseUrl}/PaperTypes");
-
-        var changesSummary = new List<object>();
-        int correctedCount = 0;
-
-        foreach (var row in rows)
+        try
         {
-            var changes = new Dictionary<string, (string OldValue, string NewValue)>();
+            var client = _httpClientFactory.CreateClient();
 
-            // Course Correction
-            var oldCourse = row.Course ?? "";
-            if (!string.IsNullOrWhiteSpace(oldCourse))
+            var rows = await _context.ExcelUploads
+                .Where(x => x.GroupId == payload.GroupId)
+                .ToListAsync();
+
+            var courseList = await client.GetFromJsonAsync<List<CourseMasterItem>>($"{_baseUrl}/Course");
+            var subjectList = await client.GetFromJsonAsync<List<SubjectMasterItem>>($"{_baseUrl}/Subject");
+            var languageList = await client.GetFromJsonAsync<List<LanguageMasterItem>>($"{_baseUrl}/Language");
+            var examTypeList = await client.GetFromJsonAsync<List<ExamTypeMasterItem>>($"{_baseUrl}/ExamType");
+            var paperList = await client.GetFromJsonAsync<List<PaperTypeMasterItem>>($"{_baseUrl}/PaperTypes");
+
+            var changesSummary = new List<object>();
+            int correctedCount = 0;
+
+            foreach (var row in rows)
             {
-                var newCourse = MatchCourse(oldCourse, courseList);
-                row.Course = newCourse;
-                if (payload.FieldsToCorrect.Contains("course", StringComparer.OrdinalIgnoreCase) &&
-                    !string.Equals(oldCourse, newCourse, StringComparison.Ordinal)) // case-sensitive difference
+                var changes = new Dictionary<string, (string OldValue, string NewValue)>();
+
+                // Course Correction
+                var oldCourse = row.Course ?? "";
+                if (!string.IsNullOrWhiteSpace(oldCourse))
                 {
-                    changes["Course"] = (oldCourse, newCourse);
+                    var newCourse = MatchCourse(oldCourse, courseList);
+                    row.Course = newCourse;
+                    if (payload.FieldsToCorrect.Contains("course", StringComparer.OrdinalIgnoreCase) &&
+                        !string.Equals(oldCourse, newCourse, StringComparison.Ordinal)) // case-sensitive difference
+                    {
+                        changes["Course"] = (oldCourse, newCourse);
+                    }
+                }
+
+                // Subject Correction
+                var oldSubject = row.Subject ?? "";
+                if (!string.IsNullOrWhiteSpace(oldSubject))
+                {
+                    var newSubject = MatchSubject(oldSubject, subjectList);
+                    row.Subject = newSubject;
+                    if (payload.FieldsToCorrect.Contains("subject", StringComparer.OrdinalIgnoreCase) &&
+                        !string.Equals(oldSubject, newSubject, StringComparison.Ordinal))
+                    {
+                        changes["Subject"] = (oldSubject, newSubject);
+                    }
+                }
+
+                // Language Correction
+                var oldLanguage = row.Language ?? "";
+                if (!string.IsNullOrWhiteSpace(oldLanguage))
+                {
+                    var newLanguage = MatchLanguage(oldLanguage, languageList);
+                    row.Language = newLanguage;
+                    if (payload.FieldsToCorrect.Contains("language", StringComparer.OrdinalIgnoreCase) &&
+                        !string.Equals(oldLanguage, newLanguage, StringComparison.Ordinal))
+                    {
+                        changes["Language"] = (oldLanguage, newLanguage);
+                    }
+                }
+
+                // ExamType Correction
+                var oldExamType = row.ExamType ?? "";
+                if (!string.IsNullOrWhiteSpace(oldExamType))
+                {
+                    var newExamType = MatchExamType(oldExamType, examTypeList);
+                    row.ExamType = newExamType;
+                    if (payload.FieldsToCorrect.Contains("examtype", StringComparer.OrdinalIgnoreCase) &&
+                        !string.Equals(oldExamType, newExamType, StringComparison.Ordinal))
+                    {
+                        changes["ExamType"] = (oldExamType, newExamType);
+                    }
+                }
+
+                // Type Correction (Paper Type)
+                var oldType = row.Type ?? "";
+                if (!string.IsNullOrWhiteSpace(oldType))
+                {
+                    var newType = MatchPaperType(oldType, paperList);
+                    row.Type = newType;
+                    if (payload.FieldsToCorrect.Contains("type", StringComparer.OrdinalIgnoreCase) &&
+                        !string.Equals(oldType, newType, StringComparison.Ordinal))
+                    {
+                        changes["Type"] = (oldType, newType);
+                    }
+                }
+
+                if (changes.Any())
+                {
+                    correctedCount++;
+                    changesSummary.Add(new
+                    {
+                        row.Id,
+                        row.Catch,
+                        ChangedFields = changes.ToDictionary(c => c.Key, c => new { Old = c.Value.OldValue, New = c.Value.NewValue })
+                    });
                 }
             }
 
-            // Subject Correction
-            var oldSubject = row.Subject ?? "";
-            if (!string.IsNullOrWhiteSpace(oldSubject))
-            {
-                var newSubject = MatchSubject(oldSubject, subjectList);
-                row.Subject = newSubject;
-                if (payload.FieldsToCorrect.Contains("subject", StringComparer.OrdinalIgnoreCase) &&
-                    !string.Equals(oldSubject, newSubject, StringComparison.Ordinal))
-                {
-                    changes["Subject"] = (oldSubject, newSubject);
-                }
-            }
+            await _context.SaveChangesAsync();
 
-            // Language Correction
-            var oldLanguage = row.Language ?? "";
-            if (!string.IsNullOrWhiteSpace(oldLanguage))
-            {
-                var newLanguage = MatchLanguage(oldLanguage, languageList);
-                row.Language = newLanguage;
-                if (payload.FieldsToCorrect.Contains("language", StringComparer.OrdinalIgnoreCase) &&
-                    !string.Equals(oldLanguage, newLanguage, StringComparison.Ordinal))
-                {
-                    changes["Language"] = (oldLanguage, newLanguage);
-                }
-            }
+            var triggeredBy = LogHelper.GetTriggeredBy(User);
+            _loggerService.LogEvent(
+                "Correction applied to Excel uploads",
+                "Correction",
+                triggeredBy,
+                payload.GroupId,
+                string.Empty,
+                LogHelper.ToJson(new { payload.GroupId, CorrectedCount = correctedCount, CorrectedRows = changesSummary })
+            );
 
-            // ExamType Correction
-            var oldExamType = row.ExamType ?? "";
-            if (!string.IsNullOrWhiteSpace(oldExamType))
+            return Ok(new
             {
-                var newExamType = MatchExamType(oldExamType, examTypeList);
-                row.ExamType = newExamType;
-                if (payload.FieldsToCorrect.Contains("examtype", StringComparer.OrdinalIgnoreCase) &&
-                    !string.Equals(oldExamType, newExamType, StringComparison.Ordinal))
-                {
-                    changes["ExamType"] = (oldExamType, newExamType);
-                }
-            }
-
-            // Type Correction (Paper Type)
-            var oldType = row.Type ?? "";
-            if (!string.IsNullOrWhiteSpace(oldType))
-            {
-                var newType = MatchPaperType(oldType, paperList);
-                row.Type = newType;
-                if (payload.FieldsToCorrect.Contains("type", StringComparer.OrdinalIgnoreCase) &&
-                    !string.Equals(oldType, newType, StringComparison.Ordinal))
-                {
-                    changes["Type"] = (oldType, newType);
-                }
-            }
-
-            if (changes.Any())
-            {
-                correctedCount++;
-                changesSummary.Add(new
-                {
-                    row.Id,
-                    row.Catch,
-                    ChangedFields = changes.ToDictionary(c => c.Key, c => new { Old = c.Value.OldValue, New = c.Value.NewValue })
-                });
-            }
+                CorrectedCount = correctedCount,
+                CorrectedRows = changesSummary
+            });
         }
-
-        await _context.SaveChangesAsync();
-
-        return Ok(new
+        catch (Exception ex)
         {
-            CorrectedCount = correctedCount,
-            CorrectedRows = changesSummary
-        });
+            _loggerService.LogError("Error applying corrections", ex.Message, nameof(CorrectionController));
+            return StatusCode(500, "Internal server error");
+        }
     }
 
 
@@ -293,22 +314,42 @@ public class CorrectionController : ControllerBase
     [HttpPost("updateRows")]
     public async Task<IActionResult> UpdateRows([FromBody] List<ExcelUpload> updatedRows)
     {
-        foreach (var updatedRow in updatedRows)
+        try
         {
-            var row = await _context.ExcelUploads.FirstOrDefaultAsync(x => x.Id == updatedRow.Id);
-            if (row != null)
+            foreach (var updatedRow in updatedRows)
             {
-                row.Course = updatedRow.Course;
-                row.Subject = updatedRow.Subject;
-                row.Type = updatedRow.Type;
-                row.Language = updatedRow.Language;
-                row.PaperNumber = updatedRow.PaperNumber;
-                row.ExamType = updatedRow.ExamType;
-                row.Catch = updatedRow.Catch;
+                var row = await _context.ExcelUploads.FirstOrDefaultAsync(x => x.Id == updatedRow.Id);
+                if (row != null)
+                {
+                    row.Course = updatedRow.Course;
+                    row.Subject = updatedRow.Subject;
+                    row.Type = updatedRow.Type;
+                    row.Language = updatedRow.Language;
+                    row.PaperNumber = updatedRow.PaperNumber;
+                    row.ExamType = updatedRow.ExamType;
+                    row.Catch = updatedRow.Catch;
+                }
             }
+            await _context.SaveChangesAsync();
+
+            var triggeredBy = LogHelper.GetTriggeredBy(User);
+            var groupId = updatedRows.FirstOrDefault()?.GroupId ?? 0;
+            _loggerService.LogEvent(
+                "Excel upload rows updated",
+                "Correction",
+                triggeredBy,
+                groupId,
+                string.Empty,
+                LogHelper.ToJson(updatedRows)
+            );
+
+            return Ok("Rows updated");
         }
-        await _context.SaveChangesAsync();
-        return Ok("Rows updated");
+        catch (Exception ex)
+        {
+            _loggerService.LogError("Error updating rows", ex.Message, nameof(CorrectionController));
+            return StatusCode(500, "Internal server error");
+        }
     }
 
     private string MatchSubject(string value, List<SubjectMasterItem>? masterList)

@@ -611,11 +611,14 @@ namespace Tools.Controllers
                 _context.BoxBreakingResults.AddRange(boxResults);
                 await _context.SaveChangesAsync();
 
+                var triggeredBy = LogHelper.GetTriggeredBy(User);
                 _loggerService.LogEvent(
                     $"Saved {boxResults.Count} box breaking results for ProjectId {ProjectId}, Batch {currentBatch}",
                     "BoxBreakingProcessing",
-                    User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
-                    ProjectId);
+                    triggeredBy,
+                    ProjectId,
+                    string.Empty,
+                    LogHelper.ToJson(boxResults));
 
                 return Ok(new
                 {

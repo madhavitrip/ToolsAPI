@@ -150,6 +150,16 @@ namespace Tools.Controllers
 
                 await _context.SaveChangesAsync();
 
+                var triggeredBy = LogHelper.GetTriggeredBy(User);
+                _loggerService.LogEvent(
+                    "Changed NRData inserted successfully",
+                    "ChangedNRData",
+                    triggeredBy,
+                    projectId,
+                    string.Empty,
+                    inputData.GetRawText()
+                );
+
                 return Ok(new
                 {
                     message = "Changed NRData inserted successfully",
@@ -158,6 +168,7 @@ namespace Tools.Controllers
             }
             catch (Exception ex)
             {
+                _loggerService.LogError("Error inserting Changed NRData", ex.Message, nameof(ChangedNrController));
                 return StatusCode(500, ex.Message);
             }
         }

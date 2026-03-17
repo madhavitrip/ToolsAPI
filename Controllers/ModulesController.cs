@@ -56,29 +56,44 @@ namespace Tools.Controllers
                 return BadRequest();
             }
 
+            var existingModule = await _context.Modules
+                .AsNoTracking()
+                .FirstOrDefaultAsync(m => m.Id == id);
+
+            if (existingModule == null)
+            {
+                var triggeredBy = LogHelper.GetTriggeredBy(User);
+                _loggerService.LogEvent(
+                    $"Module with ID {id} not found during updating",
+                    "Module",
+                    triggeredBy,
+                    0,
+                    LogHelper.ToJson(existingModule),
+                    LogHelper.ToJson(@module)
+                );
+                return NotFound();
+            }
+
             _context.Entry(@module).State = EntityState.Modified;
 
             try
             {
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Updated Module for id {id}", "Module", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,0);
+                var triggeredBy = LogHelper.GetTriggeredBy(User);
+                _loggerService.LogEvent(
+                    $"Updated Module for id {id}",
+                    "Module",
+                    triggeredBy,
+                    0,
+                    LogHelper.ToJson(existingModule),
+                    LogHelper.ToJson(@module)
+                );
 
             }
             catch (Exception ex)
             {
-                if (!ModuleExists(id))
-                {
-                    _loggerService.LogEvent($"Module with ID {id} not found during updating", "Module", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,0);
-
-                    return NotFound();
-                }
-                else
-                {
-
-                    _loggerService.LogError("Error updating Module", ex.Message, nameof(ModulesController));
-                    return StatusCode(500, "Internal server error");
-
-                }
+                _loggerService.LogError("Error updating Module", ex.Message, nameof(ModulesController));
+                return StatusCode(500, "Internal server error");
             }
 
             return NoContent();
@@ -93,7 +108,15 @@ namespace Tools.Controllers
             {
                 _context.Modules.Add(@module);
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Created a new Module with ID {module.Id}", "Module", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,0);
+                var triggeredBy = LogHelper.GetTriggeredBy(User);
+                _loggerService.LogEvent(
+                    $"Created a new Module with ID {@module.Id}",
+                    "Module",
+                    triggeredBy,
+                    0,
+                    string.Empty,
+                    LogHelper.ToJson(@module)
+                );
 
                 return CreatedAtAction("GetModule", new { id = @module.Id }, @module);
             }
@@ -129,9 +152,5 @@ namespace Tools.Controllers
             }
         }
 
-        private bool ModuleExists(int id)
-        {
-            return _context.Modules.Any(e => e.Id == id);
-        }
     }
 }

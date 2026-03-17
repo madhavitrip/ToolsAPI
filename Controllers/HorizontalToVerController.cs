@@ -243,11 +243,22 @@ namespace Tools.Controllers
 
                 Console.WriteLine($"✅ File processed successfully! Output: {outputFile}");
 
+                var triggeredBy = LogHelper.GetTriggeredBy(User);
+                _loggerService.LogEvent(
+                    $"Horizontal to vertical conversion completed for ProjectId {ProjectId}",
+                    "HorizontalToVer",
+                    triggeredBy,
+                    ProjectId,
+                    string.Empty,
+                    LogHelper.ToJson(new { ProjectId, FileName = file.FileName, OutputFile = outputFile })
+                );
+
                 return Ok( "✅ File uploaded and processed successfully!"
                 );
             }
             catch (Exception ex)
             {
+                _loggerService.LogError("Error processing HorizontalToVer upload", ex.Message, nameof(HorizontalToVerController));
                 return StatusCode(500, $"❌ Error processing Excel file: {ex.Message}");
             }
         }

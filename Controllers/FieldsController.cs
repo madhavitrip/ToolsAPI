@@ -58,28 +58,44 @@ namespace Tools.Controllers
                 return BadRequest();
             }
 
+            var existingField = await _context.Fields
+                .AsNoTracking()
+                .FirstOrDefaultAsync(f => f.FieldId == id);
+
+            if (existingField == null)
+            {
+                var triggeredBy = LogHelper.GetTriggeredBy(User);
+                _loggerService.LogEvent(
+                    $"Field with ID {id} not found during updating",
+                    "Field",
+                    triggeredBy,
+                    0,
+                    LogHelper.ToJson(existingField),
+                    LogHelper.ToJson(@field)
+                );
+                return NotFound();
+            }
+
             _context.Entry(@field).State = EntityState.Modified;
 
             try
             {
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Updated Field for Id {id}", "Field", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,0);
+                var triggeredBy = LogHelper.GetTriggeredBy(User);
+                _loggerService.LogEvent(
+                    $"Updated Field for Id {id}",
+                    "Field",
+                    triggeredBy,
+                    0,
+                    LogHelper.ToJson(existingField),
+                    LogHelper.ToJson(@field)
+                );
 
             }
             catch (Exception ex)
             {
-                if (!FieldExists(id))
-                {
-                    _loggerService.LogEvent($"Field with ID {id} not found during updating", "Field", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,0);
-
-                    return NotFound();
-                }
-                else
-                {
-
-                    _loggerService.LogError("Error updating Field", ex.Message, nameof(FieldsController));
-                    return StatusCode(500, "Internal server error");
-                }
+                _loggerService.LogError("Error updating Field", ex.Message, nameof(FieldsController));
+                return StatusCode(500, "Internal server error");
             }
 
             return NoContent();
@@ -104,11 +120,14 @@ namespace Tools.Controllers
                 _context.Fields.Add(field);
                 await _context.SaveChangesAsync();
 
+                var triggeredBy = LogHelper.GetTriggeredBy(User);
                 _loggerService.LogEvent(
                     $"Created a new Field with ID {field.FieldId}",
                     "Field",
-                    User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
-                    0
+                    triggeredBy,
+                    0,
+                    string.Empty,
+                    LogHelper.ToJson(field)
                 );
 
                 return CreatedAtAction("GetField", new { id = field.FieldId }, field);
@@ -145,9 +164,5 @@ namespace Tools.Controllers
             }
         }
 
-        private bool FieldExists(int id)
-        {
-            return _context.Fields.Any(e => e.FieldId == id);
-        }
     }
 }

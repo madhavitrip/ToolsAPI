@@ -7,6 +7,7 @@ using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using OfficeOpenXml;
 using System.Net.Http.Headers;
+using Tools.Services;
 
 namespace Tools.Controllers
 {
@@ -16,11 +17,13 @@ namespace Tools.Controllers
     {
         private readonly ERPToolsDbContext _context;
         private readonly string _baseUrl;
+        private readonly ILoggerService _loggerService;
 
-        public ExcelUploadController(ERPToolsDbContext context, IConfiguration configuration)
+        public ExcelUploadController(ERPToolsDbContext context, IConfiguration configuration, ILoggerService loggerService)
         {
             _context = context;
             _baseUrl = configuration["ApiSettings:BaseUrl"];
+            _loggerService = loggerService;
         }
 
 
@@ -96,6 +99,16 @@ namespace Tools.Controllers
                 _context.ExcelUploads.AddRange(data);
                 await _context.SaveChangesAsync();
 
+                var triggeredBy = LogHelper.GetTriggeredBy(User);
+                _loggerService.LogEvent(
+                    $"Uploaded {data.Count} Excel records for GroupId {groupId}",
+                    "ExcelUpload",
+                    triggeredBy,
+                    groupId,
+                    string.Empty,
+                    LogHelper.ToJson(data)
+                );
+
                 return Ok(new
                 {
                     message = $"Uploaded {data.Count} records under group '{groupName}'",
@@ -104,6 +117,7 @@ namespace Tools.Controllers
             }
             catch (Exception ex)
             {
+                _loggerService.LogError("Error uploading Excel data", ex.Message, nameof(ExcelUploadController));
                 return StatusCode(500, new { message = "Upload failed", error = ex.Message });
             }
         }

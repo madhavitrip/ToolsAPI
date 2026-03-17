@@ -74,27 +74,44 @@ namespace Tools.Controllers
                 return BadRequest();
             }
 
+            var existingExtrasConfiguration = await _context.ExtraConfigurations
+                .AsNoTracking()
+                .FirstOrDefaultAsync(e => e.Id == id);
+
+            if (existingExtrasConfiguration == null)
+            {
+                var triggeredBy = LogHelper.GetTriggeredBy(User);
+                _loggerService.LogEvent(
+                    $"ExtrasConfiguration with ID {id} not found during updating",
+                    "ExtrasConfiguration",
+                    triggeredBy,
+                    extrasConfiguration.ProjectId,
+                    LogHelper.ToJson(existingExtrasConfiguration),
+                    LogHelper.ToJson(extrasConfiguration)
+                );
+                return NotFound();
+            }
+
             _context.Entry(extrasConfiguration).State = EntityState.Modified;
 
             try
             {
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Updated ExtrasConfiguration with ID {id}", "ExtrasConfiguration", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, extrasConfiguration.ProjectId);
+                var triggeredBy = LogHelper.GetTriggeredBy(User);
+                _loggerService.LogEvent(
+                    $"Updated ExtrasConfiguration with ID {id}",
+                    "ExtrasConfiguration",
+                    triggeredBy,
+                    extrasConfiguration.ProjectId,
+                    LogHelper.ToJson(existingExtrasConfiguration),
+                    LogHelper.ToJson(extrasConfiguration)
+                );
 
             }
             catch (Exception ex)
             {
-                if (!ExtrasConfigurationExists(id))
-                {
-                    _loggerService.LogEvent($"ExtrasConfiguration with ID {id} not found during updating", "ExtrasConfiguration", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, extrasConfiguration.ProjectId);
-
-                    return NotFound();
-                }
-                else
-                {
-                    _loggerService.LogError("Error updating ExtrasConfiguration", ex.Message, nameof(ExtrasConfigurationsController));
-                    return StatusCode(500, "Internal server error");
-                }
+                _loggerService.LogError("Error updating ExtrasConfiguration", ex.Message, nameof(ExtrasConfigurationsController));
+                return StatusCode(500, "Internal server error");
             }
 
             return NoContent();
@@ -121,14 +138,29 @@ namespace Tools.Controllers
                     }
                     _context.ExtraConfigurations.RemoveRange(extra);
                     await _context.SaveChangesAsync();
-                    _loggerService.LogEvent($"Deleted {projectId} old ExtrasConfiguration record(s)",
-                  "ExtrasConfiguration", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, extrasConfiguration.ProjectId);
+                    var deleteTriggeredBy = LogHelper.GetTriggeredBy(User);
+                    _loggerService.LogEvent(
+                        $"Deleted {projectId} old ExtrasConfiguration record(s)",
+                        "ExtrasConfiguration",
+                        deleteTriggeredBy,
+                        extrasConfiguration.ProjectId,
+                        LogHelper.ToJson(extra),
+                        LogHelper.ToJson(extrasConfiguration)
+                    );
                 }
 
 
                 _context.ExtraConfigurations.Add(extrasConfiguration);
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Created new ExtrasConfiguration with ProjectID {extrasConfiguration.ProjectId}", "ExtrasConfiguration", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, extrasConfiguration.ProjectId);
+                var createTriggeredBy = LogHelper.GetTriggeredBy(User);
+                _loggerService.LogEvent(
+                    $"Created new ExtrasConfiguration with ProjectID {extrasConfiguration.ProjectId}",
+                    "ExtrasConfiguration",
+                    createTriggeredBy,
+                    extrasConfiguration.ProjectId,
+                    string.Empty,
+                    LogHelper.ToJson(extrasConfiguration)
+                );
 
                 return CreatedAtAction("GetExtrasConfiguration", new { id = extrasConfiguration.Id }, extrasConfiguration);
             }
@@ -170,9 +202,5 @@ namespace Tools.Controllers
 
         }
 
-        private bool ExtrasConfigurationExists(int id)
-        {
-            return _context.ExtraConfigurations.Any(e => e.Id == id);
-        }
     }
 }

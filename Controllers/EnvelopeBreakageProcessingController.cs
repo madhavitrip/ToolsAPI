@@ -536,11 +536,14 @@ namespace Tools.Controllers
                 _context.EnvelopeBreakingResults.AddRange(envelopeResults);
                 await _context.SaveChangesAsync();
 
+                var triggeredBy = LogHelper.GetTriggeredBy(User);
                 _loggerService.LogEvent(
                     $"Saved {envelopeResults.Count} envelope breaking results for ProjectId {ProjectId}, Batch {currentBatch}",
                     "EnvelopeBreakageProcessing",
-                    User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
-                    ProjectId);
+                    triggeredBy,
+                    ProjectId,
+                    string.Empty,
+                    LogHelper.ToJson(envelopeResults));
 
                 return Ok(new
                 {

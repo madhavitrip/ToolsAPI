@@ -155,26 +155,43 @@ namespace Tools.Controllers
                 return BadRequest();
             }
 
+            var existingProjectConfig = await _context.ProjectConfigs
+                .AsNoTracking()
+                .FirstOrDefaultAsync(p => p.Id == id);
+
+            if (existingProjectConfig == null)
+            {
+                var triggeredBy = LogHelper.GetTriggeredBy(User);
+                _loggerService.LogEvent(
+                    $"ProjectConfig with ID {id} not found",
+                    "ProjectConfig",
+                    triggeredBy,
+                    projectConfig.ProjectId,
+                    LogHelper.ToJson(existingProjectConfig),
+                    LogHelper.ToJson(projectConfig)
+                );
+                return NotFound();
+            }
+
             _context.Entry(projectConfig).State = EntityState.Modified;
 
             try
             {
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Updated ProjectConfig for {projectConfig.ProjectId}", "ProjectConfig", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, projectConfig.ProjectId);
+                var triggeredBy = LogHelper.GetTriggeredBy(User);
+                _loggerService.LogEvent(
+                    $"Updated ProjectConfig for {projectConfig.ProjectId}",
+                    "ProjectConfig",
+                    triggeredBy,
+                    projectConfig.ProjectId,
+                    LogHelper.ToJson(existingProjectConfig),
+                    LogHelper.ToJson(projectConfig)
+                );
             }
             catch (Exception ex)
             {
-                if (!ProjectConfigExists(id))
-                {
-                    _loggerService.LogEvent($"ProjectConfig with ID {id} not found", "ProjectConfig", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, projectConfig.ProjectId);
-                    return NotFound();
-                }
-                else
-                {
-                    _loggerService.LogError("Error updating ProjectConfigs", ex.Message, nameof(ProjectConfigsController));
-                    return StatusCode(500, "Internal server error");
-
-                }
+                _loggerService.LogError("Error updating ProjectConfigs", ex.Message, nameof(ProjectConfigsController));
+                return StatusCode(500, "Internal server error");
             }
 
             return NoContent();
@@ -191,7 +208,15 @@ namespace Tools.Controllers
                 
                 if (config != null)
                 {
-                    _loggerService.LogEvent($"ProjectConfig for {config.ProjectId} already exists", "ProjectConfig", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, projectConfig.ProjectId);
+                    var triggeredby = LogHelper.GetTriggeredBy(User);
+                    _loggerService.LogEvent(
+                        $"ProjectConfig for {config.ProjectId} already exists",
+                        "ProjectConfig",
+                        triggeredby,
+                        projectConfig.ProjectId,
+                        LogHelper.ToJson(config),
+                        LogHelper.ToJson(projectConfig)
+                    );
                     var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", config.ProjectId.ToString());
                     if (Directory.Exists(reportPath))
                     {
@@ -202,7 +227,15 @@ namespace Tools.Controllers
                 }
                 _context.ProjectConfigs.Add(projectConfig);
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Created a new ProjectConfig with ID {projectConfig.ProjectId}", "ProjectConfig", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, projectConfig.ProjectId);
+                var triggeredBy = LogHelper.GetTriggeredBy(User);
+                _loggerService.LogEvent(
+                    $"Created a new ProjectConfig with ID {projectConfig.ProjectId}",
+                    "ProjectConfig",
+                    triggeredBy,
+                    projectConfig.ProjectId,
+                    string.Empty,
+                    LogHelper.ToJson(projectConfig)
+                );
                 return CreatedAtAction("GetProjectConfig", new { id = projectConfig.Id }, projectConfig);
             }
             catch (Exception ex)
@@ -237,9 +270,5 @@ namespace Tools.Controllers
             }
         }
 
-        private bool ProjectConfigExists(int id)
-        {
-            return _context.ProjectConfigs.Any(e => e.Id == id);
-        }
     }
 }

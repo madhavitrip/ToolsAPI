@@ -255,25 +255,43 @@ namespace Tools.Controllers
                 return BadRequest();
             }
 
+            var existingProject = await _context.Projects
+                .AsNoTracking()
+                .FirstOrDefaultAsync(p => p.ProjectId == id);
+
+            if (existingProject == null)
+            {
+                var triggeredBy = LogHelper.GetTriggeredBy(User);
+                _loggerService.LogEvent(
+                    $"Project with ID {id} not found during updating",
+                    "Projects",
+                    triggeredBy,
+                    project.ProjectId,
+                    LogHelper.ToJson(existingProject),
+                    LogHelper.ToJson(project)
+                );
+                return NotFound();
+            }
+
             _context.Entry(project).State = EntityState.Modified;
 
             try
             {
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Updated Project with ID {project.ProjectId}", "Projects", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,project.ProjectId);
+                var triggeredBy = LogHelper.GetTriggeredBy(User);
+                _loggerService.LogEvent(
+                    $"Updated Project with ID {project.ProjectId}",
+                    "Projects",
+                    triggeredBy,
+                    project.ProjectId,
+                    LogHelper.ToJson(existingProject),
+                    LogHelper.ToJson(project)
+                );
             }
             catch (Exception ex)
             {
-                if (!ProjectExists(id))
-                {
-                    _loggerService.LogEvent($"Project with ID {id} not found during updating", "Projects", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, project.ProjectId);
-                    return NotFound();
-                }
-                else
-                {
-                    _loggerService.LogError("Error creating Project", ex.Message, nameof(ProjectsController));
-                    throw;
-                }
+                _loggerService.LogError("Error creating Project", ex.Message, nameof(ProjectsController));
+                throw;
             }
 
             return NoContent();
@@ -296,11 +314,14 @@ namespace Tools.Controllers
                 _context.Projects.Add(project);
                 await _context.SaveChangesAsync();
 
+                var triggeredBy = LogHelper.GetTriggeredBy(User);
                 _loggerService.LogEvent(
                     $"Created a new Project with ID {project.ProjectId}",
                     "Projects",
-                    User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
-                    project.ProjectId
+                    triggeredBy,
+                    project.ProjectId,
+                    string.Empty,
+                    LogHelper.ToJson(project)
                 );
                 Console.WriteLine($"GroupId: {project.GroupId}, TypeId: {project.TypeId}");
                 return CreatedAtAction("GetProject", new { id = project.ProjectId }, project);
@@ -337,9 +358,5 @@ namespace Tools.Controllers
             }
         }
 
-        private bool ProjectExists(int id)
-        {
-            return _context.Projects.Any(e => e.ProjectId == id);
-        }
     }
 }

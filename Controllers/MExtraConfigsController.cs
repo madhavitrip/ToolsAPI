@@ -49,22 +49,28 @@ namespace Tools.Controllers
                     _context.MExtraConfigurations.RemoveRange(extra);
                     await _context.SaveChangesAsync();
 
+                    var triggeredBy = LogHelper.GetTriggeredBy(User);
                     _loggerService.LogEvent(
                         $"Deleted old MExtrasConfiguration record(s) for TypeId {extrasConfiguration.TypeId} and GroupId {extrasConfiguration.GroupId}",
                         "MExtraConfigurations",
-                        User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
-                        extrasConfiguration.GroupId
+                        triggeredBy,
+                        extrasConfiguration.GroupId,
+                        LogHelper.ToJson(extra),
+                        LogHelper.ToJson(extrasConfiguration)
                     );
                 }
 
                 _context.MExtraConfigurations.Add(extrasConfiguration);
                 await _context.SaveChangesAsync();
 
+                var createdTriggeredBy = LogHelper.GetTriggeredBy(User);
                 _loggerService.LogEvent(
                     $"Created new MExtrasConfiguration with TypeId {extrasConfiguration.TypeId} and GroupId {extrasConfiguration.GroupId}",
                     "MExtraConfigurations",
-                    User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
-                    extrasConfiguration.GroupId
+                    createdTriggeredBy,
+                    extrasConfiguration.GroupId,
+                    string.Empty,
+                    LogHelper.ToJson(extrasConfiguration)
                 );
 
                 return Ok(extrasConfiguration); 

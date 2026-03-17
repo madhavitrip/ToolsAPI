@@ -63,25 +63,43 @@ namespace Tools.Controllers
                 return BadRequest();
             }
 
+            var existingExtraEnvelope = await _context.ExtrasEnvelope
+                .AsNoTracking()
+                .FirstOrDefaultAsync(e => e.Id == id);
+
+            if (existingExtraEnvelope == null)
+            {
+                var triggeredBy = LogHelper.GetTriggeredBy(User);
+                _loggerService.LogEvent(
+                    $"ExtraEnvelopes with ID {id} not found during updating",
+                    "ExtraEnvelopes",
+                    triggeredBy,
+                    extraEnvelopes.ProjectId,
+                    LogHelper.ToJson(existingExtraEnvelope),
+                    LogHelper.ToJson(extraEnvelopes)
+                );
+                return NotFound();
+            }
+
             _context.Entry(extraEnvelopes).State = EntityState.Modified;
 
             try
             {
-                _loggerService.LogEvent($"Updated ExtraEnvelope with id {id}", "ExtraEnvelopes", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, extraEnvelopes.ProjectId);
                 await _context.SaveChangesAsync();
+                var triggeredBy = LogHelper.GetTriggeredBy(User);
+                _loggerService.LogEvent(
+                    $"Updated ExtraEnvelope with id {id}",
+                    "ExtraEnvelopes",
+                    triggeredBy,
+                    extraEnvelopes.ProjectId,
+                    LogHelper.ToJson(existingExtraEnvelope),
+                    LogHelper.ToJson(extraEnvelopes)
+                );
             }
             catch (Exception ex)
             {
-                if (!ExtraEnvelopesExists(id))
-                {
-                    _loggerService.LogEvent($"ExtraEnvelopes with ID {id} not found during updating", "ExtraEnvelopes", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, extraEnvelopes.ProjectId);
-                    return NotFound();
-                }
-                else
-                {
-                    _loggerService.LogError("Error updating ExtraEnvelopes", ex.Message, nameof(ExtraEnvelopesController));
-                    throw;
-                }
+                _loggerService.LogError("Error updating ExtraEnvelopes", ex.Message, nameof(ExtraEnvelopesController));
+                throw;
             }
 
             return NoContent();
@@ -234,7 +252,15 @@ namespace Tools.Controllers
 
                 await _context.ExtrasEnvelope.AddRangeAsync(envelopesToAdd);
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Created ExtraEnvelopes for Project {ProjectId}", "ExtraEnvelopes", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, ProjectId);
+                var triggeredBy = LogHelper.GetTriggeredBy(User);
+                _loggerService.LogEvent(
+                    $"Created ExtraEnvelopes for Project {ProjectId}",
+                    "ExtraEnvelopes",
+                    triggeredBy,
+                    ProjectId,
+                    string.Empty,
+                    LogHelper.ToJson(envelopesToAdd)
+                );
 
                 // ------------------- 📊 Generate Excel Report -------------------
 
@@ -581,9 +607,5 @@ namespace Tools.Controllers
             }
         }
 
-        private bool ExtraEnvelopesExists(int id)
-        {
-            return _context.ExtrasEnvelope.Any(e => e.Id == id);
-        }
     }
 }

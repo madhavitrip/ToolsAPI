@@ -258,26 +258,43 @@ namespace Tools.Controllers
                 return BadRequest();
             }
 
+            var existingEnvelopeBreakage = await _context.EnvelopeBreakages
+                .AsNoTracking()
+                .FirstOrDefaultAsync(e => e.EnvelopeId == id);
+
+            if (existingEnvelopeBreakage == null)
+            {
+                var triggeredBy = LogHelper.GetTriggeredBy(User);
+                _loggerService.LogEvent(
+                    $"EnvelopeBreakage with ID {id} not found during updating",
+                    "EnvelopeBreakage",
+                    triggeredBy,
+                    envelopeBreakage.ProjectId,
+                    LogHelper.ToJson(existingEnvelopeBreakage),
+                    LogHelper.ToJson(envelopeBreakage)
+                );
+                return NotFound();
+            }
+
             _context.Entry(envelopeBreakage).State = EntityState.Modified;
 
             try
             {
-                _loggerService.LogEvent($"Updated EnvelopeBreakage with ID {id}", "EnvelopeBreakage", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, envelopeBreakage.ProjectId);
                 await _context.SaveChangesAsync();
+                var triggeredBy = LogHelper.GetTriggeredBy(User);
+                _loggerService.LogEvent(
+                    $"Updated EnvelopeBreakage with ID {id}",
+                    "EnvelopeBreakage",
+                    triggeredBy,
+                    envelopeBreakage.ProjectId,
+                    LogHelper.ToJson(existingEnvelopeBreakage),
+                    LogHelper.ToJson(envelopeBreakage)
+                );
             }
             catch (Exception ex)
             {
-                if (!EnvelopeBreakageExists(id))
-                {
-                    _loggerService.LogEvent($"EnvelopeBreakage with ID {id} not found during updating", "EnvelopeBreakage", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, envelopeBreakage.ProjectId);
-                    return NotFound();
-
-                }
-                else
-                {
-                    _loggerService.LogError("Error updating EnvelopeBreakage", ex.Message, nameof(EnvelopeBreakagesController));
-                    return StatusCode(500, "Internal server error");
-                }
+                _loggerService.LogError("Error updating EnvelopeBreakage", ex.Message, nameof(EnvelopeBreakagesController));
+                return StatusCode(500, "Internal server error");
             }
 
             return NoContent();
@@ -335,12 +352,26 @@ namespace Tools.Controllers
                         var chunk = env.Skip(i).Take(chunkSize).ToList();  // Get a chunk of the list
                         _context.EnvelopeBreakages.RemoveRange(chunk);  // Remove the chunk
                         await _context.SaveChangesAsync();  // Save changes after each chunk
-                        _loggerService.LogEvent($"Deleted {chunk.Count} Envelope Breaking entries for ProjectID {ProjectId}", "EnvelopeBreakages",
-                            User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, ProjectId);
+                        var triggeredBy = LogHelper.GetTriggeredBy(User);
+                        _loggerService.LogEvent(
+                            $"Deleted {chunk.Count} Envelope Breaking entries for ProjectID {ProjectId}",
+                            "EnvelopeBreakages",
+                            triggeredBy,
+                            ProjectId,
+                            string.Empty,
+                            LogHelper.ToJson(new { ProjectId, DeletedCount = chunk.Count })
+                        );
                     }
 
-                    _loggerService.LogEvent($"Successfully deleted all Envelope Breaking entries for ProjectID {ProjectId}", "EnvelopeBreakages",
-                        User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, ProjectId);
+                    var finalTriggeredBy = LogHelper.GetTriggeredBy(User);
+                    _loggerService.LogEvent(
+                        $"Successfully deleted all Envelope Breaking entries for ProjectID {ProjectId}",
+                        "EnvelopeBreakages",
+                        finalTriggeredBy,
+                        ProjectId,
+                        string.Empty,
+                        LogHelper.ToJson(new { ProjectId, DeletedCount = env.Count })
+                    );
                 }
                 else
                 {
@@ -421,7 +452,15 @@ namespace Tools.Controllers
                 {
                     _context.EnvelopeBreakages.AddRange(breakagesToAdd);
                     await _context.SaveChangesAsync();
-                    _loggerService.LogEvent($"Created Envelope Breaking of ProjectID {ProjectId}", "EnvelopeBreakages", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, ProjectId);
+                    var triggeredBy = LogHelper.GetTriggeredBy(User);
+                    _loggerService.LogEvent(
+                        $"Created Envelope Breaking of ProjectID {ProjectId}",
+                        "EnvelopeBreakages",
+                        triggeredBy,
+                        ProjectId,
+                        string.Empty,
+                        LogHelper.ToJson(breakagesToAdd)
+                    );
                 }
 
 

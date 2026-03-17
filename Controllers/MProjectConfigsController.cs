@@ -31,11 +31,14 @@ namespace Tools.Controllers
 
                 if (config != null)
                 {
+                    var triggeredBy = LogHelper.GetTriggeredBy(User);
                     _loggerService.LogEvent(
                         $"MProjectConfig for TypeId {config.TypeId} and GroupId {config.GroupId} already exists",
                         "MProjectConfigs",
-                        User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
-                        config.GroupId
+                        triggeredBy,
+                        config.GroupId,
+                        LogHelper.ToJson(config),
+                        LogHelper.ToJson(projectConfig)
                     );
 
                     var reportPath = Path.Combine(
@@ -56,11 +59,14 @@ namespace Tools.Controllers
                 _context.MProjectConfigs.Add(projectConfig);
                 await _context.SaveChangesAsync();
 
+                var createdTriggeredBy = LogHelper.GetTriggeredBy(User);
                 _loggerService.LogEvent(
                     $"Created a new MProjectConfig with TypeId {projectConfig.TypeId} and GroupId {projectConfig.GroupId}",
                     "MProjectConfigs",
-                    User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
-                    projectConfig.GroupId
+                    createdTriggeredBy,
+                    projectConfig.GroupId,
+                    string.Empty,
+                    LogHelper.ToJson(projectConfig)
                 );
 
                 return Ok(projectConfig);

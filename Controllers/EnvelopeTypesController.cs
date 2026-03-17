@@ -56,27 +56,45 @@ namespace Tools.Controllers
                 return BadRequest();
             }
 
+            var existingEnvelopeType = await _context.EnvelopesTypes
+                .AsNoTracking()
+                .FirstOrDefaultAsync(e => e.EnvelopeId == id);
+
+            if (existingEnvelopeType == null)
+            {
+                var triggeredBy = LogHelper.GetTriggeredBy(User);
+                _loggerService.LogEvent(
+                    $"EnvelopeType with ID {id} not found during updating",
+                    "EnvelopeType",
+                    triggeredBy,
+                    0,
+                    LogHelper.ToJson(existingEnvelopeType),
+                    LogHelper.ToJson(envelopeType)
+                );
+                return NotFound();
+            }
+
             _context.Entry(envelopeType).State = EntityState.Modified;
 
             try
             {
 
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Updated EnvelopeType with {id}", "EnvelopeType", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,0);
+                var triggeredBy = LogHelper.GetTriggeredBy(User);
+                _loggerService.LogEvent(
+                    $"Updated EnvelopeType with {id}",
+                    "EnvelopeType",
+                    triggeredBy,
+                    0,
+                    LogHelper.ToJson(existingEnvelopeType),
+                    LogHelper.ToJson(envelopeType)
+                );
 
             }
             catch (Exception ex)
             {
-                if (!EnvelopeTypeExists(id))
-                {
-                    _loggerService.LogEvent($"EnvelopeType with ID {id} not found during updating", "EnvelopeType", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,0);
-                    return NotFound();
-                }
-                else
-                {
-                    _loggerService.LogError("Error updating EnvelopeType", ex.Message, nameof(EnvelopeTypesController));
-                    return StatusCode(500, "Internal Server Error");
-                }
+                _loggerService.LogError("Error updating EnvelopeType", ex.Message, nameof(EnvelopeTypesController));
+                return StatusCode(500, "Internal Server Error");
             }
 
             return NoContent();
@@ -91,7 +109,15 @@ namespace Tools.Controllers
             {
                 _context.EnvelopesTypes.Add(envelopeType);
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Created a new EnvelopeType with ID {envelopeType.EnvelopeId}", "EnvelopeType", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,0);
+                var triggeredBy = LogHelper.GetTriggeredBy(User);
+                _loggerService.LogEvent(
+                    $"Created a new EnvelopeType with ID {envelopeType.EnvelopeId}",
+                    "EnvelopeType",
+                    triggeredBy,
+                    0,
+                    string.Empty,
+                    LogHelper.ToJson(envelopeType)
+                );
                 return CreatedAtAction("GetEnvelopeType", new { id = envelopeType.EnvelopeId }, envelopeType);
             }
             catch (Exception ex)
@@ -125,9 +151,5 @@ namespace Tools.Controllers
             }
         }
 
-        private bool EnvelopeTypeExists(int id)
-        {
-            return _context.EnvelopesTypes.Any(e => e.EnvelopeId == id);
-        }
     }
 }

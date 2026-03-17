@@ -340,11 +340,22 @@ namespace Tools.Controllers
                 ? $"Catch numbers merged. Collapsed {centersCollapsed} center(s) (deleted {rowsDeleted} row(s)) and added quantities where centers matched."
                 : "Catch numbers merged. No centers had both catch numbers, so quantities were kept unchanged.";
 
+            var triggeredBy = LogHelper.GetTriggeredBy(User);
             _loggerService.LogEvent(
                 $"Merged catch numbers for ProjectId {ProjectId}: {firstCatchNo} and {secondCatchNo}",
                 "NRData",
-                User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
-                ProjectId);
+                triggeredBy,
+                ProjectId,
+                string.Empty,
+                LogHelper.ToJson(new
+                {
+                    ProjectId,
+                    FirstCatchNo = firstCatchNo,
+                    SecondCatchNo = secondCatchNo,
+                    MergedCatchNo = mergedCatchNo,
+                    CentersCollapsed = centersCollapsed,
+                    RowsDeleted = rowsDeleted
+                }));
 
             return Ok(new
             {
@@ -367,25 +378,43 @@ namespace Tools.Controllers
                 return BadRequest();
             }
 
+            var existingNRData = await _context.NRDatas
+                .AsNoTracking()
+                .FirstOrDefaultAsync(n => n.Id == id);
+
+            if (existingNRData == null)
+            {
+                var triggeredBy = LogHelper.GetTriggeredBy(User);
+                _loggerService.LogEvent(
+                    $"Nrdata with ID {id} not found",
+                    "NRData",
+                    triggeredBy,
+                    nRData.ProjectId,
+                    LogHelper.ToJson(existingNRData),
+                    LogHelper.ToJson(nRData)
+                );
+                return NotFound();
+            }
+
             _context.Entry(nRData).State = EntityState.Modified;
 
             try
             {
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Updated NrData for {id}", "NRData", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,nRData.ProjectId);
+                var triggeredBy = LogHelper.GetTriggeredBy(User);
+                _loggerService.LogEvent(
+                    $"Updated NrData for {id}",
+                    "NRData",
+                    triggeredBy,
+                    nRData.ProjectId,
+                    LogHelper.ToJson(existingNRData),
+                    LogHelper.ToJson(nRData)
+                );
             }
             catch (Exception ex)
             {
-                if (!NRDataExists(id))
-                {
-                    _loggerService.LogEvent($"Nrdata with ID {id} not found", "NRData", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,nRData.ProjectId);
-                    return NotFound();
-                }
-                else
-                {
-                    _loggerService.LogError("Error updating NRData", ex.Message, nameof(NRDatasController));
-                    return StatusCode(500, "Internal server error");
-                }
+                _loggerService.LogError("Error updating NRData", ex.Message, nameof(NRDatasController));
+                return StatusCode(500, "Internal server error");
             }
 
             return NoContent();
@@ -571,11 +600,31 @@ namespace Tools.Controllers
 
                     await tx.CommitAsync();
 
+                var triggeredBy = LogHelper.GetTriggeredBy(User);
                 _loggerService.LogEvent(
                     $"Replaced NRData upload for Project {projectId}. Deleted: NRDatas={deletedNrDatas}, ExtrasEnvelope={deletedExtras}, Conflicts={deletedConflicts}, EnvelopeBreaking={deletedEnvelopeBreaking}, EnvelopeBreakage={deletedEnvelopeBreakage}, BoxBreaking={deletedBoxBreaking}. Inserted: NRDatas={nrDatasToAdd.Count}, ExtrasEnvelope={extraEnvelopesToAdd.Count}.",
                     "NRData",
-                    User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
-                    projectId);
+                    triggeredBy,
+                    projectId,
+                    string.Empty,
+                    LogHelper.ToJson(new
+                    {
+                        projectId,
+                        deleted = new
+                        {
+                            deletedNrDatas,
+                            deletedExtras,
+                            deletedConflicts,
+                            deletedEnvelopeBreaking,
+                            deletedEnvelopeBreakage,
+                            deletedBoxBreaking
+                        },
+                        inserted = new
+                        {
+                            nrDatas = nrDatasToAdd.Count,
+                            extraEnvelopes = extraEnvelopesToAdd.Count
+                        }
+                    }));
 
                 return Ok(new
                 {
@@ -704,6 +753,17 @@ namespace Tools.Controllers
                     return NotFound("No matching records found");
                 }
 
+                var oldValues = rowsToUpdate.Select(item => new
+                {
+                    item.Id,
+                    item.CatchNo,
+                    item.CenterCode,
+                    item.NodalCode,
+                    item.NRQuantity,
+                    item.Quantity,
+                    item.NRDatas
+                }).ToList();
+
                 foreach (var item in rowsToUpdate)
                 {
                     ApplyConflictResolution(item, payload);
@@ -712,7 +772,25 @@ namespace Tools.Controllers
                 await _context.SaveChangesAsync();
                 await UpsertConflictStatus(ProjectId, payload, ConflictStatusResolved);
 
-                _loggerService.LogEvent($"Updated NRdata for CatchNo {payload.CatchNo} and ProjectId {ProjectId}", "NRData", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,ProjectId);
+                var triggeredBy = LogHelper.GetTriggeredBy(User);
+                var newValues = rowsToUpdate.Select(item => new
+                {
+                    item.Id,
+                    item.CatchNo,
+                    item.CenterCode,
+                    item.NodalCode,
+                    item.NRQuantity,
+                    item.Quantity,
+                    item.NRDatas
+                }).ToList();
+                _loggerService.LogEvent(
+                    $"Updated NRdata for CatchNo {payload.CatchNo} and ProjectId {ProjectId}",
+                    "NRData",
+                    triggeredBy,
+                    ProjectId,
+                    LogHelper.ToJson(oldValues),
+                    LogHelper.ToJson(newValues)
+                );
                 return Ok("Conflict resolved successfully");
             }
             catch (Exception ex)
@@ -725,24 +803,52 @@ namespace Tools.Controllers
         [HttpPut("conflicts/status")]
         public async Task<ActionResult> UpdateConflictStatus(int ProjectId, [FromBody] ConflictStatusUpdateDto payload)
         {
-            if (payload == null || string.IsNullOrWhiteSpace(payload.ConflictType))
+            try
             {
-                return BadRequest("Conflict details are required.");
+                if (payload == null || string.IsNullOrWhiteSpace(payload.ConflictType))
+                {
+                    return BadRequest("Conflict details are required.");
+                }
+
+                var normalizedStatus = NormalizeStatusCode(payload.Status);
+                if (normalizedStatus == ConflictStatusIgnored && !CanIgnoreConflict(payload.ConflictType))
+                {
+                    return BadRequest("Ignore is not allowed for this conflict type.");
+                }
+
+                var statusEntity = BuildConflictEntity(ProjectId, payload, normalizedStatus);
+                var storageKey = GetConflictStorageKey(statusEntity);
+                var existingRecords = await _context.ConflictingFields
+                    .Where(item => item.ProjectId == ProjectId)
+                    .ToListAsync();
+                var matchedRecord = existingRecords
+                    .OrderByDescending(item => item.Id)
+                    .FirstOrDefault(item => GetConflictStorageKey(item) == storageKey);
+                var oldStatus = matchedRecord?.Status;
+
+                await UpsertConflictStatus(ProjectId, payload, normalizedStatus);
+
+                var triggeredBy = LogHelper.GetTriggeredBy(User);
+                _loggerService.LogEvent(
+                    $"Conflict status updated for ProjectId {ProjectId}",
+                    "NRData",
+                    triggeredBy,
+                    ProjectId,
+                    LogHelper.ToJson(new { Status = NormalizeStatusLabel(oldStatus ?? ConflictStatusPending), payload }),
+                    LogHelper.ToJson(new { Status = NormalizeStatusLabel(normalizedStatus), payload })
+                );
+
+                return Ok(new
+                {
+                    message = $"Conflict marked as {NormalizeStatusLabel(normalizedStatus)}.",
+                    status = NormalizeStatusLabel(normalizedStatus)
+                });
             }
-
-            var normalizedStatus = NormalizeStatusCode(payload.Status);
-            if (normalizedStatus == ConflictStatusIgnored && !CanIgnoreConflict(payload.ConflictType))
+            catch (Exception ex)
             {
-                return BadRequest("Ignore is not allowed for this conflict type.");
+                _loggerService.LogError("Error updating conflict status", ex.Message, nameof(NRDatasController));
+                return StatusCode(500, "Internal Server Error");
             }
-
-            await UpsertConflictStatus(ProjectId, payload, normalizedStatus);
-
-            return Ok(new
-            {
-                message = $"Conflict marked as {NormalizeStatusLabel(normalizedStatus)}.",
-                status = NormalizeStatusLabel(normalizedStatus)
-            });
         }
 
         private static List<NRDataConflictProjection> BuildConflictRows(IEnumerable<NRData> rows)
@@ -1551,11 +1657,15 @@ namespace Tools.Controllers
 
                 await _context.SaveChangesAsync();
 
+                var triggeredBy = LogHelper.GetTriggeredBy(User);
                 _loggerService.LogEvent(
                     $"Saved missing data for ProjectId {request.ProjectId}. Catches updated: {updatedCatchCount}, rows updated: {updatedRowCount}",
                     "NRData",
-                    User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
-                    request.ProjectId);
+                    triggeredBy,
+                    request.ProjectId,
+                    string.Empty,
+                    LogHelper.ToJson(effectiveRows)
+                );
 
                 return Ok(new
                 {
@@ -1786,11 +1896,6 @@ namespace Tools.Controllers
                 _loggerService.LogError("Error deleting NRData", ex.Message, nameof(NRDatasController));
                 return StatusCode(500, "Internal Server Error");
             }
-        }
-
-        private bool NRDataExists(int id)
-        {
-            return _context.NRDatas.Any(e => e.Id == id);
         }
 
         private static bool HasMeaningfulText(string? value)
