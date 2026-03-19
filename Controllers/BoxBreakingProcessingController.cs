@@ -112,7 +112,6 @@ namespace Tools.Controllers
                     rowDict["ExamDate"] = result.ExamDate ?? "";
                     rowDict["Quantity"] = result.Quantity;
                     rowDict["TotalEnv"] = result.TotalEnv;
-                    rowDict["NRQuantity"] = result.NRQuantity;
                     rowDict["NodalCode"] = result.NodalCode ?? "";
                     rowDict["NodalSort"] = result.NodalSort;
                     rowDict["Route"] = result.Route ?? "";
@@ -124,11 +123,13 @@ namespace Tools.Controllers
                     rowDict["NrDataId"] = result.NrDataId;
 
                     // Get Pages and Symbol from NRData if available
-                    var nrRow = nrData.FirstOrDefault(n => n.Id == result.NrDataId);
+                    var nrRow = nrData.FirstOrDefault(n => n.CatchNo == result.CatchNo);
+
                     if (nrRow != null)
                     {
                         rowDict["Symbol"] = nrRow.Symbol ?? "";
                         rowDict["Pages"] = nrRow.Pages;
+                        rowDict["NRQuantity"] = nrRow.NRQuantity;
                     }
                     else
                     {
@@ -287,10 +288,17 @@ namespace Tools.Controllers
                     bool hasOmr = !string.IsNullOrWhiteSpace(omrSerial) && omrSerial != "0";
                     bool hasBooklet = !string.IsNullOrWhiteSpace(bookletSerial) && bookletSerial != "0";
                     // Reset boxNo when CourseName changes
-                    if (resetOnSymbolChange && previousCourse != null && currentCourseName != previousCourse)
+                    bool courseChanged = resetOnSymbolChange
+    && previousCourse != null
+    && currentCourseName != previousCourse;
+
+                    if (courseChanged)
                     {
                         boxNo = startBox;
                         runningPages = 0;
+                        innerBundlingSerial = 0;
+                        prevInnerBundlingKey = null;
+                        prevMergeKey = null; // clears stale key so first row of new course doesn't trigger boxNo++
                     }
 
                     if (previousCatchForOmr != itemDict["CatchNo"]?.ToString())
@@ -349,7 +357,7 @@ namespace Tools.Controllers
                         }));
                     }
 
-                    bool mergeChanged = (prevMergeKey != null && mergeKey != prevMergeKey);
+                    bool mergeChanged = !courseChanged && (prevMergeKey != null && mergeKey != prevMergeKey);
 
                     try
                     {
@@ -440,10 +448,9 @@ namespace Tools.Controllers
                                         bookletRange = $"{bookletStart}-{bookletEnd}";
                                         runningBooklet = bookletEnd + 1;
                                     }
-                                    object boxNoValue = resetOnSymbolChange
-                                        ? (object)$"{boxNo}{currentSymbol}"
-                                        : boxNo;
-
+                                    object boxNoValue = (resetOnSymbolChange && !string.IsNullOrEmpty(currentSymbol))
+      ? (object)$"{currentSymbol}-{boxNo}"
+      : boxNo;
                                     var boxItem = new System.Dynamic.ExpandoObject();
                                     var boxItemDict = (IDictionary<string, object>)boxItem;
 
@@ -505,9 +512,8 @@ namespace Tools.Controllers
                         }
 
                         object normalBoxNoValue = resetOnSymbolChange
-                            ? (object)$"{boxNo}{currentSymbol}"
-                            : boxNo;
-
+    ? (object)$"{currentSymbol}-{boxNo}"   // e.g. "A-1"
+    : boxNo;
                         var normalBoxItem = new System.Dynamic.ExpandoObject();
                         var normalBoxItemDict = (IDictionary<string, object>)normalBoxItem;
 
@@ -564,30 +570,6 @@ namespace Tools.Controllers
                     // Store BoxNo in symbol-boxno format when resetOnSymbolChange is true
                     string boxNoValue = itemDict["BoxNo"]?.ToString() ?? "";
                     string boxNoForStorage = boxNoValue;
-                    
-                    if (resetOnSymbolChange && !string.IsNullOrEmpty(boxNoValue))
-                    {
-                        // Extract numeric part and symbol from boxNoValue (format: "123ABC")
-                        int numericEnd = 0;
-                        for (int i = 0; i < boxNoValue.Length; i++)
-                        {
-                            if (char.IsDigit(boxNoValue[i]))
-                            {
-                                numericEnd = i + 1;
-                            }
-                            else
-                            {
-                                break;
-                            }
-                        }
-                        
-                        if (numericEnd > 0)
-                        {
-                            string boxNum = boxNoValue.Substring(0, numericEnd);
-                            string symbol = boxNoValue.Substring(numericEnd);
-                            boxNoForStorage = $"{symbol}-{boxNum}";
-                        }
-                    }
                  
                     boxResults.Add(new BoxBreakingResult
                     {

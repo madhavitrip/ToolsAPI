@@ -1785,6 +1785,19 @@ namespace Tools.Controllers
                     FileInfo fi = new FileInfo(filePath);
                     package.SaveAs(fi);
                 }
+                using var client = new HttpClient();
+                var response = await client.PostAsync($"{_apiSettings.BoxBreaking}?ProjectId={ProjectId}", new StringContent(""));
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    var error = await response.Content.ReadAsStringAsync();
+                    Console.WriteLine($"API Failed: {response.StatusCode}, {error}");
+                }
+                else
+                {
+                    var data = await response.Content.ReadAsStringAsync();
+                    Console.WriteLine($"API Success: {data}");
+                }
 
                 return Ok(new { message = "File successfully created", filePath });
             }
@@ -2334,7 +2347,21 @@ namespace Tools.Controllers
                 }
 
                 package.SaveAs(new FileInfo(filePath));
-
+                using var client = new HttpClient();
+                var response = await client.PostAsync(
+     $"{_apiSettings.EnvelopeBreaking}?ProjectId={ProjectId}",
+     new StringContent("") // required
+ );
+                if (!response.IsSuccessStatusCode)
+                {
+                    var error = await response.Content.ReadAsStringAsync();
+                    Console.WriteLine($"API Failed: {response.StatusCode}, {error}");
+                }
+                else
+                {
+                    var data = await response.Content.ReadAsStringAsync();
+                    Console.WriteLine($"API Success: {data}");
+                }
                 return Ok(new { Result = resultList });
             }
 

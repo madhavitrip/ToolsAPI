@@ -32,7 +32,6 @@ namespace Tools.Models
         public double NodalSort { get; set; }
         public string? Route { get; set; }
         public int RouteSort { get; set; }
-        public int NRQuantity { get; set; }
         public string? CourseName { get; set; }
 
         // Metadata

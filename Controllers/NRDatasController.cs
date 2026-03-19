@@ -577,7 +577,7 @@ namespace Tools.Controllers
         public async Task<ActionResult> GetDuplicateswrtCatch(int ProjectId)
         {
             var nrData = await _context.NRDatas
-                .Where(item => item.ProjectId == ProjectId)
+                .Where(item => item.ProjectId == ProjectId && item.Status == true)
                 .ToListAsync();
             if (nrData.Count == 0)
             {

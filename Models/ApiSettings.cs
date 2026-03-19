@@ -4,5 +4,7 @@ namespace Tools.Models
     {
         public string BaseUrl { get; set; }
         public string EnvelopeBreakageUrl { get; set; }
+        public string EnvelopeBreaking {  get; set; }
+        public string BoxBreaking { get; set; }
     }
 }

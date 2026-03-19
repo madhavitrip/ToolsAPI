@@ -26,6 +26,6 @@ namespace Tools.Models
         public double NodalSort { get; set; }
         public string? Symbol { get; set; }
         public bool Status { get; set; } = true;
-        public int NRDataId { get; set; }
+        public int? NRDataId { get; set; } = 0;
     }
 }
