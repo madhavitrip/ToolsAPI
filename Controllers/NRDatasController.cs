@@ -653,13 +653,28 @@ namespace Tools.Controllers
 
                 foreach (var item in rowsToUpdate)
                 {
+                    item.NodalCode = payload.SelectedValue;
                     ApplyConflictResolution(item, payload);
+
+                    var conflict = await _context.ConflictingFields
+                        .FirstOrDefaultAsync(c => c.NRDataId == item.Id && c.ProjectId == ProjectId);
+
+                    if (conflict != null)
+                    {
+                        conflict.ChangedNRDataId = item.Id;
+                    }
                 }
 
                 await _context.SaveChangesAsync();
                 await UpsertConflictStatus(ProjectId, payload, ConflictStatusResolved);
 
-                _loggerService.LogEvent($"Updated NRdata for CatchNo {payload.CatchNo} and ProjectId {ProjectId}", "NRData", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,ProjectId);
+                _loggerService.LogEvent(
+                    $"Updated NRdata for CatchNo {payload.CatchNo} and ProjectId {ProjectId}",
+                    "NRData",
+                    User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
+                    ProjectId
+                );
+
                 return Ok("Conflict resolved successfully");
             }
             catch (Exception ex)
