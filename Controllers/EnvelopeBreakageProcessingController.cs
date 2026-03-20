@@ -12,6 +12,7 @@ using OfficeOpenXml;
 using System.Reflection;
 using Tools.Services;
 using Microsoft.Extensions.Options;
+using System.Globalization;
 
 namespace Tools.Controllers
 {
@@ -381,19 +382,62 @@ namespace Tools.Controllers
                     .MaxAsync(r => (int?)r.UploadBatch) ?? 0;
                 int currentBatch = maxBatch + 1;
 
+                // Step 1: Sort resultList FIRST using EnvelopeMakingCriteria
+                var sortFields = await _context.Fields
+                    .Where(f => projectconfig.EnvelopeMakingCriteria.Contains(f.FieldId))
+                    .ToListAsync();
+
+                var sortingFieldNames = sortFields
+                    .OrderBy(f => projectconfig.EnvelopeMakingCriteria.IndexOf(f.FieldId))
+                    .Select(f => f.Name)
+                    .ToList();
+
+                IOrderedEnumerable<dynamic> sortedResultList = null;
+
+                foreach (var fieldName in sortingFieldNames)
+                {
+                    Func<dynamic, object> keySelector = x =>
+                    {
+                        var dict = (IDictionary<string, object>)x;
+                        if (!dict.ContainsKey(fieldName)) return null;
+                        var val = dict[fieldName];
+                        if (val == null) return null;
+
+                        return fieldName switch
+                        {
+                            "RouteSort" => (object)(int.TryParse(val.ToString(), out int r) ? r : 0),
+                            "CenterSort" => (object)(int.TryParse(val.ToString(), out int c) ? c : 0),
+                            "NodalSort" => (object)(double.TryParse(val.ToString(), out double n) ? n : 0.0),
+                            "ExamDate" => DateTime.TryParseExact(val.ToString(), "dd-MM-yyyy",
+                                                CultureInfo.InvariantCulture, DateTimeStyles.None, out var d)
+                                                ? (object)d : DateTime.MinValue,
+                            _ => val.ToString().Trim()
+                        };
+                    };
+
+                    sortedResultList = sortedResultList == null
+                        ? resultList.OrderBy(keySelector)
+                        : sortedResultList.ThenBy(keySelector);
+                }
+
+                var finalResultList = sortedResultList?.ToList() ?? resultList;
+
+                // Step 2: Now assign serial, OmrSerial, BookletSerial on the SORTED list
                 int bookletStart = projectconfig?.BookletSerialNumber ?? 0;
                 int omrStart = projectconfig.OmrSerialNumber;
                 bool assignBookletSerial = bookletStart > 0;
                 bool assignOmrSerial = omrStart > 0;
                 bool resetOmrSerialOnCatchChange = projectconfig.ResetOmrSerialOnCatchChange;
-                bool resetBookletSerialOnCatchChange = projectconfig?.ResetBookletSerialOnCatchChange??false;
+                bool resetBookletSerialOnCatchChange = projectconfig?.ResetBookletSerialOnCatchChange ?? false;
                 string prevCatchForSerial = null;
                 int serial = 1;
-           
+
+              
+
 
                 var envelopeResults = new List<EnvelopeBreakingResult>();
 
-                foreach (var item in resultList)
+                foreach (var item in finalResultList)
                 {
                     var dict = (IDictionary<string, object>)item;
                     bool isExtra = (bool)dict["ExtraAttached"];
