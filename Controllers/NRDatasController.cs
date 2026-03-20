@@ -71,7 +71,7 @@ namespace Tools.Controllers
             string? sortOrder = null)
         {
             IQueryable<NRData> query = _context.NRDatas
-             .Where(d => d.ProjectId == projectId);
+             .Where(d => d.ProjectId == projectId && d.Status == true);
 
             // ⭐ APPLY SEARCH IF KEY + SEARCH PROVIDED
             if (!string.IsNullOrWhiteSpace(search) && !string.IsNullOrWhiteSpace(key))
@@ -213,7 +213,7 @@ namespace Tools.Controllers
         {
             if (request == null)
             {
-                return BadRequest("Please select rows from 2 catch numbers to merge.");
+                return BadRequest("Please select at least 2 catch numbers to merge.");
             }
 
             var separator = NormalizeText(request.Separator);
@@ -228,12 +228,11 @@ namespace Tools.Controllers
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
-            if (requestedCatchNos.Count != 2)
+            if (requestedCatchNos.Count < 2)
             {
-                return BadRequest("Please select exactly 2 catch numbers to merge.");
+                return BadRequest("Please select at least 2 catch numbers to merge.");
             }
 
-            // Expand across the whole dataset (not just the current page selection).
             var normalizedRequestedCatchNos = requestedCatchNos
                 .Select(value => value.Trim().ToLowerInvariant())
                 .Distinct()
@@ -242,6 +241,7 @@ namespace Tools.Controllers
             var selectedRows = await _context.NRDatas
                 .Where(item =>
                     item.ProjectId == ProjectId &&
+                    item.Status == true &&
                     item.CatchNo != null &&
                     normalizedRequestedCatchNos.Contains(item.CatchNo.Trim().ToLower()))
                 .ToListAsync();
@@ -257,13 +257,10 @@ namespace Tools.Controllers
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
-            if (selectedCatchNos.Count != 2)
+            if (selectedCatchNos.Count < 2)
             {
-                return BadRequest("Please select rows from exactly 2 different catch numbers.");
+                return BadRequest("Please select rows from at least 2 different catch numbers.");
             }
-
-            var firstCatchNo = requestedCatchNos[0];
-            var secondCatchNo = requestedCatchNos[1];
 
             var normalizedSchedules = selectedRows
                 .Select(item => new
@@ -279,24 +276,22 @@ namespace Tools.Controllers
                 return BadRequest("Catch numbers can only be merged when ExamDate and ExamTime are the same.");
             }
 
-            var mergedCatchNo = $"{firstCatchNo}{separator}{secondCatchNo}";
-            // Merge per-center:
-            // - If both catch numbers exist for the same center, add quantities and collapse into one row for that center.
-            // - If a center appears for only one catch number, keep rows (no add), but rewrite CatchNo to the merged form.
+            // Build merged catch number safely (no duplicates)
+            var mergedCatchNo = string.Join(separator,
+                requestedCatchNos.Distinct(StringComparer.OrdinalIgnoreCase));
+
             var selectedRowsByCenter = selectedRows
                 .GroupBy(item => NormalizeText(item.CenterCode), StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
             int centersCollapsed = 0;
-            int rowsDeleted = 0;
+            int rowsUpdated = 0;
 
             foreach (var centerGroup in selectedRowsByCenter)
             {
                 var groupRows = centerGroup.ToList();
-                if (groupRows.Count == 0)
-                {
+                if (!groupRows.Any())
                     continue;
-                }
 
                 var groupCatchNos = groupRows
                     .Select(item => NormalizeText(item.CatchNo))
@@ -304,10 +299,13 @@ namespace Tools.Controllers
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .ToList();
 
-                var hasFirst = groupCatchNos.Any(value => string.Equals(value, firstCatchNo, StringComparison.OrdinalIgnoreCase));
-                var hasSecond = groupCatchNos.Any(value => string.Equals(value, secondCatchNo, StringComparison.OrdinalIgnoreCase));
+                // Count how many requested catch numbers exist in this center
+                var matchingCount = requestedCatchNos
+                    .Count(req => groupCatchNos
+                        .Any(gc => string.Equals(gc, req, StringComparison.OrdinalIgnoreCase)));
 
-                if (hasFirst && hasSecond)
+                // If at least 2 match → merge
+                if (matchingCount >= 2)
                 {
                     centersCollapsed++;
 
@@ -321,27 +319,29 @@ namespace Tools.Controllers
 
                     foreach (var row in groupRows.Where(item => item.Id != primaryRow.Id))
                     {
-                        _context.NRDatas.Remove(row);
-                        rowsDeleted++;
+                        row.Status = false;               // soft delete
+                        row.NRDataId = primaryRow.Id;     // reference to merged row
+                        rowsUpdated++;
                     }
-
-                    continue;
                 }
-
-                foreach (var row in groupRows)
+                else
                 {
-                    row.CatchNo = mergedCatchNo;
+                    // Only one catch number present → just rename
+                    foreach (var row in groupRows)
+                    {
+                        row.CatchNo = mergedCatchNo;
+                    }
                 }
             }
 
             await _context.SaveChangesAsync();
 
             var actionLabel = centersCollapsed > 0
-                ? $"Catch numbers merged. Collapsed {centersCollapsed} center(s) (deleted {rowsDeleted} row(s)) and added quantities where centers matched."
-                : "Catch numbers merged. No centers had both catch numbers, so quantities were kept unchanged.";
+                ? $"Catch numbers merged. Collapsed {centersCollapsed} center(s) (soft updated {rowsUpdated} row(s)) and added quantities where centers matched."
+                : "Catch numbers merged. No centers had multiple catch numbers, so quantities were unchanged.";
 
             _loggerService.LogEvent(
-                $"Merged catch numbers for ProjectId {ProjectId}: {firstCatchNo} and {secondCatchNo}",
+                $"Merged catch numbers for ProjectId {ProjectId}: {string.Join(",", requestedCatchNos)}",
                 "NRData",
                 User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
                 ProjectId);
@@ -351,10 +351,9 @@ namespace Tools.Controllers
                 message = actionLabel,
                 catchNo = mergedCatchNo,
                 centersCollapsed,
-                rowsDeleted
+                rowsUpdated
             });
         }
-
 
 
         // PUT: api/NRDatas/5
@@ -578,7 +577,7 @@ namespace Tools.Controllers
         public async Task<ActionResult> GetDuplicateswrtCatch(int ProjectId)
         {
             var nrData = await _context.NRDatas
-                .Where(item => item.ProjectId == ProjectId)
+                .Where(item => item.ProjectId == ProjectId && item.Status == true)
                 .ToListAsync();
             if (nrData.Count == 0)
             {
@@ -1714,6 +1713,7 @@ namespace Tools.Controllers
                 var nrDataList = await _context.NRDatas
                     .Where(d => d.ProjectId == ProjectId)
                     .ToListAsync();
+
                 var conflictList = await _context.ConflictingFields
                     .Where(c => c.ProjectId == ProjectId)
                     .ToListAsync();
@@ -1722,34 +1722,40 @@ namespace Tools.Controllers
                 {
                     return NotFound($"No NRData found for ProjectId {ProjectId}");
                 }
+
                 var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
+
                 if (Directory.Exists(reportPath))
                 {
-                    Directory.Delete(reportPath, true); // 'true' allows recursive deletion of files and subdirectories
+                    Directory.Delete(reportPath, true);
                 }
 
                 _context.NRDatas.RemoveRange(nrDataList);
+
                 if (conflictList.Any())
                 {
                     _context.ConflictingFields.RemoveRange(conflictList);
                 }
+
                 await _context.SaveChangesAsync();
+
+                int userId = 0;
+                int.TryParse(User.Identity?.Name, out userId);
 
                 _loggerService.LogEvent(
                     $"Deleted all NRData and conflict records for ProjectId {ProjectId}",
                     "NRData",
-                    User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,ProjectId
+                    userId,
+                    ProjectId
                 );
 
                 return NoContent();
             }
             catch (Exception ex)
             {
-                _loggerService.LogError("Error deleting NRData", ex.Message, nameof(NRDatasController));
-                return StatusCode(500, "Internal Server Error");
+                return StatusCode(500, ex.ToString());
             }
         }
-
         private bool NRDataExists(int id)
         {
             return _context.NRDatas.Any(e => e.Id == id);

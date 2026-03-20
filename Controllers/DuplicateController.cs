@@ -35,7 +35,7 @@ namespace Tools.Controllers
             {
                 // Get project data
                 var data = await _context.NRDatas
-                    .Where(p => p.ProjectId == ProjectId)
+                    .Where(p => p.ProjectId == ProjectId && p.Status==true)
                     .ToListAsync();
 
                 var projectconfig = await _context.ProjectConfigs
@@ -103,7 +103,12 @@ namespace Tools.Controllers
                         keep.CourseName = courseValues.First();
 
                     var duplicates = group.Skip(1).ToList();
-                    _context.NRDatas.RemoveRange(duplicates);
+
+                    foreach (var dup in duplicates)
+                    {
+                        dup.Status = false;          // mark as inactive instead of deleting
+                        dup.NRDataId = keep.Id;  // reference to retained merged row
+                    }
 
                     mergedCount += duplicates.Count;
                     deletedRows.AddRange(duplicates);
@@ -394,7 +399,7 @@ namespace Tools.Controllers
 
             // Step 1: Group NRData by CatchNo and sum the quantity
             var NRdataGrouped = await _context.NRDatas
-                .Where(p => p.ProjectId == ProjectId)
+                .Where(p => p.ProjectId == ProjectId && p.Status==true)
                 .GroupBy(p => p.CatchNo)
                 .Select(g => new
                 {

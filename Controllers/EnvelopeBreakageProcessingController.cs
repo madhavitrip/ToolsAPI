@@ -40,17 +40,15 @@ namespace Tools.Controllers
                     .ToListAsync();
 
                 var nrData = await _context.NRDatas
-                    .Where(p => p.ProjectId == ProjectId)
+                    .Where(p => p.ProjectId == ProjectId && p.Status == true)
                     .OrderBy(p => p.CatchNo)
                     .ThenBy(p => p.RouteSort)
                     .ThenBy(p => p.NodalSort)
                     .ThenBy(p => p.CenterSort)
                     .ToListAsync();
-
                 var envBreaking = await _context.EnvelopeBreakages
                     .Where(p => p.ProjectId == ProjectId)
                     .ToListAsync();
-
                 var extras = await _context.ExtrasEnvelope
                     .Where(p => p.ProjectId == ProjectId)
                     .ToListAsync();
@@ -101,13 +99,13 @@ namespace Tools.Controllers
                     }
 
                     int totalEnv = (int)Math.Ceiling((double)extra.Quantity / envCapacity);
-                    string currentMergeField = $"{extra.CatchNo}-{extra.ExtraId}";
-
-                    if (currentMergeField != prevExtraMergeField)
+                    //string currentMergeField = $"{extra.CatchNo}-{extra.ExtraId}";
+                    extraCenterEnvCounter = 0;
+                  /*  if (currentMergeField != prevExtraMergeField)
                     {
                         extraCenterEnvCounter = 0;
                         prevExtraMergeField = currentMergeField;
-                    }
+                    }*/
 
                     for (int j = 1; j <= totalEnv; j++)
                     {
@@ -275,7 +273,12 @@ namespace Tools.Controllers
                                 }
                             }
                         }
-                        catch { }
+
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"JSON Error: {envInfo.OuterEnvelope}");
+                            Console.WriteLine(ex.Message);
+                        }
                     }
 
                     envelopeBreakdown = envelopeBreakdown.OrderBy(x => x.Capacity).ToList();
@@ -378,10 +381,10 @@ namespace Tools.Controllers
                     .MaxAsync(r => (int?)r.UploadBatch) ?? 0;
                 int currentBatch = maxBatch + 1;
 
-                int currentStartNumber = projectconfig?.BookletSerialNumber ?? 0;
-                int StartOmrNumber = projectconfig.OmrSerialNumber;
-                bool assignBookletSerial = currentStartNumber > 0;
-                bool assignOmrSerial = StartOmrNumber > 0;
+                int bookletStart = projectconfig?.BookletSerialNumber ?? 0;
+                int omrStart = projectconfig.OmrSerialNumber;
+                bool assignBookletSerial = bookletStart > 0;
+                bool assignOmrSerial = omrStart > 0;
                 bool resetOmrSerialOnCatchChange = projectconfig.ResetOmrSerialOnCatchChange;
                 bool resetBookletSerialOnCatchChange = projectconfig?.ResetBookletSerialOnCatchChange??false;
                 string prevCatchForSerial = null;
@@ -405,12 +408,12 @@ namespace Tools.Controllers
                     // ✅ Reset OmrSerial only if the flag is set
                     if (resetOmrSerialOnCatchChange && prevCatchForSerial != null && catchNo != prevCatchForSerial)
                     {
-                        currentStartNumber = projectconfig.OmrSerialNumber;
+                        omrStart = projectconfig.OmrSerialNumber;
                     }
 
                     if (resetBookletSerialOnCatchChange && prevCatchForSerial != null && catchNo != prevCatchForSerial)
                     {
-                        currentStartNumber = projectconfig?.BookletSerialNumber??0;
+                        bookletStart = projectconfig?.BookletSerialNumber??0;
                     }
 
                     int? nrDataId = null;
@@ -431,15 +434,15 @@ namespace Tools.Controllers
                     if (assignBookletSerial)
                     {
                         int envQuantity = (int)dict["EnvQuantity"];
-                        bookletSerial = $"{currentStartNumber}-{currentStartNumber + envQuantity - 1}";
-                        currentStartNumber += envQuantity;
+                        bookletSerial = $"{bookletStart}-{bookletStart + envQuantity - 1}";
+                        bookletStart += envQuantity;
                     }
 
                     if (assignOmrSerial)
                     {
                         int envQuantity = (int)dict["EnvQuantity"];
-                        omrSerial = $"{currentStartNumber}-{currentStartNumber + envQuantity - 1}";
-                        currentStartNumber += envQuantity;
+                        omrSerial = $"{omrStart}-{omrStart + envQuantity - 1}";
+                        omrStart += envQuantity;
                     }
 
                     double? modifiedNodalSort = null;
@@ -525,7 +528,6 @@ namespace Tools.Controllers
                         NodalSort = nodalSort,
                         Route = dict["Route"]?.ToString(),
                         RouteSort = routeSort,
-                        NRQuantity = (int)dict["NRQuantity"],
                         CourseName = dict["CourseName"]?.ToString(),
                         UploadBatch = currentBatch
                     });
@@ -551,6 +553,7 @@ namespace Tools.Controllers
             }
             catch (Exception ex)
             {
+
                 _loggerService.LogError("Error processing envelope breaking", ex.Message, nameof(EnvelopeBreakageProcessingController));
                 return StatusCode(500, new { error = ex.Message });
             }
@@ -644,9 +647,9 @@ namespace Tools.Controllers
                 if (projectconfig == null)
                     return NotFound("Project config not found");
 
-                var nrData = await _context.NRDatas
-                    .Where(p => p.ProjectId == ProjectId)
-                    .ToListAsync();
+                var nrDataDict = await _context.NRDatas
+    .Where(p => p.ProjectId == ProjectId)
+    .ToDictionaryAsync(p => p.Id, p => p.NRQuantity);
 
                 var fields = await _context.Fields
                     .Where(f => projectconfig.EnvelopeMakingCriteria.Contains(f.FieldId))
@@ -689,6 +692,12 @@ namespace Tools.Controllers
                 {
                     var row = new System.Dynamic.ExpandoObject();
                     var rowDict = (IDictionary<string, object>)row;
+                    int nrQty = 0;
+
+                    if (result.NrDataId != 0 && nrDataDict.TryGetValue(result.NrDataId, out var qty))
+                    {
+                        nrQty = qty;
+                    }
 
                     // All fields already in DB - no need to join with NRData
                     rowDict["CatchNo"] = result.CatchNo ?? "";
@@ -702,7 +711,7 @@ namespace Tools.Controllers
                     rowDict["NodalSort"] = result.NodalSort;
                     rowDict["Route"] = result.Route ?? "";
                     rowDict["RouteSort"] =  result.RouteSort;
-                    rowDict["NRQuantity"] = result.NRQuantity;
+                    rowDict["NRQuantity"] = nrQty;
                     rowDict["CourseName"] = result.CourseName ?? "";
 
                     // Envelope breaking fields
@@ -827,7 +836,7 @@ namespace Tools.Controllers
                         ws.Cells[rowIdx, 15].Value = dict.ContainsKey("ExamTime") ? dict["ExamTime"] : "";
                         ws.Cells[rowIdx, 16].Value = dict.ContainsKey("ExamDate") ? dict["ExamDate"] : "";
                         ws.Cells[rowIdx, 17].Value = dict.ContainsKey("BookletSerial") ? dict["BookletSerial"] : "";
-                        ws.Cells[rowIdx, 18].Value = dict.ContainsKey("OmrSerial");
+                        ws.Cells[rowIdx, 18].Value = dict.ContainsKey("OmrSerial") ? dict["OmrSerial"] : "";
                         ws.Cells[rowIdx, 19].Value = dict.ContainsKey("CourseName") ? dict["CourseName"] : "";
                         rowIdx++;
                     }
