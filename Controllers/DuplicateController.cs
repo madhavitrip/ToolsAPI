@@ -109,80 +109,6 @@ namespace Tools.Controllers
                     deletedRows.AddRange(duplicates);
                 }
 
-                int smallestInner = 0;
-                var innerEnv = await _context.ProjectConfigs.
-                    Where(s => s.ProjectId == ProjectId).Select(s => s.Envelope)
-                    .FirstOrDefaultAsync();
-                if (!string.IsNullOrEmpty(innerEnv))
-                {
-                    try
-                    {
-                        var envelopeDict = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(innerEnv);
-                        if (envelopeDict != null && envelopeDict.TryGetValue("Inner", out var innerValue) &&
-                         !string.IsNullOrWhiteSpace(innerValue))
-                        {
-                            var innerSizes = envelopeDict["Inner"]
-                                .Split(',', StringSplitOptions.RemoveEmptyEntries)
-                                .Select(e => e.Trim().ToUpper().Replace("E", "")) // get number from E10 → 10
-                                .Where(x => int.TryParse(x, out _))
-                                .Select(int.Parse)
-                                .OrderBy(x => x)
-                                .ToList();
-
-                            if (innerSizes.Any())
-                            {
-                                smallestInner = innerSizes.First();
-                            }
-                        }
-                        else
-                        {
-                            var innerSizes = envelopeDict["Outer"]
-                                .Split(',', StringSplitOptions.RemoveEmptyEntries)
-                                .Select(e => e.Trim().ToUpper().Replace("E", "")) // get number from E10 → 10
-                                .Where(x => int.TryParse(x, out _))
-                                .Select(int.Parse)
-                                .OrderBy(x => x)
-                                .ToList();
-
-                            if (innerSizes.Any())
-                            {
-                                smallestInner = innerSizes.First();
-                            }
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError("Error in serializing Envelope", ex.Message, nameof(DuplicateController));
-                        return StatusCode(500, "Internal server error");
-                    }
-                }
-               
-                if (smallestInner > 0)
-                {
-                    if (projectconfig.Enhancement > 0)
-                    {
-                        foreach (var d in data)
-                        {
-                            if (d.NRQuantity > 0)
-                            {
-                                d.Quantity = d.NRQuantity + (int)Math.Round((projectconfig.Enhancement * d.NRQuantity) / 100.0);
-
-                                // Round up to nearest multiple of smallestInner
-                                d.Quantity = (int)Math.Ceiling(d.Quantity / (double)smallestInner) * smallestInner;
-                            }
-                        }
-                    }
-                    else
-                    {
-                        foreach (var d in data)
-                        {
-                            if (d.NRQuantity > 0)
-                            {
-                                d.Quantity = (int)Math.Ceiling(d.NRQuantity / (double)smallestInner) * smallestInner;
-                            }
-                        }
-                    }
-                }
                 var triggeredBy = LogHelper.GetTriggeredBy(User);
                 _logger.LogEvent(
                     "Duplicates has been deleted",
@@ -349,6 +275,120 @@ namespace Tools.Controllers
             catch (Exception ex)
             {
                 _logger.LogError("Error solving duplicates", ex.Message, nameof(DuplicateController));
+                return StatusCode(500, "Internal server error");
+            }
+        }
+
+        [HttpPost("Enhancement")]
+        public async Task<IActionResult> ApplyEnhancement(int ProjectId)
+        {
+            try
+            {
+                var data = await _context.NRDatas
+                    .Where(p => p.ProjectId == ProjectId)
+                    .ToListAsync();
+
+                if (!data.Any())
+                    return NotFound("Nr data not found for this project.");
+
+                var projectconfig = await _context.ProjectConfigs
+                    .Where(p => p.ProjectId == ProjectId).FirstOrDefaultAsync();
+
+                if (projectconfig == null)
+                {
+                    return NotFound("Project config not exists for this project");
+                }
+
+                int smallestInner = 0;
+                var innerEnv = projectconfig.Envelope;
+
+                if (!string.IsNullOrEmpty(innerEnv))
+                {
+                    try
+                    {
+                        var envelopeDict = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(innerEnv);
+                        if (envelopeDict != null && envelopeDict.TryGetValue("Inner", out var innerValue) &&
+                            !string.IsNullOrWhiteSpace(innerValue))
+                        {
+                            var innerSizes = envelopeDict["Inner"]
+                                .Split(',', StringSplitOptions.RemoveEmptyEntries)
+                                .Select(e => e.Trim().ToUpper().Replace("E", ""))
+                                .Where(x => int.TryParse(x, out _))
+                                .Select(int.Parse)
+                                .OrderBy(x => x)
+                                .ToList();
+
+                            if (innerSizes.Any())
+                            {
+                                smallestInner = innerSizes.First();
+                            }
+                        }
+                        else if (envelopeDict != null && envelopeDict.TryGetValue("Outer", out var outerValue) &&
+                                 !string.IsNullOrWhiteSpace(outerValue))
+                        {
+                            var outerSizes = envelopeDict["Outer"]
+                                .Split(',', StringSplitOptions.RemoveEmptyEntries)
+                                .Select(e => e.Trim().ToUpper().Replace("E", ""))
+                                .Where(x => int.TryParse(x, out _))
+                                .Select(int.Parse)
+                                .OrderBy(x => x)
+                                .ToList();
+
+                            if (outerSizes.Any())
+                            {
+                                smallestInner = outerSizes.First();
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError("Error in serializing Envelope", ex.Message, nameof(DuplicateController));
+                        return StatusCode(500, "Internal server error");
+                    }
+                }
+
+                if (smallestInner > 0)
+                {
+                    if (projectconfig.Enhancement > 0)
+                    {
+                        foreach (var d in data)
+                        {
+                            if (d.NRQuantity > 0)
+                            {
+                                d.Quantity = d.NRQuantity + (int)Math.Round((projectconfig.Enhancement * d.NRQuantity) / 100.0);
+                                d.Quantity = (int)Math.Ceiling(d.Quantity / (double)smallestInner) * smallestInner;
+                            }
+                        }
+                    }
+                    else
+                    {
+                        foreach (var d in data)
+                        {
+                            if (d.NRQuantity > 0)
+                            {
+                                d.Quantity = (int)Math.Ceiling(d.NRQuantity / (double)smallestInner) * smallestInner;
+                            }
+                        }
+                    }
+                }
+
+                var triggeredBy = LogHelper.GetTriggeredBy(User);
+                _logger.LogEvent(
+                    "Enhancement has been applied",
+                    "Enhancement",
+                    triggeredBy,
+                    ProjectId,
+                    string.Empty,
+                    LogHelper.ToJson(new { ProjectId, Enhancement = projectconfig.Enhancement })
+                );
+
+                await _context.SaveChangesAsync();
+
+                return Ok(new { EnhancementApplied = projectconfig.Enhancement });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError("Error applying enhancement", ex.Message, nameof(DuplicateController));
                 return StatusCode(500, "Internal server error");
             }
         }
