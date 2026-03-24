@@ -9,6 +9,7 @@ using ERPToolsAPI.Data;
 using Tools.Models;
 using System.Text.Json;
 using System.Reflection;
+using System.Globalization;
 using Tools.Services;
 using Microsoft.CodeAnalysis;
 
@@ -718,6 +719,7 @@ namespace Tools.Controllers
                     ImportRowNo = ParseImportRowNo(jsonValues),
                     CollegeName = collegeData.CollegeName,
                     CollegeCode = collegeData.CollegeCode,
+                    JsonValues = jsonValues,
                 };
             }).ToList();
         }
@@ -736,6 +738,7 @@ namespace Tools.Controllers
             AddZeroQuantityConflicts(conflicts, rowsWithMeta);
             AddNodalCodeDigitMismatchConflicts(conflicts, rowsWithMeta);
 
+            AttachConflictRows(conflicts, rowsWithMeta);
             return conflicts;
         }
 
@@ -808,7 +811,7 @@ namespace Tools.Controllers
                     UniqueField = "NodalCode",
                     NodalCodes = nodalValues,
                     ConflictingValues = nodalValues,
-                    CanIgnore = false,
+                    CanIgnore = true,
                     CanResolve = true,
                     Summary = $"Centre {group.Key} is linked with multiple nodal codes."
                 });
@@ -851,7 +854,7 @@ namespace Tools.Controllers
                         CatchNos = string.IsNullOrWhiteSpace(emptyRow.CatchNo) ? new List<string>() : new List<string> { emptyRow.CatchNo },
                         RowIds = new List<int> { emptyRow.Row.Id },
                         ImportRowNos = emptyRow.ImportRowNo.HasValue ? new List<int> { emptyRow.ImportRowNo.Value } : new List<int>(),
-                        CanIgnore = false,
+                        CanIgnore = true,
                         CanResolve = true,
                         Summary = BuildRequiredFieldSummary(field, emptyRow),
                     });
@@ -953,7 +956,7 @@ namespace Tools.Controllers
                     NodalCodeGroup = expectedDigitCount.ToString(),
                     UniqueField = "NodalCode",
                     ConflictingValues = new List<string> { item.Row.NodalCode },
-                    CanIgnore = false,
+                    CanIgnore = true,
                     CanResolve = true,
                     Summary = $"Nodal code {item.Row.NodalCode} has {item.DigitCount} digits; expected {expectedDigitCount} digits."
                 });
@@ -1162,9 +1165,7 @@ namespace Tools.Controllers
 
         private static bool CanIgnoreConflict(string? conflictType)
         {
-            var normalized = NormalizeText(conflictType);
-            return string.Equals(normalized, CatchUniqueFieldConflict, StringComparison.OrdinalIgnoreCase)
-                || string.Equals(normalized, ZeroNrQuantityConflict, StringComparison.OrdinalIgnoreCase);
+            return true;
         }
 
         private static PropertyInfo? GetNRDataProperty(string? propertyName)
@@ -1274,6 +1275,90 @@ namespace Tools.Controllers
             return int.TryParse(rawValue, out var importRowNo) ? importRowNo : null;
         }
 
+        private static void AttachConflictRows(List<ConflictReportItem> conflicts, List<NRDataConflictProjection> rowsWithMeta)
+        {
+            if (conflicts == null || rowsWithMeta == null)
+            {
+                return;
+            }
+
+            var rowMap = rowsWithMeta
+                .GroupBy(row => row.Row.Id)
+                .ToDictionary(group => group.Key, group => group.First());
+
+            foreach (var conflict in conflicts)
+            {
+                var rows = new List<ConflictRowData>();
+                foreach (var rowId in (conflict.RowIds ?? new List<int>()).Distinct())
+                {
+                    if (rowMap.TryGetValue(rowId, out var projection))
+                    {
+                        rows.Add(BuildConflictRowData(projection));
+                    }
+                }
+
+                conflict.Rows = rows;
+            }
+        }
+
+        private static ConflictRowData BuildConflictRowData(NRDataConflictProjection projection)
+        {
+            var data = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var entry in projection.JsonValues)
+            {
+                data[entry.Key] = entry.Value ?? string.Empty;
+            }
+
+            AddIfMissing(data, "CatchNo", projection.Row.CatchNo);
+            AddIfMissing(data, "CenterCode", projection.Row.CenterCode);
+            AddIfMissing(data, "NodalCode", projection.Row.NodalCode);
+            AddIfMissing(data, "ExamDate", projection.Row.ExamDate);
+            AddIfMissing(data, "ExamTime", projection.Row.ExamTime);
+            AddIfMissing(data, "NRQuantity", projection.Row.NRQuantity.ToString());
+            AddIfMissing(data, "Quantity", projection.Row.Quantity.ToString());
+            AddIfMissing(data, "CourseName", projection.Row.CourseName);
+            AddIfMissing(data, "SubjectName", projection.Row.SubjectName);
+            AddIfMissing(data, "Pages", projection.Row.Pages.ToString());
+            AddIfMissing(data, "Route", projection.Row.Route);
+            AddIfMissing(data, "RouteSort", projection.Row.RouteSort.ToString());
+            AddIfMissing(data, "CenterSort", projection.Row.CenterSort.ToString(CultureInfo.InvariantCulture));
+            AddIfMissing(data, "NodalSort", projection.Row.NodalSort.ToString(CultureInfo.InvariantCulture));
+            AddIfMissing(data, "Symbol", projection.Row.Symbol);
+
+            if (projection.ImportRowNo.HasValue)
+            {
+                AddIfMissing(data, "ImportRowNo", projection.ImportRowNo.Value.ToString());
+            }
+
+            return new ConflictRowData
+            {
+                RowId = projection.Row.Id,
+                ImportRowNo = projection.ImportRowNo,
+                Data = data,
+            };
+        }
+
+        private static void AddIfMissing(Dictionary<string, string> data, string key, string? value)
+        {
+            if (string.IsNullOrWhiteSpace(key))
+            {
+                return;
+            }
+
+            if (data.ContainsKey(key))
+            {
+                return;
+            }
+
+            if (value == null)
+            {
+                return;
+            }
+
+            data[key] = value;
+        }
+
         private static string ReadDictionaryValue(Dictionary<string, string> jsonValues, params string[] keys)
         {
             foreach (var key in keys)
@@ -1334,7 +1419,7 @@ namespace Tools.Controllers
                     NodalCodes = useNodalValues ? values : new List<string>(),
                     CenterCodes = useNodalValues ? new List<string>() : values,
                     ConflictingValues = values,
-                    CanIgnore = false,
+                    CanIgnore = true,
                     CanResolve = true,
                     Summary = useNodalValues
                         ? $"College {group.Key} is linked with multiple nodal codes."
@@ -1564,6 +1649,14 @@ namespace Tools.Controllers
             public bool CanResolve { get; set; }
             public string Status { get; set; } = "pending";
             public string? Summary { get; set; }
+            public List<ConflictRowData> Rows { get; set; } = new();
+        }
+
+        public class ConflictRowData
+        {
+            public int RowId { get; set; }
+            public int? ImportRowNo { get; set; }
+            public Dictionary<string, string> Data { get; set; } = new(StringComparer.OrdinalIgnoreCase);
         }
 
         private static Dictionary<string, object> BuildConflictStoragePayload(ConflictActionDto payload)
@@ -1652,6 +1745,7 @@ namespace Tools.Controllers
             public int? ImportRowNo { get; set; }
             public string CollegeName { get; set; } = string.Empty;
             public string CollegeCode { get; set; } = string.Empty;
+            public Dictionary<string, string> JsonValues { get; set; } = new(StringComparer.OrdinalIgnoreCase);
         }
 
         public class MissingDataSaveRequest
