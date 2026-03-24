@@ -403,9 +403,11 @@ namespace Tools.Controllers
                 int projectId = inputData.GetProperty("projectId").GetInt32();
                 var dataArray = inputData.GetProperty("data").EnumerateArray();
 
-                var extraConfigs = await _context.ExtraConfigurations
-                    .Where(x => x.ProjectId == projectId)
-                    .ToListAsync();
+                var projectEnvelopeJson = await _context.ProjectConfigs
+    .Where(p => p.ProjectId == projectId)
+    .Select(p => p.Envelope)
+    .FirstOrDefaultAsync();
+
 
                 var nrDatasToAdd = new List<NRData>();
                 var extraEnvelopesToAdd = new List<ExtraEnvelopes>();
@@ -466,52 +468,59 @@ namespace Tools.Controllers
                         "Office Extra" => 3,
                         _ => null
                     };
+                    EnvelopeType projectEnvelope = null;
 
+                    if (!string.IsNullOrWhiteSpace(projectEnvelopeJson))
+                    {
+                        try
+                        {
+                            projectEnvelope = JsonSerializer.Deserialize<EnvelopeType>(projectEnvelopeJson);
+                        }
+                        catch { }
+                    }
                     if (extraTypeId.HasValue)
                     {
-                        var config = extraConfigs.FirstOrDefault(x => x.ExtraType == extraTypeId);
+                        int roundedQty = nRData.NRQuantity;
 
-                        if (config != null)
+                        int? innerCapacity = projectEnvelope != null
+                            ? GetEnvelopeCapacity(projectEnvelope.Inner)
+                            : null;
+
+                        int? outerCapacity = projectEnvelope != null
+                            ? GetEnvelopeCapacity(projectEnvelope.Outer)
+                            : null;
+
+                        // 🔥 Pick lowest available envelope
+                        int? selectedCapacity = null;
+
+                        if (innerCapacity > 0)
+                            selectedCapacity = innerCapacity;
+                        else if (outerCapacity > 0)
+                            selectedCapacity = outerCapacity;
+
+                        if (selectedCapacity > 0)
                         {
-                            EnvelopeType envelopeType = null;
-
-                            if (!string.IsNullOrWhiteSpace(config.EnvelopeType))
-                            {
-                                try
-                                {
-                                    envelopeType = JsonSerializer.Deserialize<EnvelopeType>(config.EnvelopeType);
-                                }
-                                catch { }
-                            }
-
-                            int? innerCapacity = envelopeType != null ? GetEnvelopeCapacity(envelopeType.Inner) : null;
-                            int? outerCapacity = envelopeType != null ? GetEnvelopeCapacity(envelopeType.Outer) : null;
-
-                            int roundedQty = nRData.Quantity;
-
-                            if (innerCapacity > 0)
-                                roundedQty = (int)Math.Ceiling((double)nRData.Quantity / innerCapacity.Value) * innerCapacity.Value;
-                            else if (outerCapacity > 0)
-                                roundedQty = (int)Math.Ceiling((double)nRData.Quantity / outerCapacity.Value) * outerCapacity.Value;
-
-                            string innerEnvelope = innerCapacity > 0
-                                ? Math.Ceiling((double)roundedQty / innerCapacity.Value).ToString()
-                                : null;
-
-                            string outerEnvelope = outerCapacity > 0
-                                ? Math.Ceiling((double)roundedQty / outerCapacity.Value).ToString()
-                                : null;
-
-                            extraEnvelopesToAdd.Add(new ExtraEnvelopes
-                            {
-                                ProjectId = projectId,
-                                CatchNo = nRData.CatchNo,
-                                ExtraId = extraTypeId.Value,
-                                Quantity = roundedQty,
-                                InnerEnvelope = innerEnvelope,
-                                OuterEnvelope = outerEnvelope
-                            });
+                            roundedQty = (int)Math.Ceiling((double)nRData.NRQuantity / selectedCapacity.Value)
+                                         * selectedCapacity.Value;
                         }
+
+                        string innerEnvelope = (innerCapacity > 0)
+                            ? Math.Ceiling((double)roundedQty / innerCapacity.Value).ToString()
+                            : null;
+
+                        string outerEnvelope = (outerCapacity > 0)
+                            ? Math.Ceiling((double)roundedQty / outerCapacity.Value).ToString()
+                            : null;
+
+                        extraEnvelopesToAdd.Add(new ExtraEnvelopes
+                        {
+                            ProjectId = projectId,
+                            CatchNo = nRData.CatchNo,
+                            ExtraId = extraTypeId.Value,
+                            Quantity = roundedQty,
+                            InnerEnvelope = innerEnvelope,
+                            OuterEnvelope = outerEnvelope
+                        });
 
                         continue;
                     }
@@ -564,12 +573,12 @@ namespace Tools.Controllers
         private int GetEnvelopeCapacity(string envelopeCode)
         {
             if (string.IsNullOrWhiteSpace(envelopeCode))
-                return 1; // default to 1 if null or invalid
+                return 0; // default to 1 if null or invalid
 
             // Expecting format like "E10", "E25", etc.
             var numberPart = new string(envelopeCode.Where(char.IsDigit).ToArray());
 
-            return int.TryParse(numberPart, out var capacity) ? capacity : 1;
+            return int.TryParse(numberPart, out var capacity) ? capacity : 0;
         }
 
 
