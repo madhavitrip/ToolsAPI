@@ -5,6 +5,7 @@ namespace Tools.Services
 {
     public static class LogHelper
     {
+        //Reuploading to know the file status on git
         public static int GetTriggeredBy(ClaimsPrincipal user)
         {
             if (user == null)
