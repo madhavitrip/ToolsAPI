@@ -9,6 +9,7 @@ using ERPToolsAPI.Data;
 using Tools.Models;
 using System.Text.Json;
 using System.Reflection;
+using System.Globalization;
 using Tools.Services;
 using Microsoft.CodeAnalysis;
 
@@ -110,7 +111,7 @@ namespace Tools.Controllers
                     case "Quantity":
                         query = query.Where(d => d.Quantity.ToString().Contains(search));
                         break;
-                  
+
                     default:
                         return BadRequest($"Key '{key}' is not searchable.");
                 }
@@ -174,7 +175,7 @@ namespace Tools.Controllers
             {
                 var allColumns = typeof(NRData).GetProperties()
               .Select(p => p.Name)
-               .Where(name => name != "Id" && name != "ProjectId" && name!= "NRDatas")
+               .Where(name => name != "Id" && name != "ProjectId" && name != "NRDatas")
              .ToList();
 
                 return Ok(new
@@ -371,13 +372,13 @@ namespace Tools.Controllers
             try
             {
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Updated NrData for {id}", "NRData", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,nRData.ProjectId);
+                _loggerService.LogEvent($"Updated NrData for {id}", "NRData", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, nRData.ProjectId);
             }
             catch (Exception ex)
             {
                 if (!NRDataExists(id))
                 {
-                    _loggerService.LogEvent($"Nrdata with ID {id} not found", "NRData", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,nRData.ProjectId);
+                    _loggerService.LogEvent($"Nrdata with ID {id} not found", "NRData", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, nRData.ProjectId);
                     return NotFound();
                 }
                 else
@@ -638,7 +639,7 @@ namespace Tools.Controllers
         [HttpGet("Counts")]
         public async Task<ActionResult> GetCount(int ProjectId)
         {
-            int Conflict = await _context.ConflictingFields.Where(p=>p.ProjectId == ProjectId).CountAsync();
+            int Conflict = await _context.ConflictingFields.Where(p => p.ProjectId == ProjectId).CountAsync();
             int NrData = await _context.NRDatas.Where(p => p.ProjectId == ProjectId).CountAsync();
             return Ok(new { Conflict, NrData });
         }
@@ -661,28 +662,13 @@ namespace Tools.Controllers
 
                 foreach (var item in rowsToUpdate)
                 {
-                    item.NodalCode = payload.SelectedValue;
                     ApplyConflictResolution(item, payload);
-
-                    var conflict = await _context.ConflictingFields
-                        .FirstOrDefaultAsync(c => c.NRDataId == item.Id && c.ProjectId == ProjectId);
-
-                    if (conflict != null)
-                    {
-                        conflict.ChangedNRDataId = item.Id;
-                    }
                 }
 
                 await _context.SaveChangesAsync();
                 await UpsertConflictStatus(ProjectId, payload, ConflictStatusResolved);
 
-                _loggerService.LogEvent(
-                    $"Updated NRdata for CatchNo {payload.CatchNo} and ProjectId {ProjectId}",
-                    "NRData",
-                    User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
-                    ProjectId
-                );
-
+                _loggerService.LogEvent($"Updated NRdata for CatchNo {payload.CatchNo} and ProjectId {ProjectId}", "NRData", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, ProjectId);
                 return Ok("Conflict resolved successfully");
             }
             catch (Exception ex)
@@ -733,6 +719,7 @@ namespace Tools.Controllers
                     ImportRowNo = ParseImportRowNo(jsonValues),
                     CollegeName = collegeData.CollegeName,
                     CollegeCode = collegeData.CollegeCode,
+                    JsonValues = jsonValues,
                 };
             }).ToList();
         }
@@ -751,6 +738,7 @@ namespace Tools.Controllers
             AddZeroQuantityConflicts(conflicts, rowsWithMeta);
             AddNodalCodeDigitMismatchConflicts(conflicts, rowsWithMeta);
 
+            AttachConflictRows(conflicts, rowsWithMeta);
             return conflicts;
         }
 
@@ -823,7 +811,7 @@ namespace Tools.Controllers
                     UniqueField = "NodalCode",
                     NodalCodes = nodalValues,
                     ConflictingValues = nodalValues,
-                    CanIgnore = false,
+                    CanIgnore = true,
                     CanResolve = true,
                     Summary = $"Centre {group.Key} is linked with multiple nodal codes."
                 });
@@ -866,7 +854,7 @@ namespace Tools.Controllers
                         CatchNos = string.IsNullOrWhiteSpace(emptyRow.CatchNo) ? new List<string>() : new List<string> { emptyRow.CatchNo },
                         RowIds = new List<int> { emptyRow.Row.Id },
                         ImportRowNos = emptyRow.ImportRowNo.HasValue ? new List<int> { emptyRow.ImportRowNo.Value } : new List<int>(),
-                        CanIgnore = false,
+                        CanIgnore = true,
                         CanResolve = true,
                         Summary = BuildRequiredFieldSummary(field, emptyRow),
                     });
@@ -968,7 +956,7 @@ namespace Tools.Controllers
                     NodalCodeGroup = expectedDigitCount.ToString(),
                     UniqueField = "NodalCode",
                     ConflictingValues = new List<string> { item.Row.NodalCode },
-                    CanIgnore = false,
+                    CanIgnore = true,
                     CanResolve = true,
                     Summary = $"Nodal code {item.Row.NodalCode} has {item.DigitCount} digits; expected {expectedDigitCount} digits."
                 });
@@ -1177,9 +1165,7 @@ namespace Tools.Controllers
 
         private static bool CanIgnoreConflict(string? conflictType)
         {
-            var normalized = NormalizeText(conflictType);
-            return string.Equals(normalized, CatchUniqueFieldConflict, StringComparison.OrdinalIgnoreCase)
-                || string.Equals(normalized, ZeroNrQuantityConflict, StringComparison.OrdinalIgnoreCase);
+            return true;
         }
 
         private static PropertyInfo? GetNRDataProperty(string? propertyName)
@@ -1289,6 +1275,90 @@ namespace Tools.Controllers
             return int.TryParse(rawValue, out var importRowNo) ? importRowNo : null;
         }
 
+        private static void AttachConflictRows(List<ConflictReportItem> conflicts, List<NRDataConflictProjection> rowsWithMeta)
+        {
+            if (conflicts == null || rowsWithMeta == null)
+            {
+                return;
+            }
+
+            var rowMap = rowsWithMeta
+                .GroupBy(row => row.Row.Id)
+                .ToDictionary(group => group.Key, group => group.First());
+
+            foreach (var conflict in conflicts)
+            {
+                var rows = new List<ConflictRowData>();
+                foreach (var rowId in (conflict.RowIds ?? new List<int>()).Distinct())
+                {
+                    if (rowMap.TryGetValue(rowId, out var projection))
+                    {
+                        rows.Add(BuildConflictRowData(projection));
+                    }
+                }
+
+                conflict.Rows = rows;
+            }
+        }
+
+        private static ConflictRowData BuildConflictRowData(NRDataConflictProjection projection)
+        {
+            var data = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var entry in projection.JsonValues)
+            {
+                data[entry.Key] = entry.Value ?? string.Empty;
+            }
+
+            AddIfMissing(data, "CatchNo", projection.Row.CatchNo);
+            AddIfMissing(data, "CenterCode", projection.Row.CenterCode);
+            AddIfMissing(data, "NodalCode", projection.Row.NodalCode);
+            AddIfMissing(data, "ExamDate", projection.Row.ExamDate);
+            AddIfMissing(data, "ExamTime", projection.Row.ExamTime);
+            AddIfMissing(data, "NRQuantity", projection.Row.NRQuantity.ToString());
+            AddIfMissing(data, "Quantity", projection.Row.Quantity.ToString());
+            AddIfMissing(data, "CourseName", projection.Row.CourseName);
+            AddIfMissing(data, "SubjectName", projection.Row.SubjectName);
+            AddIfMissing(data, "Pages", projection.Row.Pages.ToString());
+            AddIfMissing(data, "Route", projection.Row.Route);
+            AddIfMissing(data, "RouteSort", projection.Row.RouteSort.ToString());
+            AddIfMissing(data, "CenterSort", projection.Row.CenterSort.ToString(CultureInfo.InvariantCulture));
+            AddIfMissing(data, "NodalSort", projection.Row.NodalSort.ToString(CultureInfo.InvariantCulture));
+            AddIfMissing(data, "Symbol", projection.Row.Symbol);
+
+            if (projection.ImportRowNo.HasValue)
+            {
+                AddIfMissing(data, "ImportRowNo", projection.ImportRowNo.Value.ToString());
+            }
+
+            return new ConflictRowData
+            {
+                RowId = projection.Row.Id,
+                ImportRowNo = projection.ImportRowNo,
+                Data = data,
+            };
+        }
+
+        private static void AddIfMissing(Dictionary<string, string> data, string key, string? value)
+        {
+            if (string.IsNullOrWhiteSpace(key))
+            {
+                return;
+            }
+
+            if (data.ContainsKey(key))
+            {
+                return;
+            }
+
+            if (value == null)
+            {
+                return;
+            }
+
+            data[key] = value;
+        }
+
         private static string ReadDictionaryValue(Dictionary<string, string> jsonValues, params string[] keys)
         {
             foreach (var key in keys)
@@ -1349,7 +1419,7 @@ namespace Tools.Controllers
                     NodalCodes = useNodalValues ? values : new List<string>(),
                     CenterCodes = useNodalValues ? new List<string>() : values,
                     ConflictingValues = values,
-                    CanIgnore = false,
+                    CanIgnore = true,
                     CanResolve = true,
                     Summary = useNodalValues
                         ? $"College {group.Key} is linked with multiple nodal codes."
@@ -1455,7 +1525,7 @@ namespace Tools.Controllers
                      HasMeaningfulText(x.ExamTime)))
                 .ToList();
 
-            if (effectiveRows.Count<=0)
+            if (effectiveRows.Count <= 0)
             {
                 return BadRequest("At least one value is required to save.");
             }
@@ -1471,7 +1541,7 @@ namespace Tools.Controllers
                     .Where(x => x.ProjectId == request.ProjectId && x.CatchNo != null && catchNumbers.Contains(x.CatchNo))
                     .ToListAsync();
 
-                if (projectRows.Count<=0)
+                if (projectRows.Count <= 0)
                 {
                     return NotFound("No matching NRData rows found for the provided catch numbers.");
                 }
@@ -1579,6 +1649,14 @@ namespace Tools.Controllers
             public bool CanResolve { get; set; }
             public string Status { get; set; } = "pending";
             public string? Summary { get; set; }
+            public List<ConflictRowData> Rows { get; set; } = new();
+        }
+
+        public class ConflictRowData
+        {
+            public int RowId { get; set; }
+            public int? ImportRowNo { get; set; }
+            public Dictionary<string, string> Data { get; set; } = new(StringComparer.OrdinalIgnoreCase);
         }
 
         private static Dictionary<string, object> BuildConflictStoragePayload(ConflictActionDto payload)
@@ -1667,6 +1745,7 @@ namespace Tools.Controllers
             public int? ImportRowNo { get; set; }
             public string CollegeName { get; set; } = string.Empty;
             public string CollegeCode { get; set; } = string.Empty;
+            public Dictionary<string, string> JsonValues { get; set; } = new(StringComparer.OrdinalIgnoreCase);
         }
 
         public class MissingDataSaveRequest
@@ -1690,6 +1769,74 @@ namespace Tools.Controllers
             public string? Separator { get; set; }
         }
 
+        public class UpsertRequest
+        {
+            public int ProjectId { get; set; }
+            public bool IsCorrectedNrdataReport { get; set; }
+            public List<NRData> Data { get; set; }
+        }
+
+
+        [HttpPost("upsert")]
+        public async Task<IActionResult> UpsertNRData([FromBody] UpsertRequest request)
+        {
+            if (request?.Data == null || !request.Data.Any())
+                return BadRequest("No data received");
+
+            var incomingData = request.Data;
+
+            var keys = incomingData
+                .Where(x => !string.IsNullOrEmpty(x.CatchNo) && !string.IsNullOrEmpty(x.CenterCode))
+                .Select(x => new { x.CatchNo, x.CenterCode })
+                .Distinct()
+                .ToList();
+
+            var existingData = await _context.NRDatas
+                .Where(x => x.ProjectId == request.ProjectId)
+                .Where(x => keys.Any(k => k.CatchNo == x.CatchNo && k.CenterCode == x.CenterCode))
+                .ToListAsync();
+
+            var existingLookup = existingData.ToDictionary(
+                x => $"{x.CatchNo}_{x.CenterCode}",
+                x => x
+            );
+
+            int updated = 0, inserted = 0;
+
+            foreach (var row in incomingData)
+            {
+                if (string.IsNullOrEmpty(row.CatchNo) || string.IsNullOrEmpty(row.CenterCode))
+                    continue;
+
+                var key = $"{row.CatchNo}_{row.CenterCode}";
+
+                if (existingLookup.TryGetValue(key, out var existing))
+                {
+                    //  UPDATE (using model directly)
+                    _context.Entry(existing).CurrentValues.SetValues(row);
+                    existing.ProjectId = request.ProjectId; // ensure correct
+
+                    updated++;
+                }
+                else
+                {
+                    //  INSERT
+                    row.ProjectId = request.ProjectId;
+                    await _context.NRDatas.AddAsync(row);
+                    inserted++;
+                }
+            }
+
+            await _context.SaveChangesAsync();
+
+            return Ok(new
+            {
+                message = "Upsert successful",
+                updated,
+                inserted
+            });
+        }
+
         // DELETE: api/NRDatas/5
         [HttpDelete("{id}")]
         public async Task<IActionResult> DeleteNRData(int id)
@@ -1704,7 +1851,7 @@ namespace Tools.Controllers
 
                 _context.NRDatas.Remove(nRData);
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Deleted NRdata of {id}", "NRData", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,nRData.ProjectId);
+                _loggerService.LogEvent($"Deleted NRdata of {id}", "NRData", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, nRData.ProjectId);
                 return NoContent();
             }
             catch (Exception ex)
