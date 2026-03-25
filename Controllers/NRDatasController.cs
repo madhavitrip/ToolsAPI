@@ -167,6 +167,7 @@ namespace Tools.Controllers
                     d.NodalSort,
                     d.RouteSort,
                     d.Symbol,
+                    d.LotNo,
 
                 })
                 .ToListAsync();

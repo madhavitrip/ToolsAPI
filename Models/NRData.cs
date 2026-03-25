@@ -27,5 +27,6 @@ namespace Tools.Models
         public string? Symbol { get; set; }
         public bool Status { get; set; } = true;
         public int? NRDataId { get; set; } = 0;
+        public int? LotNo { get; set; }
     }
 }
