@@ -1,17 +1,18 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
+﻿using ERPToolsAPI.Data;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
-using ERPToolsAPI.Data;
-using Tools.Models;
-using System.Text.Json;
-using System.Reflection;
-using System.Globalization;
-using Tools.Services;
 using Microsoft.CodeAnalysis;
+using Microsoft.EntityFrameworkCore;
+using System;
+using System.Collections.Generic;
+using System.ComponentModel.DataAnnotations.Schema;
+using System.Globalization;
+using System.Linq;
+using System.Reflection;
+using System.Text.Json;
+using System.Threading.Tasks;
+using Tools.Models;
+using Tools.Services;
 
 namespace Tools.Controllers
 {
@@ -1835,6 +1836,28 @@ namespace Tools.Controllers
                 updated,
                 inserted
             });
+        }
+
+        [HttpPut("BulkUpdate")]
+        public async Task<IActionResult> BulkUpdateNRData(
+            [FromBody] List<NRData> data,
+            [FromQuery] int projectId
+        )
+        {
+            if (data == null || !data.Any())
+                return BadRequest("No data received");
+
+            try
+            {
+                _context.NRDatas.UpdateRange(data);
+                await _context.SaveChangesAsync();
+
+                return Ok(new { message = "Bulk update successful" });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, ex.Message);
+            }
         }
 
         // DELETE: api/NRDatas/5
