@@ -1,17 +1,18 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
+﻿using ERPToolsAPI.Data;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
-using ERPToolsAPI.Data;
-using Tools.Models;
-using System.Text.Json;
-using System.Reflection;
-using System.Globalization;
-using Tools.Services;
 using Microsoft.CodeAnalysis;
+using Microsoft.EntityFrameworkCore;
+using System;
+using System.Collections.Generic;
+using System.ComponentModel.DataAnnotations.Schema;
+using System.Globalization;
+using System.Linq;
+using System.Reflection;
+using System.Text.Json;
+using System.Threading.Tasks;
+using Tools.Models;
+using Tools.Services;
 
 namespace Tools.Controllers
 {
@@ -111,7 +112,7 @@ namespace Tools.Controllers
                     case "Quantity":
                         query = query.Where(d => d.Quantity.ToString().Contains(search));
                         break;
-                  
+
                     default:
                         return BadRequest($"Key '{key}' is not searchable.");
                 }
@@ -175,7 +176,7 @@ namespace Tools.Controllers
             {
                 var allColumns = typeof(NRData).GetProperties()
               .Select(p => p.Name)
-               .Where(name => name != "Id" && name != "ProjectId" && name!= "NRDatas")
+               .Where(name => name != "Id" && name != "ProjectId" && name != "NRDatas")
              .ToList();
 
                 return Ok(new
@@ -372,13 +373,13 @@ namespace Tools.Controllers
             try
             {
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Updated NrData for {id}", "NRData", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,nRData.ProjectId);
+                _loggerService.LogEvent($"Updated NrData for {id}", "NRData", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, nRData.ProjectId);
             }
             catch (Exception ex)
             {
                 if (!NRDataExists(id))
                 {
-                    _loggerService.LogEvent($"Nrdata with ID {id} not found", "NRData", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,nRData.ProjectId);
+                    _loggerService.LogEvent($"Nrdata with ID {id} not found", "NRData", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, nRData.ProjectId);
                     return NotFound();
                 }
                 else
@@ -639,7 +640,7 @@ namespace Tools.Controllers
         [HttpGet("Counts")]
         public async Task<ActionResult> GetCount(int ProjectId)
         {
-            int Conflict = await _context.ConflictingFields.Where(p=>p.ProjectId == ProjectId).CountAsync();
+            int Conflict = await _context.ConflictingFields.Where(p => p.ProjectId == ProjectId).CountAsync();
             int NrData = await _context.NRDatas.Where(p => p.ProjectId == ProjectId).CountAsync();
             return Ok(new { Conflict, NrData });
         }
@@ -668,7 +669,7 @@ namespace Tools.Controllers
                 await _context.SaveChangesAsync();
                 await UpsertConflictStatus(ProjectId, payload, ConflictStatusResolved);
 
-                _loggerService.LogEvent($"Updated NRdata for CatchNo {payload.CatchNo} and ProjectId {ProjectId}", "NRData", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,ProjectId);
+                _loggerService.LogEvent($"Updated NRdata for CatchNo {payload.CatchNo} and ProjectId {ProjectId}", "NRData", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, ProjectId);
                 return Ok("Conflict resolved successfully");
             }
             catch (Exception ex)
@@ -1525,7 +1526,7 @@ namespace Tools.Controllers
                      HasMeaningfulText(x.ExamTime)))
                 .ToList();
 
-            if (effectiveRows.Count<=0)
+            if (effectiveRows.Count <= 0)
             {
                 return BadRequest("At least one value is required to save.");
             }
@@ -1541,7 +1542,7 @@ namespace Tools.Controllers
                     .Where(x => x.ProjectId == request.ProjectId && x.CatchNo != null && catchNumbers.Contains(x.CatchNo))
                     .ToListAsync();
 
-                if (projectRows.Count<=0)
+                if (projectRows.Count <= 0)
                 {
                     return NotFound("No matching NRData rows found for the provided catch numbers.");
                 }
@@ -1769,6 +1770,96 @@ namespace Tools.Controllers
             public string? Separator { get; set; }
         }
 
+        public class UpsertRequest
+        {
+            public int ProjectId { get; set; }
+            public bool IsCorrectedNrdataReport { get; set; }
+            public List<NRData> Data { get; set; }
+        }
+
+
+        [HttpPost("upsert")]
+        public async Task<IActionResult> UpsertNRData([FromBody] UpsertRequest request)
+        {
+            if (request?.Data == null || !request.Data.Any())
+                return BadRequest("No data received");
+
+            var incomingData = request.Data;
+
+            var keys = incomingData
+                .Where(x => !string.IsNullOrEmpty(x.CatchNo) && !string.IsNullOrEmpty(x.CenterCode))
+                .Select(x => new { x.CatchNo, x.CenterCode })
+                .Distinct()
+                .ToList();
+
+            var existingData = await _context.NRDatas
+                .Where(x => x.ProjectId == request.ProjectId)
+                .Where(x => keys.Any(k => k.CatchNo == x.CatchNo && k.CenterCode == x.CenterCode))
+                .ToListAsync();
+
+            var existingLookup = existingData.ToDictionary(
+                x => $"{x.CatchNo}_{x.CenterCode}",
+                x => x
+            );
+
+            int updated = 0, inserted = 0;
+
+            foreach (var row in incomingData)
+            {
+                if (string.IsNullOrEmpty(row.CatchNo) || string.IsNullOrEmpty(row.CenterCode))
+                    continue;
+
+                var key = $"{row.CatchNo}_{row.CenterCode}";
+
+                if (existingLookup.TryGetValue(key, out var existing))
+                {
+                    //  UPDATE (using model directly)
+                    _context.Entry(existing).CurrentValues.SetValues(row);
+                    existing.ProjectId = request.ProjectId; // ensure correct
+
+                    updated++;
+                }
+                else
+                {
+                    //  INSERT
+                    row.ProjectId = request.ProjectId;
+                    await _context.NRDatas.AddAsync(row);
+                    inserted++;
+                }
+            }
+
+            await _context.SaveChangesAsync();
+
+            return Ok(new
+            {
+                message = "Upsert successful",
+                updated,
+                inserted
+            });
+        }
+
+        [HttpPut("BulkUpdate")]
+        public async Task<IActionResult> BulkUpdateNRData(
+            [FromBody] List<NRData> data,
+            [FromQuery] int projectId
+        )
+        {
+            if (data == null || !data.Any())
+                return BadRequest("No data received");
+
+            try
+            {
+                _context.NRDatas.UpdateRange(data);
+                await _context.SaveChangesAsync();
+
+                return Ok(new { message = "Bulk update successful" });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, ex.Message);
+            }
+        }
+
         // DELETE: api/NRDatas/5
         [HttpDelete("{id}")]
         public async Task<IActionResult> DeleteNRData(int id)
@@ -1783,7 +1874,7 @@ namespace Tools.Controllers
 
                 _context.NRDatas.Remove(nRData);
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Deleted NRdata of {id}", "NRData", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,nRData.ProjectId);
+                _loggerService.LogEvent($"Deleted NRdata of {id}", "NRData", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, nRData.ProjectId);
                 return NoContent();
             }
             catch (Exception ex)
