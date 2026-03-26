@@ -32,6 +32,7 @@ namespace ERPToolsAPI.Data
         public DbSet<ConflictingFields> ConflictingFields { get; set; }
         public DbSet<BoxBreakingResult> BoxBreakingResults { get; set; }
         public DbSet<EnvelopeBreakingResult> EnvelopeBreakingResults { get; set; }
+        public DbSet<Mss> Mss { get; set; }
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);

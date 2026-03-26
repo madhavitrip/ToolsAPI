@@ -628,8 +628,14 @@ namespace Tools.Controllers
 
                     // Copy base NRData properties
                     foreach (var prop in typeof(NRData).GetProperties())
-                        rowDict[prop.Name] = prop.GetValue(baseRow);
-
+                    {
+                        if (prop.Name == "Quantity")
+                            rowDict[prop.Name] = extra.Quantity;
+                        if (prop.Name == "NRQuantity")
+                            rowDict[prop.Name] = "";
+                        else
+                            rowDict[prop.Name] = prop.GetValue(baseRow);
+                    }
                     // Initialize all envelope keys
                     foreach (var key in allInnerKeys)
                         rowDict[key] = 0;
@@ -742,6 +748,13 @@ namespace Tools.Controllers
                 if (!nrDataList.Any())
                     return NotFound("No NRData found.");
 
+                var nrDataMap = nrDataList
+    .GroupBy(x => x.CatchNo)
+    .ToDictionary(g => g.Key, g => g.First());
+                var uniqueFields = await _context.Fields
+    .Where(f => f.IsUnique)   // adjust column name if needed
+    .Select(f => f.Name) // assuming FieldName matches NRData property
+    .ToListAsync();
                 // ==============================
                 // 2️⃣ Get EnvelopeBreakages from Database
                 // ==============================
@@ -903,7 +916,14 @@ namespace Tools.Controllers
                     foreach (var key in catchEntry.Value.Keys)
                         allHeaders.Add(key);
 
-                var orderedHeaders = new List<string> { "CatchNo", "Qty" };
+                var orderedHeaders = new List<string>();
+
+                // ✅ Add ONLY unique NR fields
+                orderedHeaders.AddRange(uniqueFields);
+
+                orderedHeaders.Add("CatchNo");
+                orderedHeaders.Add("Qty");
+
                 orderedHeaders.AddRange(allHeaders.Where(x => x.StartsWith("Inner_")).OrderBy(x => x));
                 orderedHeaders.AddRange(allHeaders.Where(x => x.StartsWith("Outer_")).OrderBy(x => x));
                 orderedHeaders.Add("TotalEnvelope");
@@ -923,26 +943,44 @@ namespace Tools.Controllers
 
                 foreach (var catchEntry in summaryData.OrderBy(x => x.Key))
                 {
-                    wsCombined.Cells[rowIndex, 1].Value = catchEntry.Key;
-                    wsCombined.Cells[rowIndex, 2].Value = qtyData.ContainsKey(catchEntry.Key) ? qtyData[catchEntry.Key] : 0;
+                    var catchNo = catchEntry.Key;
+                    var nrRow = nrDataMap.ContainsKey(catchNo) ? nrDataMap[catchNo] : null;
+
+                    int colIndex = 1;
+
+                    // ✅ Fill ONLY unique fields
+                    foreach (var field in uniqueFields)
+                    {
+                        var prop = typeof(NRData).GetProperty(field);
+                        wsCombined.Cells[rowIndex, colIndex].Value =
+                            (nrRow != null && prop != null) ? prop.GetValue(nrRow) : null;
+
+                        colIndex++;
+                    }
+
+                    // CatchNo
+                    wsCombined.Cells[rowIndex, colIndex++].Value = catchNo;
+
+                    // Qty (NR + Extras)
+                    wsCombined.Cells[rowIndex, colIndex++].Value =
+                        qtyData.ContainsKey(catchNo) ? qtyData[catchNo] : 0;
 
                     int totalOuterCount = 0;
 
-                    for (int i = 2; i < orderedHeaders.Count - 1; i++)
+                    // Inner + Outer
+                    foreach (var key in orderedHeaders.Skip(uniqueFields.Count + 2).Take(orderedHeaders.Count - (uniqueFields.Count + 3)))
                     {
-                        string key = orderedHeaders[i];
                         int value = catchEntry.Value.ContainsKey(key) ? catchEntry.Value[key] : 0;
-                        wsCombined.Cells[rowIndex, i + 1].Value = value;
+                        wsCombined.Cells[rowIndex, colIndex].Value = value;
 
-                        // Sum outer envelope counts for TotalEnvelope
                         if (key.StartsWith("Outer_"))
-                        {
                             totalOuterCount += value;
-                        }
+
+                        colIndex++;
                     }
 
-                    // Set TotalEnvelope as sum of all Outer_ columns
-                    wsCombined.Cells[rowIndex, orderedHeaders.Count].Value = totalOuterCount;
+                    // TotalEnvelope
+                    wsCombined.Cells[rowIndex, colIndex].Value = totalOuterCount;
 
                     rowIndex++;
                 }
@@ -1877,7 +1915,12 @@ namespace Tools.Controllers
                e => (e.TotalEnvelope, e.OuterEnvelope) // 👈 this is a tuple
             );
 
-
+            var mssTypes = projectconfig.MssTypes; // assuming List<int>
+            var mssAttached = projectconfig.MssAttached;
+            string mssMode = projectconfig.MssAttached?.ToLower();
+            var mssData = await _context.Mss
+                .Where(m => mssTypes.Contains(m.Id))
+                .ToListAsync();
             var resultList = new List<object>();
             string prevNodalCode = null;
             string prevRoute = null;
@@ -1890,7 +1933,36 @@ namespace Tools.Controllers
             int extraCenterEnvCounter = 0;
             var nodalExtrasAddedForNodalCatch = new HashSet<(string NodalCode, string CatchNo)>();
             var catchExtrasAdded = new HashSet<(int ExtraId, string CatchNo)>();
+            List<object> CreateMssRows(string catchNo, string examDate, string examTime, string courseName)
+            {
+                var rows = new List<object>();
 
+                foreach (var mss in mssData)
+                {
+                    rows.Add(new
+                    {
+                        CatchNo = catchNo,
+                        CenterCode = "",
+                        CourseName = courseName,   // ✅ added
+                        ExamTime = examTime,       // ✅ added
+                        ExamDate = examDate,       // ✅ added
+                        Quantity = "",
+                        EnvQuantity = mss.MssType,    // MSS Type Name
+                        NodalCode = "",
+                        CenterEnv = "",
+                        TotalEnv = "",
+                        Env = "",
+                        NRQuantity = "",
+                        CenterSort = "",
+                        NodalSort = "",
+                        Route = "",
+                        RouteSort = "",
+                        isMss = true,
+                    });
+                }
+
+                return rows;
+            }
             // Helper method to add extra envelopes - removed serialnumber++ from here
             void AddExtraWithEnv(ExtraEnvelopes extra, string examDate, string examTime, string course,int NrQuantity, string NodalCode, string CenterCode, double CenterSort, double NodalSort, int RouteSort, string Route)
             {
@@ -1953,7 +2025,7 @@ namespace Tools.Controllers
                         Env = $"{j}/{totalEnv}",
                         NRQuantity = NrQuantity,
                         NodalCode = NodalCode,
-                        Route = Route,
+                        Route = "",
                         NodalSort = extra.ExtraId switch
                         {
                             1 =>(int)NodalSort + 0.1,
@@ -2125,6 +2197,7 @@ namespace Tools.Controllers
                                 current.NodalSort,
                                 current.Route,
                                 current.RouteSort,
+                                isMss = false,
                             });
                             remainingQty -= envQty;
                             envelopeIndex++;
@@ -2177,6 +2250,11 @@ namespace Tools.Controllers
             int currentStartNumber = startNumber;
             bool assignBookletSerial = currentStartNumber > 0;
             string prevCatchForSerial = null;
+            var nonMssRows = resultList
+    .Where(r => {
+        var p = r.GetType().GetProperty("isMss");
+        return p == null || !(p.GetValue(r) is bool b && b);
+    }).ToList();
             // Generate Excel Report
             // Sort the resultList safely (string for CatchNo, numeric for CenterSort/NodalSort)
             IOrderedEnumerable<dynamic> ordered = null;
@@ -2214,12 +2292,81 @@ namespace Tools.Controllers
                 };
 
                 if (ordered == null)
-                    ordered = resultList.OrderBy(keySelector);
+                    ordered = nonMssRows.Cast<dynamic>().OrderBy(keySelector);
                 else
                     ordered = ordered.ThenBy(keySelector);
             }
 
-            resultList = ordered?.ToList() ?? resultList;
+            var sortedNonMss = ordered?.Cast<object>().ToList() ?? nonMssRows;
+            var finalList = new List<object>();
+            string lastCatchForMss = null;
+            var buffer = new List<object>();
+
+            foreach (var item in sortedNonMss)
+            {
+                string catchNo = item.GetType().GetProperty("CatchNo")?.GetValue(item)?.ToString();
+
+                if (catchNo != lastCatchForMss && lastCatchForMss != null)
+                {
+                    if (mssMode == "end")
+                    {
+                        // flush buffer then add MSS after previous catch
+                        finalList.AddRange(buffer);
+                        var last = buffer.Last();
+                        finalList.AddRange(CreateMssRows(
+                            lastCatchForMss,
+                            last.GetType().GetProperty("ExamDate")?.GetValue(last)?.ToString(),
+                            last.GetType().GetProperty("ExamTime")?.GetValue(last)?.ToString(),
+                            last.GetType().GetProperty("CourseName")?.GetValue(last)?.ToString()
+                        ));
+                    }
+                    else if (mssMode == "start")
+                    {
+                        // flush buffer then add MSS before next catch
+                        finalList.AddRange(buffer);
+                        finalList.AddRange(CreateMssRows(
+                            catchNo,
+                            item.GetType().GetProperty("ExamDate")?.GetValue(item)?.ToString(),
+                            item.GetType().GetProperty("ExamTime")?.GetValue(item)?.ToString(),
+                            item.GetType().GetProperty("CourseName")?.GetValue(item)?.ToString()
+                        ));
+                    }
+                    buffer.Clear();
+                }
+
+                // For the very first catch in start mode, add MSS before first item
+                if (mssMode == "start" && lastCatchForMss == null)
+                {
+                    finalList.AddRange(CreateMssRows(
+                        catchNo,
+                        item.GetType().GetProperty("ExamDate")?.GetValue(item)?.ToString(),
+                        item.GetType().GetProperty("ExamTime")?.GetValue(item)?.ToString(),
+                        item.GetType().GetProperty("CourseName")?.GetValue(item)?.ToString()
+                    ));
+                }
+
+                buffer.Add(item);
+                lastCatchForMss = catchNo;
+            }
+
+            // Flush last buffer
+            if (buffer.Count > 0)
+            {
+                finalList.AddRange(buffer);
+                if (mssMode == "end")
+                {
+                    var last = buffer.Last();
+                    finalList.AddRange(CreateMssRows(
+                        lastCatchForMss,
+                        last.GetType().GetProperty("ExamDate")?.GetValue(last)?.ToString(),
+                        last.GetType().GetProperty("ExamTime")?.GetValue(last)?.ToString(),
+                        last.GetType().GetProperty("CourseName")?.GetValue(last)?.ToString()
+                    ));
+                }
+            }
+
+            resultList = finalList;
+
             // Generate SerialNumber AFTER sorting and reset per CatchNo
             // Generate SerialNumber AFTER sorting and reset per CatchNo
             int serial = 1;
@@ -2231,12 +2378,14 @@ namespace Tools.Controllers
             {
                 var type = item.GetType();
                 var props = type.GetProperties();
+                var isMssProp = props.FirstOrDefault(p => p.Name == "isMss");
+                bool isMssRow = isMssProp != null && isMssProp.GetValue(item) is bool b && b;
 
                 string currentCatchNo = props
                     .FirstOrDefault(p => p.Name == "CatchNo")
                     ?.GetValue(item)?.ToString();
 
-                if (previousCatchNo != null && currentCatchNo != previousCatchNo)
+                if (!isMssRow && previousCatchNo != null && currentCatchNo != previousCatchNo)
                 {
                     serial = 1; // reset when CatchNo changes
                 }
@@ -2248,15 +2397,15 @@ namespace Tools.Controllers
                     dict[prop.Name] = prop.GetValue(item);
                 }
 
-                dict["SerialNumber"] = serial++;
+                dict["SerialNumber"] = isMssRow ? (object)"" : serial++;
 
                 updatedList.Add(dict);
-                previousCatchNo = currentCatchNo;
+                if (!isMssRow)
+                    previousCatchNo = currentCatchNo;
             }
 
             resultList = updatedList;
-
-
+           
             using (var package = new ExcelPackage())
             {
                 var worksheet = package.Workbook.Worksheets.Add("BreakingResult");
@@ -2298,17 +2447,23 @@ namespace Tools.Controllers
                     {
                         currentStartNumber = startNumber;
                     }
+                    bool isMssRow = rowItem.ContainsKey("isMss") && rowItem["isMss"] is bool bVal && bVal;
                     for (int col = 0; col < properties.Length; col++)
                     {
                         var propName = properties[col];
 
                         if (propName == "BookletSerial")
                         {
+                            if (isMssRow)
+                            {
+                                worksheet.Cells[row, col + 1].Value = "";
+                                continue;
+                            }
                             if (assignBookletSerial)
                             {
-                                int envQuantity = rowItem.ContainsKey("EnvQuantity")
-                                    ? Convert.ToInt32(rowItem["EnvQuantity"])
-                                    : 0;
+                                int envQuantity = 0;
+                                if (rowItem.ContainsKey("EnvQuantity") && rowItem["EnvQuantity"] != null)
+                                    int.TryParse(rowItem["EnvQuantity"].ToString(), out envQuantity);
 
                                 string bookletSerialRange =
                                     $"{currentStartNumber}-{currentStartNumber + envQuantity - 1}";

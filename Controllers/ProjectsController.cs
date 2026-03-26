@@ -245,6 +245,20 @@ namespace Tools.Controllers
             return project;
         }
 
+        [HttpGet("GetMssByType")]
+        public async Task<IActionResult> GetMssByType(int typeId)
+        {
+            try
+            {
+                var getMss = await _context.Mss.Where(s => s.TypeId == typeId).ToListAsync();
+                return Ok(getMss);
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(ex.Message);
+            }
+        }
+
         // PUT: api/Projects/5
         // To protect from overposting attacks, see https://go.microsoft.com/fwlink/?linkid=2123754
         [HttpPut("{id}")]
