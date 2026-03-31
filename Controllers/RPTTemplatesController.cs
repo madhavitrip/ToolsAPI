@@ -6,6 +6,7 @@ using System;
 using System.Reflection;
 using System.Net.Http.Headers;
 using System.Text.Json;
+using System.Security.Cryptography;
 using Tools.Models;
 
 namespace Tools.Controllers
@@ -39,25 +40,69 @@ namespace Tools.Controllers
             return await _context.RPTTemplates.ToListAsync();
         }
 
-        // GET: api/RPTTemplates/by-group?groupId=1&typeId=2
+        // GET: api/RPTTemplates/by-group?typeId=2&groupId=1&projectId=10
         [HttpGet("by-group")]
-        public async Task<ActionResult> GetByGroup(int groupId, int typeId)
+        public async Task<ActionResult> GetByGroup([FromQuery] int typeId, [FromQuery] int? groupId, [FromQuery] int? projectId)
         {
-            var templates = await _context.RPTTemplates
-                .Where(t => t.GroupId == groupId && t.TypeId == typeId && t.IsActive)
+            if (typeId <= 0)
+                return BadRequest("typeId is required.");
+
+            groupId = NormalizeNullableId(groupId);
+            projectId = NormalizeNullableId(projectId);
+
+            if (projectId.HasValue && !groupId.HasValue)
+                return BadRequest("groupId is required when projectId is provided.");
+
+            if (projectId.HasValue)
+            {
+                var resolved = await ResolveTemplatesForContext(typeId, groupId.Value, projectId.Value);
+                return Ok(resolved);
+            }
+
+            if (groupId.HasValue)
+            {
+                var groupTemplates = await _context.RPTTemplates
+                    .Where(t => t.GroupId == groupId && t.TypeId == typeId && t.ProjectId == null && t.IsActive)
+                    .OrderBy(t => t.TemplateName)
+                    .ToListAsync();
+                return Ok(groupTemplates);
+            }
+
+            var standardTemplates = await _context.RPTTemplates
+                .Where(t => t.GroupId == null && t.ProjectId == null && t.TypeId == typeId && t.IsActive)
                 .OrderBy(t => t.TemplateName)
                 .ToListAsync();
 
-            return Ok(templates);
+            return Ok(standardTemplates);
         }
 
         // GET: api/RPTTemplates/mapping-options?groupId=1&typeId=2
         [HttpGet("mapping-options")]
         public async Task<ActionResult> GetMappingOptions(int groupId, int typeId)
         {
-            var nrColumns = GetModelColumns<NRData>(exclude: new[] { "NRDatas" });
-            var envColumns = GetModelColumns<EnvelopeBreakingResult>();
-            var boxColumns = GetModelColumns<BoxBreakingResult>();
+            var excludeColumns = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "id",
+                "projectid",
+                "envelopebreakingresultid",
+                "createdat",
+                "uploadedbatch",
+                "uploadbatch",
+                "nrdataid",
+                "extraid",
+                "envelopid",
+                "envelopeid",
+                "status",
+                "lotno"
+            };
+
+            List<string> FilterColumns(List<string> columns) =>
+                columns.Where(c => !excludeColumns.Contains(c)).ToList();
+
+            var nrColumns = FilterColumns(GetModelColumns<NRData>(exclude: new[] { "NRDatas" }));
+            var envColumns = FilterColumns(GetModelColumns<EnvelopeBreakingResult>());
+            var envBreakageColumns = FilterColumns(GetModelColumns<EnvelopeBreakage>());
+            var boxColumns = FilterColumns(GetModelColumns<BoxBreakingResult>());
 
             var nrJsonKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             List<int> projectIds = new();
@@ -102,8 +147,12 @@ namespace Tools.Controllers
             {
                 nrColumns = nrColumns.OrderBy(x => x).ToList(),
                 envColumns = envColumns.OrderBy(x => x).ToList(),
+                envBreakageColumns = envBreakageColumns.OrderBy(x => x).ToList(),
                 boxColumns = boxColumns.OrderBy(x => x).ToList(),
-                nrJsonKeys = nrJsonKeys.OrderBy(x => x).ToList()
+                nrJsonKeys = nrJsonKeys
+                    .Where(k => !excludeColumns.Contains(k))
+                    .OrderBy(x => x)
+                    .ToList()
             });
         }
 
@@ -117,10 +166,10 @@ namespace Tools.Controllers
         }
 
         // POST: api/RPTTemplates/upload
-        // multipart/form-data: file (.rpt), groupId, typeId, templateName
+        // multipart/form-data: file (.rpt), typeId, templateName, optional groupId, optional projectId
         [HttpPost("upload")]
-        public async Task<ActionResult> Upload([FromForm] int groupId, [FromForm] int typeId,
-            [FromForm] string templateName, IFormFile file)
+        public async Task<ActionResult> Upload([FromForm] int typeId, [FromForm] string templateName, IFormFile file,
+            [FromForm] int? groupId, [FromForm] int? projectId, [FromForm] List<int>? moduleIds, [FromForm] bool forceUpload = false)
         {
             if (file == null || file.Length == 0)
                 return BadRequest("No file uploaded.");
@@ -132,24 +181,54 @@ namespace Tools.Controllers
             if (string.IsNullOrWhiteSpace(templateName))
                 return BadRequest("templateName is required.");
 
-            // Determine next version for this group+type+name combo
-            var lastVersion = await _context.RPTTemplates
-                .Where(t => t.GroupId == groupId && t.TypeId == typeId && t.TemplateName == templateName)
-                .MaxAsync(t => (int?)t.Version) ?? 0;
+            groupId = NormalizeNullableId(groupId);
+            projectId = NormalizeNullableId(projectId);
+            if (projectId.HasValue && !groupId.HasValue)
+                return BadRequest("groupId is required when projectId is provided.");
 
-            // Deactivate previous versions (never delete)
-            var previous = await _context.RPTTemplates
-                .Where(t => t.GroupId == groupId && t.TypeId == typeId && t.TemplateName == templateName && t.IsActive)
-                .ToListAsync();
-            previous.ForEach(t => t.IsActive = false);
+            // Determine next version for this scope+type+name combo
+            var scopeQuery = _context.RPTTemplates
+                .Where(t => t.TypeId == typeId && t.TemplateName == templateName);
+            if (projectId.HasValue)
+                scopeQuery = scopeQuery.Where(t => t.ProjectId == projectId && t.GroupId == groupId);
+            else if (groupId.HasValue)
+                scopeQuery = scopeQuery.Where(t => t.GroupId == groupId && t.ProjectId == null);
+            else
+                scopeQuery = scopeQuery.Where(t => t.GroupId == null && t.ProjectId == null);
 
-            // Save file to wwwroot/rpt-templates/{groupId}/{typeId}/
+            var lastVersion = await scopeQuery.MaxAsync(t => (int?)t.Version) ?? 0;
+
+            // Save file to wwwroot/rpt-templates/{scope}/
             var webRoot = _env.WebRootPath ?? Path.Combine(Directory.GetCurrentDirectory(), "wwwroot");
-            var folder = Path.Combine(webRoot, "rpt-templates", groupId.ToString(), typeId.ToString());
+            var folderParts = new List<string> { webRoot, "rpt-templates" };
+            string scopeSlug;
+            if (projectId.HasValue)
+            {
+                folderParts.Add(groupId.Value.ToString());
+                folderParts.Add(typeId.ToString());
+                folderParts.Add("projects");
+                folderParts.Add(projectId.Value.ToString());
+                scopeSlug = $"g{groupId}_t{typeId}_p{projectId}";
+            }
+            else if (groupId.HasValue)
+            {
+                folderParts.Add(groupId.Value.ToString());
+                folderParts.Add(typeId.ToString());
+                scopeSlug = $"g{groupId}_t{typeId}";
+            }
+            else
+            {
+                folderParts.Add("standard");
+                folderParts.Add(typeId.ToString());
+                scopeSlug = $"std_t{typeId}";
+            }
+
+            var folder = Path.Combine(folderParts.ToArray());
             Directory.CreateDirectory(folder);
-            var fileName     = $"{templateName}_{groupId}_{typeId}_{lastVersion + 1}{ext}";
+            var fileName     = $"{templateName}_{scopeSlug}_v{lastVersion + 1}{ext}";
             var absolutePath = Path.Combine(folder, fileName);
-            var relativePath = Path.Combine("rpt-templates", groupId.ToString(), typeId.ToString(), fileName);
+            var relativePath = Path.Combine(folderParts.Skip(1).ToArray());
+            relativePath = Path.Combine(relativePath, fileName);
 
             using (var stream = new FileStream(absolutePath, FileMode.Create))
                 await file.CopyToAsync(stream);
@@ -163,10 +242,56 @@ namespace Tools.Controllers
                 ? JsonSerializer.Serialize(parsedFields)
                 : null;
 
+            var previousActive = await scopeQuery
+                .Where(t => t.IsActive)
+                .OrderByDescending(t => t.Version)
+                .FirstOrDefaultAsync();
+
+            var newHash = ComputeFileHash(absolutePath);
+            var previousHash = TryGetPreviousHash(previousActive, webRoot);
+
+            var fileIdentical = previousHash != null
+                && string.Equals(previousHash, newHash, StringComparison.OrdinalIgnoreCase);
+
+            var fieldsSame = previousActive != null
+                && AreFieldsEqual(previousActive.ParsedFieldsJson, parsedFieldsJson);
+
+            var likelyLayoutOnly = !fileIdentical && fieldsSame && previousActive != null;
+
+            if (fileIdentical && !forceUpload)
+            {
+                try
+                {
+                    if (System.IO.File.Exists(absolutePath))
+                        System.IO.File.Delete(absolutePath);
+                }
+                catch
+                {
+                    // ignore cleanup errors
+                }
+                return Conflict(new
+                {
+                    message = "No changes detected between this file and the latest version.",
+                    allowForceUpload = true,
+                    changeSummary = new
+                    {
+                        fileIdentical,
+                        fieldsSame,
+                        likelyLayoutOnly
+                    }
+                });
+            }
+
+            // Deactivate previous versions (never delete)
+            var previous = await scopeQuery.Where(t => t.IsActive).ToListAsync();
+            previous.ForEach(t => t.IsActive = false);
+
             var template = new RPTTemplate
             {
                 GroupId      = groupId,
                 TypeId       = typeId,
+                ProjectId    = projectId,
+                ModuleIds    = moduleIds != null && moduleIds.Count > 0 ? moduleIds : null,
                 TemplateName = templateName,
                 RPTFilePath  = relativePath,   // store relative path only
                 ParsedFieldsJson = parsedFieldsJson,
@@ -179,6 +304,35 @@ namespace Tools.Controllers
             _context.RPTTemplates.Add(template);
             await _context.SaveChangesAsync();
 
+            // If user skips mapping for new version, reuse mapping from previous version if available
+            if (previous.Count > 0)
+            {
+                var previousTemplateId = previous
+                    .OrderByDescending(t => t.Version)
+                    .Select(t => (int?)t.TemplateId)
+                    .FirstOrDefault();
+
+                if (previousTemplateId.HasValue)
+                {
+                    var prevMapping = await _context.RPTMappings
+                        .FirstOrDefaultAsync(m => m.TemplateId == previousTemplateId.Value);
+                    if (prevMapping != null)
+                    {
+                        var exists = await _context.RPTMappings
+                            .AnyAsync(m => m.TemplateId == template.TemplateId);
+                        if (!exists)
+                        {
+                            _context.RPTMappings.Add(new RPTMapping
+                            {
+                                TemplateId = template.TemplateId,
+                                MappingJson = prevMapping.MappingJson
+                            });
+                            await _context.SaveChangesAsync();
+                        }
+                    }
+                }
+            }
+
             return Ok(new
             {
                 template.TemplateId,
@@ -186,7 +340,13 @@ namespace Tools.Controllers
                 template.Version,
                 template.RPTFilePath,
                 parsedFields = parsedFields,
-                parseError = parseError
+                parseError = parseError,
+                changeSummary = new
+                {
+                    fileIdentical,
+                    fieldsSame,
+                    likelyLayoutOnly
+                }
             });
         }
 
@@ -195,9 +355,71 @@ namespace Tools.Controllers
         [HttpPost("import-from-group")]
         public async Task<ActionResult> ImportFromGroup([FromBody] ImportGroupRequest req)
         {
-            var sourceTemplates = await _context.RPTTemplates
-                .Where(t => t.GroupId == req.SourceGroupId && t.TypeId == req.SourceTypeId && t.IsActive)
-                .ToListAsync();
+            var sourceScope = (req.SourceScope ?? "group").Trim().ToLowerInvariant();
+            var sourceTypeId = NormalizeNullableId(req.SourceTypeId);
+
+            List<RPTTemplate> sourceTemplates;
+            if (sourceScope == "standard")
+            {
+                var query = _context.RPTTemplates
+                    .Where(t => t.GroupId == null && t.ProjectId == null && t.IsActive);
+                if (sourceTypeId.HasValue)
+                    query = query.Where(t => t.TypeId == sourceTypeId);
+                sourceTemplates = await query.ToListAsync();
+            }
+            else if (sourceScope == "project")
+            {
+                if (!req.SourceProjectId.HasValue || req.SourceProjectId.Value <= 0)
+                    return BadRequest("SourceProjectId is required for project imports.");
+
+                var project = await _context.Projects
+                    .FirstOrDefaultAsync(p => p.ProjectId == req.SourceProjectId.Value);
+                if (project == null)
+                    return NotFound("Source project not found.");
+
+                var effectiveTypeId = sourceTypeId ?? (project.TypeId > 0 ? project.TypeId : (int?)null);
+                var effectiveGroupId = project.GroupId > 0 ? project.GroupId : (int?)null;
+                if (!effectiveTypeId.HasValue || !effectiveGroupId.HasValue)
+                    return BadRequest("Source project is missing GroupId/TypeId.");
+
+                sourceTemplates = await ResolveTemplatesForContext(
+                    effectiveTypeId.Value,
+                    effectiveGroupId.Value,
+                    req.SourceProjectId.Value);
+            }
+            else
+            {
+                if (req.SourceGroupId <= 0)
+                    return BadRequest("SourceGroupId is required for group imports.");
+
+                var groupQuery = _context.RPTTemplates
+                    .Where(t => t.GroupId == req.SourceGroupId && t.ProjectId == null && t.IsActive);
+                if (sourceTypeId.HasValue)
+                    groupQuery = groupQuery.Where(t => t.TypeId == sourceTypeId);
+
+                var sourceGroupTemplates = await groupQuery.ToListAsync();
+
+                sourceTemplates = new List<RPTTemplate>(sourceGroupTemplates);
+                if (req.IncludeStandard)
+                {
+                    var standardQuery = _context.RPTTemplates
+                        .Where(t => t.GroupId == null && t.ProjectId == null && t.IsActive);
+                    if (sourceTypeId.HasValue)
+                        standardQuery = standardQuery.Where(t => t.TypeId == sourceTypeId);
+
+                    var standardTemplates = await standardQuery.ToListAsync();
+
+                    var existingNames = new HashSet<string>(
+                        sourceGroupTemplates.Select(t => t.TemplateName ?? string.Empty),
+                        StringComparer.OrdinalIgnoreCase);
+
+                    foreach (var std in standardTemplates)
+                    {
+                        if (!existingNames.Contains(std.TemplateName ?? string.Empty))
+                            sourceTemplates.Add(std);
+                    }
+                }
+            }
 
             if (!sourceTemplates.Any())
                 return NotFound("No active templates found for source group/type.");
@@ -209,19 +431,21 @@ namespace Tools.Controllers
                 // Deactivate any existing for target group+type+name
                 var existing = await _context.RPTTemplates
                     .Where(t => t.GroupId == req.TargetGroupId && t.TypeId == req.TargetTypeId
-                                && t.TemplateName == src.TemplateName && t.IsActive)
+                                && t.TemplateName == src.TemplateName && t.ProjectId == null && t.IsActive)
                     .ToListAsync();
                 existing.ForEach(t => t.IsActive = false);
 
                 var lastVersion = await _context.RPTTemplates
                     .Where(t => t.GroupId == req.TargetGroupId && t.TypeId == req.TargetTypeId
-                                && t.TemplateName == src.TemplateName)
+                                && t.TemplateName == src.TemplateName && t.ProjectId == null)
                     .MaxAsync(t => (int?)t.Version) ?? 0;
 
                 var newTemplate = new RPTTemplate
                 {
                     GroupId      = req.TargetGroupId,
                     TypeId       = req.TargetTypeId,
+                    ProjectId    = null,
+                    ModuleIds    = src.ModuleIds,
                     TemplateName = src.TemplateName,
                     RPTFilePath  = src.RPTFilePath,   // reuse same file
                     ParsedFieldsJson = src.ParsedFieldsJson,
@@ -400,15 +624,92 @@ namespace Tools.Controllers
                 return (new List<string>(), $"Parser exception: {ex.Message}");
             }
         }
+
+        private static string ComputeFileHash(string path)
+        {
+            using var sha = SHA256.Create();
+            using var stream = System.IO.File.OpenRead(path);
+            var hash = sha.ComputeHash(stream);
+            return BitConverter.ToString(hash).Replace("-", "").ToLowerInvariant();
+        }
+
+        private static string? TryGetPreviousHash(RPTTemplate? prev, string webRoot)
+        {
+            if (prev == null || string.IsNullOrWhiteSpace(prev.RPTFilePath)) return null;
+            var absolutePath = Path.Combine(webRoot, prev.RPTFilePath);
+            if (!System.IO.File.Exists(absolutePath)) return null;
+            return ComputeFileHash(absolutePath);
+        }
+
+        private static bool AreFieldsEqual(string? prevFieldsJson, string? newFieldsJson)
+        {
+            var prev = ParseFieldList(prevFieldsJson);
+            var next = ParseFieldList(newFieldsJson);
+            if (prev.Count == 0 && next.Count == 0) return true;
+            if (prev.Count != next.Count) return false;
+            var setPrev = new HashSet<string>(prev, StringComparer.OrdinalIgnoreCase);
+            var setNext = new HashSet<string>(next, StringComparer.OrdinalIgnoreCase);
+            return setPrev.SetEquals(setNext);
+        }
+
+        private static List<string> ParseFieldList(string? json)
+        {
+            if (string.IsNullOrWhiteSpace(json)) return new List<string>();
+            try
+            {
+                return JsonSerializer.Deserialize<List<string>>(json) ?? new List<string>();
+            }
+            catch
+            {
+                return new List<string>();
+            }
+        }
+
+        private static int? NormalizeNullableId(int? id)
+        {
+            if (!id.HasValue) return null;
+            return id.Value > 0 ? id : null;
+        }
+
+        private static int GetScopeRank(RPTTemplate template)
+        {
+            if (template.ProjectId.HasValue) return 3;
+            if (template.GroupId.HasValue) return 2;
+            return 1;
+        }
+
+        private async Task<List<RPTTemplate>> ResolveTemplatesForContext(int typeId, int groupId, int projectId)
+        {
+            var candidates = await _context.RPTTemplates
+                .Where(t => t.TypeId == typeId && t.IsActive &&
+                            ((t.ProjectId == projectId && t.GroupId == groupId)
+                             || (t.GroupId == groupId && t.ProjectId == null)
+                             || (t.GroupId == null && t.ProjectId == null)))
+                .ToListAsync();
+
+            var resolved = candidates
+                .GroupBy(t => t.TemplateName ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+                .Select(g => g
+                    .OrderByDescending(t => GetScopeRank(t))
+                    .ThenByDescending(t => t.Version)
+                    .First())
+                .OrderBy(t => t.TemplateName)
+                .ToList();
+
+            return resolved;
+        }
     }
 
     public class ImportGroupRequest
     {
         public int SourceGroupId  { get; set; }
-        public int SourceTypeId   { get; set; }
+        public int? SourceTypeId   { get; set; }
         public int TargetGroupId  { get; set; }
         public int TargetTypeId   { get; set; }
+        public int? SourceProjectId { get; set; }
+        public string? SourceScope { get; set; }
         public bool CopyMappings  { get; set; } = true;
+        public bool IncludeStandard { get; set; } = true;
     }
 
     public class SaveMappingRequest

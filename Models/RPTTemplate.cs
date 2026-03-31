@@ -1,4 +1,5 @@
-﻿using System.ComponentModel.DataAnnotations;
+using System.Collections.Generic;
+using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 
 namespace Tools.Models
@@ -8,10 +9,11 @@ namespace Tools.Models
         [Key]
         [DatabaseGenerated(DatabaseGeneratedOption.Identity)]
         public int TemplateId { get; set; }
-        [Required]
-        public int GroupId { get; set; }
+        public int? GroupId { get; set; }
         [Required]
         public int TypeId { get; set; }
+        public int? ProjectId { get; set; }
+        public List<int>? ModuleIds { get; set; }
         [Required]
         public string? TemplateName { get; set; }
         public string? RPTFilePath { get; set; }
@@ -22,3 +24,4 @@ namespace Tools.Models
         public bool IsActive { get; set; }
     }
 }
+
