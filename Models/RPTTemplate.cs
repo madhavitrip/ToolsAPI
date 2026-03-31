@@ -13,6 +13,7 @@ namespace Tools.Models
         [Required]
         public int TypeId { get; set; }
         public int? ProjectId { get; set; }
+        public int? UploadedByUserId { get; set; }
         public List<int>? ModuleIds { get; set; }
         [Required]
         public string? TemplateName { get; set; }

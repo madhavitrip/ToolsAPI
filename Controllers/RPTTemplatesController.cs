@@ -7,6 +7,8 @@ using System.Reflection;
 using System.Net.Http.Headers;
 using System.Text.Json;
 using System.Security.Cryptography;
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
 using Tools.Models;
 
 namespace Tools.Controllers
@@ -74,6 +76,48 @@ namespace Tools.Controllers
                 .ToListAsync();
 
             return Ok(standardTemplates);
+        }
+
+        // GET: api/RPTTemplates/versions?typeId=2&templateName=ABC&groupId=1&projectId=10
+        [HttpGet("versions")]
+        public async Task<ActionResult> GetVersions(
+            [FromQuery] int typeId,
+            [FromQuery] string templateName,
+            [FromQuery] int? groupId,
+            [FromQuery] int? projectId)
+        {
+            if (typeId <= 0)
+                return BadRequest("typeId is required.");
+            if (string.IsNullOrWhiteSpace(templateName))
+                return BadRequest("templateName is required.");
+
+            groupId = NormalizeNullableId(groupId);
+            projectId = NormalizeNullableId(projectId);
+
+            if (projectId.HasValue && !groupId.HasValue)
+                return BadRequest("groupId is required when projectId is provided.");
+
+            var query = _context.RPTTemplates
+                .Where(t => t.TypeId == typeId && t.TemplateName == templateName);
+
+            if (projectId.HasValue)
+            {
+                query = query.Where(t => t.GroupId == groupId && t.ProjectId == projectId);
+            }
+            else if (groupId.HasValue)
+            {
+                query = query.Where(t => t.GroupId == groupId && t.ProjectId == null);
+            }
+            else
+            {
+                query = query.Where(t => t.GroupId == null && t.ProjectId == null);
+            }
+
+            var versions = await query
+                .OrderByDescending(t => t.Version)
+                .ToListAsync();
+
+            return Ok(versions);
         }
 
         // GET: api/RPTTemplates/mapping-options?groupId=1&typeId=2
@@ -163,6 +207,51 @@ namespace Tools.Controllers
             var t = await _context.RPTTemplates.FindAsync(id);
             if (t == null) return NotFound();
             return t;
+        }
+
+        // PUT: api/RPTTemplates/5
+        // body: { templateName, moduleIds, applyToAllVersions }
+        [HttpPut("{id}")]
+        public async Task<ActionResult> UpdateTemplate(int id, [FromBody] UpdateTemplateRequest req)
+        {
+            if (req == null)
+                return BadRequest("Request body is required.");
+
+            var template = await _context.RPTTemplates.FindAsync(id);
+            if (template == null) return NotFound("Template not found.");
+
+            var hasName = !string.IsNullOrWhiteSpace(req.TemplateName);
+            if (req.TemplateName != null && !hasName)
+                return BadRequest("templateName cannot be empty.");
+
+            var newName = hasName ? req.TemplateName.Trim() : template.TemplateName;
+            var updateAll = req.ApplyToAllVersions;
+
+            if (updateAll)
+            {
+                var scopeQuery = _context.RPTTemplates
+                    .Where(t => t.TypeId == template.TypeId
+                                && t.TemplateName == template.TemplateName
+                                && t.GroupId == template.GroupId
+                                && t.ProjectId == template.ProjectId);
+
+                var items = await scopeQuery.ToListAsync();
+                foreach (var item in items)
+                {
+                    if (hasName) item.TemplateName = newName;
+                    if (req.ModuleIds != null) item.ModuleIds = req.ModuleIds;
+                    item.UpdatedDate = DateTime.Now;
+                }
+            }
+            else
+            {
+                if (hasName) template.TemplateName = newName;
+                if (req.ModuleIds != null) template.ModuleIds = req.ModuleIds;
+                template.UpdatedDate = DateTime.Now;
+            }
+
+            await _context.SaveChangesAsync();
+            return Ok(new { templateId = template.TemplateId, message = "Template updated." });
         }
 
         // POST: api/RPTTemplates/upload
@@ -286,11 +375,14 @@ namespace Tools.Controllers
             var previous = await scopeQuery.Where(t => t.IsActive).ToListAsync();
             previous.ForEach(t => t.IsActive = false);
 
+            var uploadedByUserId = GetUserIdFromToken();
+
             var template = new RPTTemplate
             {
                 GroupId      = groupId,
                 TypeId       = typeId,
                 ProjectId    = projectId,
+                UploadedByUserId = uploadedByUserId,
                 ModuleIds    = moduleIds != null && moduleIds.Count > 0 ? moduleIds : null,
                 TemplateName = templateName,
                 RPTFilePath  = relativePath,   // store relative path only
@@ -332,6 +424,50 @@ namespace Tools.Controllers
                     }
                 }
             }
+            else if (projectId.HasValue && groupId.HasValue)
+            {
+                // For first-time project overrides, reuse mapping from group/standard template if available
+                var fallbackTemplate = await _context.RPTTemplates
+                    .Where(t => t.TypeId == typeId
+                                && t.TemplateName == templateName
+                                && t.GroupId == groupId
+                                && t.ProjectId == null
+                                && t.IsActive)
+                    .OrderByDescending(t => t.Version)
+                    .FirstOrDefaultAsync();
+
+                if (fallbackTemplate == null)
+                {
+                    fallbackTemplate = await _context.RPTTemplates
+                        .Where(t => t.TypeId == typeId
+                                    && t.TemplateName == templateName
+                                    && t.GroupId == null
+                                    && t.ProjectId == null
+                                    && t.IsActive)
+                        .OrderByDescending(t => t.Version)
+                        .FirstOrDefaultAsync();
+                }
+
+                if (fallbackTemplate != null)
+                {
+                    var fallbackMapping = await _context.RPTMappings
+                        .FirstOrDefaultAsync(m => m.TemplateId == fallbackTemplate.TemplateId);
+                    if (fallbackMapping != null)
+                    {
+                        var exists = await _context.RPTMappings
+                            .AnyAsync(m => m.TemplateId == template.TemplateId);
+                        if (!exists)
+                        {
+                            _context.RPTMappings.Add(new RPTMapping
+                            {
+                                TemplateId = template.TemplateId,
+                                MappingJson = fallbackMapping.MappingJson
+                            });
+                            await _context.SaveChangesAsync();
+                        }
+                    }
+                }
+            }
 
             return Ok(new
             {
@@ -357,6 +493,29 @@ namespace Tools.Controllers
         {
             var sourceScope = (req.SourceScope ?? "group").Trim().ToLowerInvariant();
             var sourceTypeId = NormalizeNullableId(req.SourceTypeId);
+            var targetProjectId = NormalizeNullableId(req.TargetProjectId);
+            var targetGroupId = NormalizeNullableId(req.TargetGroupId);
+            var targetTypeId = NormalizeNullableId(req.TargetTypeId);
+            var uploadedByUserId = GetUserIdFromToken();
+
+            if (targetProjectId.HasValue)
+            {
+                var targetProject = await _context.Projects
+                    .FirstOrDefaultAsync(p => p.ProjectId == targetProjectId.Value);
+                if (targetProject == null)
+                    return NotFound("Target project not found.");
+
+                targetGroupId = NormalizeNullableId(targetProject.GroupId);
+                targetTypeId = NormalizeNullableId(targetProject.TypeId);
+
+                if (!targetGroupId.HasValue || !targetTypeId.HasValue)
+                    return BadRequest("Target project is missing GroupId/TypeId.");
+            }
+            else
+            {
+                if (!targetGroupId.HasValue || !targetTypeId.HasValue)
+                    return BadRequest("TargetGroupId and TargetTypeId are required.");
+            }
 
             List<RPTTemplate> sourceTemplates;
             if (sourceScope == "standard")
@@ -430,21 +589,25 @@ namespace Tools.Controllers
             {
                 // Deactivate any existing for target group+type+name
                 var existing = await _context.RPTTemplates
-                    .Where(t => t.GroupId == req.TargetGroupId && t.TypeId == req.TargetTypeId
-                                && t.TemplateName == src.TemplateName && t.ProjectId == null && t.IsActive)
+                    .Where(t => t.GroupId == targetGroupId && t.TypeId == targetTypeId
+                                && t.TemplateName == src.TemplateName
+                                && t.ProjectId == (targetProjectId.HasValue ? targetProjectId : null)
+                                && t.IsActive)
                     .ToListAsync();
                 existing.ForEach(t => t.IsActive = false);
 
                 var lastVersion = await _context.RPTTemplates
-                    .Where(t => t.GroupId == req.TargetGroupId && t.TypeId == req.TargetTypeId
-                                && t.TemplateName == src.TemplateName && t.ProjectId == null)
+                    .Where(t => t.GroupId == targetGroupId && t.TypeId == targetTypeId
+                                && t.TemplateName == src.TemplateName
+                                && t.ProjectId == (targetProjectId.HasValue ? targetProjectId : null))
                     .MaxAsync(t => (int?)t.Version) ?? 0;
 
                 var newTemplate = new RPTTemplate
                 {
-                    GroupId      = req.TargetGroupId,
-                    TypeId       = req.TargetTypeId,
-                    ProjectId    = null,
+                    GroupId      = targetGroupId,
+                    TypeId       = targetTypeId.Value,
+                    ProjectId    = targetProjectId,
+                    UploadedByUserId = uploadedByUserId,
                     ModuleIds    = src.ModuleIds,
                     TemplateName = src.TemplateName,
                     RPTFilePath  = src.RPTFilePath,   // reuse same file
@@ -671,6 +834,32 @@ namespace Tools.Controllers
             return id.Value > 0 ? id : null;
         }
 
+        private int? GetUserIdFromToken()
+        {
+            var token = Request.Headers["Authorization"].ToString()?.Replace("Bearer ", "");
+            if (string.IsNullOrWhiteSpace(token)) return null;
+
+            try
+            {
+                var handler = new JwtSecurityTokenHandler();
+                if (!handler.CanReadToken(token)) return null;
+                var jwt = handler.ReadToken(token) as JwtSecurityToken;
+                if (jwt == null) return null;
+
+                var claim = jwt.Claims.FirstOrDefault(c =>
+                    c.Type == ClaimTypes.Name ||
+                    c.Type == "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name" ||
+                    c.Type == "sub");
+
+                if (claim == null) return null;
+                return int.TryParse(claim.Value, out var id) ? id : null;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
         private static int GetScopeRank(RPTTemplate template)
         {
             if (template.ProjectId.HasValue) return 3;
@@ -706,6 +895,7 @@ namespace Tools.Controllers
         public int? SourceTypeId   { get; set; }
         public int TargetGroupId  { get; set; }
         public int TargetTypeId   { get; set; }
+        public int? TargetProjectId { get; set; }
         public int? SourceProjectId { get; set; }
         public string? SourceScope { get; set; }
         public bool CopyMappings  { get; set; } = true;
@@ -715,5 +905,12 @@ namespace Tools.Controllers
     public class SaveMappingRequest
     {
         public string MappingJson { get; set; }
+    }
+
+    public class UpdateTemplateRequest
+    {
+        public string? TemplateName { get; set; }
+        public List<int>? ModuleIds { get; set; }
+        public bool ApplyToAllVersions { get; set; } = true;
     }
 }
