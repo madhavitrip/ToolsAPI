@@ -1679,18 +1679,18 @@ namespace Tools.Controllers
             }
 
             // 🔹 Maintain ordering
-          /*  finalWithBoxes = resetOnSymbolChange
-                ? finalWithBoxes
-                    .OrderBy(x => x.CourseName?.ToString() ?? "")  // ✅ group by course first
-                    .ThenBy(x =>
-                    {
-                        string boxNoStr = x.BoxNo?.ToString() ?? "";
-                        string numPart = new string(boxNoStr.TakeWhile(char.IsDigit).ToArray());
-                        return int.TryParse(numPart, out int n) ? n : 0;
-                    })
-                    .ToList()
-                : finalWithBoxes.OrderBy(x => (int)x.BoxNo).ToList();
-*/
+            /*  finalWithBoxes = resetOnSymbolChange
+                  ? finalWithBoxes
+                      .OrderBy(x => x.CourseName?.ToString() ?? "")  // ✅ group by course first
+                      .ThenBy(x =>
+                      {
+                          string boxNoStr = x.BoxNo?.ToString() ?? "";
+                          string numPart = new string(boxNoStr.TakeWhile(char.IsDigit).ToArray());
+                          return int.TryParse(numPart, out int n) ? n : 0;
+                      })
+                      .ToList()
+                  : finalWithBoxes.OrderBy(x => (int)x.BoxNo).ToList();
+  */
 
             // Step 5: Export to Excel
             try
@@ -1698,11 +1698,55 @@ namespace Tools.Controllers
                 using (var package = new ExcelPackage())
                 {
                     var worksheet = package.Workbook.Worksheets.Add("BoxBreaking");
-                    bool hasAnyOmr = finalWithBoxes
-    .Any(x => !string.IsNullOrWhiteSpace(
-        x.GetType().GetProperty("OmrSerial")?.GetValue(x)?.ToString()));
 
-                    // Headers
+                    // ✅ Detect OMR column
+                    bool hasAnyOmr = finalWithBoxes.Any(x =>
+                        !string.IsNullOrWhiteSpace(
+                            x.GetType().GetProperty("OmrSerial")?.GetValue(x)?.ToString()));
+                    var fixedColumns = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+{
+    "CatchNo",
+    "CenterCode",
+    "CenterSort",
+    "ExamTime",
+    "ExamDate",
+    "Quantity",
+    "NodalCode",
+    "NodalSort",
+    "Route",
+    "RouteSort",
+    "TotalEnv",
+    "Start",
+    "End",
+    "Serial",
+    "Pages",
+    "TotalPages",
+    "BoxNo",
+    "OmrSerial",
+    "CourseName",
+    "Symbol",
+    "InnerBundlingSerial"
+};
+                    // ✅ Dynamically get extra NR columns
+                    var extraNRColumns = typeof(NRData)
+    .GetProperties()
+    .Where(p => p.Name != "NRDatas" && p.Name != "Id" && p.Name != "ProjectId" && !fixedColumns.Contains(p.Name))
+    .Where(p => nrData.Any(n => p.GetValue(n) != null)) // only if data exists
+    .Select(p => p.Name)
+    .ToList();
+
+                    // ✅ Extract JSON keys dynamically
+                    List<string> jsonKeys = new List<string>();
+
+                    if (nrData.Any(n => !string.IsNullOrEmpty(n.NRDatas)))
+                    {
+                        var sampleJson = nrData.First(n => !string.IsNullOrEmpty(n.NRDatas)).NRDatas;
+
+                        var dict = JsonSerializer.Deserialize<Dictionary<string, object>>(sampleJson);
+                        jsonKeys = dict?.Keys.ToList() ?? new List<string>();
+                    }
+
+                    // ================= HEADER =================
                     worksheet.Cells[1, 1].Value = "SerialNumber";
                     worksheet.Cells[1, 2].Value = "CatchNo";
                     worksheet.Cells[1, 3].Value = "CenterCode";
@@ -1710,7 +1754,7 @@ namespace Tools.Controllers
                     worksheet.Cells[1, 5].Value = "ExamTime";
                     worksheet.Cells[1, 6].Value = "ExamDate";
                     worksheet.Cells[1, 7].Value = "Quantity";
-                    worksheet.Cells[1, 8].Value = "NodalCode"; 
+                    worksheet.Cells[1, 8].Value = "NodalCode";
                     worksheet.Cells[1, 9].Value = "NodalSort";
                     worksheet.Cells[1, 10].Value = "Route";
                     worksheet.Cells[1, 11].Value = "RouteSort";
@@ -1720,52 +1764,69 @@ namespace Tools.Controllers
                     worksheet.Cells[1, 15].Value = "Serial";
                     worksheet.Cells[1, 16].Value = "Pages";
                     worksheet.Cells[1, 17].Value = "TotalPages";
+
                     int nextCol = 18;
                     int symbolCol = -1;
                     int courseCol = -1;
+
                     if (resetOnSymbolChange)
                     {
                         worksheet.Cells[1, nextCol].Value = "Symbol";
-                        symbolCol = nextCol;
-                        nextCol++;
+                        symbolCol = nextCol++;
 
                         worksheet.Cells[1, nextCol].Value = "CourseName";
-                        courseCol = nextCol;
-                        nextCol++;
+                        courseCol = nextCol++;
                     }
 
                     worksheet.Cells[1, nextCol].Value = "BoxNo";
-                    int boxCol = nextCol;
-                    nextCol++;
+                    int boxCol = nextCol++;
+
                     worksheet.Cells[1, nextCol].Value = "Beejak";
-                    int beejakCol = nextCol;
-                    nextCol++;
-                    int omrCol = -1;                   
-                    int innerBundlingCol = -1;
+                    int beejakCol = nextCol++;
+
+                    int omrCol = -1;
                     if (hasAnyOmr)
                     {
                         worksheet.Cells[1, nextCol].Value = "OmrSerial";
-                        omrCol = nextCol;
-                        nextCol++;
+                        omrCol = nextCol++;
                     }
 
-                    // ✅ Add InnerBundling column if enabled
+                    int innerBundlingCol = -1;
                     if (InnerBundling)
                     {
                         worksheet.Cells[1, nextCol].Value = "InnerBundlingSerial";
-                        innerBundlingCol = nextCol;
+                        innerBundlingCol = nextCol++;
+                    }
+
+                    // ✅ Extra NR Headers
+                    int extraStartCol = nextCol;
+
+                    foreach (var prop in extraNRColumns)
+                    {
+                        worksheet.Cells[1, nextCol].Value = prop;
                         nextCol++;
                     }
+
+                    // ✅ JSON Headers
+                    foreach (var key in jsonKeys)
+                    {
+                        worksheet.Cells[1, nextCol].Value = key;
+                        nextCol++;
+                    }
+
+                    // ================= DATA =================
                     int row = 2;
                     int serial = 1;
                     string previousCenter = null;
                     string previousBox = null;
+
                     foreach (var item in finalWithBoxes)
                     {
                         var nrRow = nrData.FirstOrDefault(n => n.CatchNo == item.CatchNo);
+
                         worksheet.Cells[row, 1].Value = serial++;
                         worksheet.Cells[row, 2].Value = item.CatchNo;
-                        worksheet.Cells[row, 3].Value = item.CenterCode; 
+                        worksheet.Cells[row, 3].Value = item.CenterCode;
                         worksheet.Cells[row, 4].Value = item.CenterSort;
                         worksheet.Cells[row, 5].Value = item.ExamTime;
                         worksheet.Cells[row, 6].Value = item.ExamDate;
@@ -1780,51 +1841,71 @@ namespace Tools.Controllers
                         worksheet.Cells[row, 15].Value = item.Serial;
                         worksheet.Cells[row, 16].Value = nrRow?.Pages ?? 0;
                         worksheet.Cells[row, 17].Value = item.TotalPages;
+
                         worksheet.Cells[row, boxCol].Value = item.BoxNo;
+
                         if (omrCol > 0)
-                        {
                             worksheet.Cells[row, omrCol].Value = item.OmrSerial;
-                        }
 
                         if (symbolCol > 0)
-                        {
                             worksheet.Cells[row, symbolCol].Value = nrRow?.Symbol ?? "";
-                        }
-                        if (courseCol > 0)
-                        {
-                            worksheet.Cells[row, courseCol].Value = item.CourseName;
-                        }
-                        worksheet.Cells[row, boxCol].Value = item.BoxNo;
 
-                        // 🔹 BEEJAK LOGIC
+                        if (courseCol > 0)
+                            worksheet.Cells[row, courseCol].Value = item.CourseName;
+
+                        // 🔹 Beejak logic
                         string currentCenter = item.CenterCode?.ToString();
                         string currentBox = item.BoxNo?.ToString();
 
                         string beejakValue = "";
-
                         if (currentBox != previousBox || currentCenter != previousCenter)
-                        {
                             beejakValue = "Beejak";
-                        }
 
                         worksheet.Cells[row, beejakCol].Value = beejakValue;
 
                         previousCenter = currentCenter;
                         previousBox = currentBox;
 
-                        // ✅ InnerBundlingSerial column — only if InnerBundling is on
                         if (innerBundlingCol > 0)
-                        {
                             worksheet.Cells[row, innerBundlingCol].Value = item.InnerBundlingSerial;
+
+                        // ✅ Dynamic columns
+                        int currentCol = extraStartCol;
+
+                        foreach (var prop in extraNRColumns)
+                        {
+                            var val = nrRow?.GetType().GetProperty(prop)?.GetValue(nrRow);
+                            worksheet.Cells[row, currentCol++].Value = val;
                         }
+
+                        Dictionary<string, object> jsonDict = null;
+
+                        if (!string.IsNullOrEmpty(nrRow?.NRDatas))
+                        {
+                            jsonDict = JsonSerializer.Deserialize<Dictionary<string, object>>(nrRow.NRDatas);
+                        }
+
+                        foreach (var key in jsonKeys)
+                        {
+                            worksheet.Cells[row, currentCol++].Value =
+                                (jsonDict != null && jsonDict.ContainsKey(key))
+                                ? jsonDict[key]?.ToString()
+                                : "";
+                        }
+
                         row++;
                     }
 
                     FileInfo fi = new FileInfo(filePath);
                     package.SaveAs(fi);
                 }
+
+                // ✅ API call
                 using var client = new HttpClient();
-                var response = await client.PostAsync($"{_apiSettings.BoxBreaking}?ProjectId={ProjectId}", new StringContent(""));
+                var response = await client.PostAsync(
+                    $"{_apiSettings.BoxBreaking}?ProjectId={ProjectId}",
+                    new StringContent("")
+                );
 
                 if (!response.IsSuccessStatusCode)
                 {
@@ -1841,10 +1922,14 @@ namespace Tools.Controllers
             }
             catch (Exception ex)
             {
-                _loggerService.LogError("Error creating report BoxBreakingReport", ex.Message, nameof(EnvelopeBreakagesController));
+                _loggerService.LogError(
+                    "Error creating report BoxBreakingReport",
+                    ex.Message,
+                    nameof(EnvelopeBreakagesController)
+                );
+
                 return StatusCode(500, "Internal Server Error");
             }
-
         }
 
         public class ExcelInputRow

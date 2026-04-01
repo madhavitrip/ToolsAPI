@@ -377,19 +377,70 @@ namespace Tools.Controllers
                     }
                 }
 
+              
+
+                await _context.SaveChangesAsync();
+                var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
+                if (!Directory.Exists(reportPath))
+                    Directory.CreateDirectory(reportPath);
+
+                var filePath = Path.Combine(reportPath, "EnhancementReport.xlsx");
+
+                if (System.IO.File.Exists(filePath))
+                    System.IO.File.Delete(filePath);
+
+                var baseProperties = typeof(NRData).GetProperties(BindingFlags.Public | BindingFlags.Instance)
+                    .Where(p => p.Name != "NRDatas" && p.Name != "ProjectId")
+                    .ToList();
+
+                using (var package = new ExcelPackage())
+                {
+                    var ws = package.Workbook.Worksheets.Add("Enhancement Report");
+
+                    int col = 1;
+                    foreach (var prop in baseProperties)
+                    {
+                        ws.Cells[1, col].Value = prop.Name;
+                        ws.Cells[1, col].Style.Font.Bold = true;
+                        col++;
+                    }
+
+                    int row = 2;
+
+                    foreach (var item in data)
+                    {
+                        col = 1;
+
+                        foreach (var prop in baseProperties)
+                        {
+                            ws.Cells[row, col++].Value = prop.GetValue(item)?.ToString();
+                        }
+                        row++;
+                    }
+
+                    ws.Cells[ws.Dimension.Address].AutoFitColumns();
+                    ws.View.FreezePanes(2, 1);
+
+                    package.SaveAs(new FileInfo(filePath));
+                }
+
+                // Logging
                 var triggeredBy = LogHelper.GetTriggeredBy(User);
+
                 _logger.LogEvent(
-                    "Enhancement has been applied",
+                    "Enhancement applied with report",
                     "Enhancement",
                     triggeredBy,
                     ProjectId,
                     string.Empty,
-                    LogHelper.ToJson(new { ProjectId, Enhancement = projectconfig.Enhancement })
+                    LogHelper.ToJson(new { ProjectId })
                 );
 
-                await _context.SaveChangesAsync();
-
-                return Ok(new { EnhancementApplied = projectconfig.Enhancement });
+                return Ok(new
+                {
+                    EnhancementApplied = projectconfig.Enhancement,
+                    ReportPath = filePath
+                });
             }
             catch (Exception ex)
             {

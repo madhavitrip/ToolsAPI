@@ -27,11 +27,25 @@ namespace Tools.Controllers
 
         // GET: api/Modules
         [HttpGet]
-        public async Task<ActionResult<IEnumerable<Module>>> GetModules()
+        public async Task<ActionResult<IEnumerable<object>>> GetModules()
         {
-            return await _context.Modules.ToListAsync();
-        }
+            // get all modules from DB
+            var modules = await _context.Modules.ToListAsync();
 
+            var result = modules.Select(m => new
+            {
+                m.Id,
+                m.Name,
+                ParentModuleIds = m.ParentModuleIds,
+                ParentModuleNames = m.ParentModuleIds.Any()
+                    ? modules.Where(p => m.ParentModuleIds.Contains(p.Id))
+                             .Select(p => p.Name)
+                             .ToList()
+                    : new List<string>()
+            }).ToList();
+
+            return result;
+        }
         // GET: api/Modules/5
         [HttpGet("{id}")]
         public async Task<ActionResult<Module>> GetModule(int id)

@@ -9,5 +9,6 @@ namespace Tools.Models
         [DatabaseGenerated(DatabaseGeneratedOption.Identity)]
         public int Id { get; set; }
         public string Name { get; set; }
+        public List<int> ParentModuleIds { get; set; } = new List<int>();
     }
 }

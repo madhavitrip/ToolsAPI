@@ -13,6 +13,7 @@ using System.Reflection;
 using Tools.Services;
 using Microsoft.Extensions.Options;
 using System.Globalization;
+using System.Dynamic;
 
 namespace Tools.Controllers
 {
@@ -985,7 +986,8 @@ namespace Tools.Controllers
                     .ToList();
 
                 var nonMssRows = resultList
-                    .Where(r => {
+                    .Where(r =>
+                    {
                         var d = (IDictionary<string, object>)r;
                         return d.ContainsKey("isMss") && !(bool)d["isMss"];
                     }).ToList();
@@ -1231,6 +1233,14 @@ namespace Tools.Controllers
                     "EnvelopeBreakageProcessing",
                     User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
                     ProjectId);
+                using var client = new HttpClient();
+                var response = await client.GetAsync($"{_apiSettings.EnvelopeBreaking}?ProjectId={ProjectId}");
+                if (!response.IsSuccessStatusCode)
+                {
+                    // Handle failure from GET call as needed
+                    _loggerService.LogError("Failed to generate report", "", nameof(EnvelopeBreakageProcessingController));
+                    return StatusCode((int)response.StatusCode, "Failed to get envelope breakages after configuration.");
+                }
 
                 return Ok(new
                 {
@@ -1245,6 +1255,7 @@ namespace Tools.Controllers
                 return StatusCode(500, new { error = ex.Message });
             }
         }
+
         [HttpGet("CatchWithOmrSerialing")]
         public async Task<IActionResult> ProcessSerialingReport(int ProjectId)
         {
@@ -1302,7 +1313,7 @@ namespace Tools.Controllers
                     {
                         worksheet.Cells[row, 1].Value = item.CatchNo;
                         worksheet.Cells[row, 2].Value = item.OmrSerialRange;
-                        worksheet.Cells[row,3].Value = item.BookletSerialRange;
+                        worksheet.Cells[row, 3].Value = item.BookletSerialRange;
                         worksheet.Cells[row, 3].Value = item.ExamDate;
                         worksheet.Cells[row, 4].Value = item.ExamTime;
                         row++;
@@ -1326,15 +1337,15 @@ namespace Tools.Controllers
             try
             {
                 var projectconfig = await _context.ProjectConfigs
-                    .Where(p => p.ProjectId == ProjectId)
-                    .FirstOrDefaultAsync();
+                    .FirstOrDefaultAsync(p => p.ProjectId == ProjectId);
 
                 if (projectconfig == null)
                     return NotFound("Project config not found");
 
+                // ✅ Get FULL NRData (not just NRQuantity)
                 var nrDataDict = await _context.NRDatas
-    .Where(p => p.ProjectId == ProjectId)
-    .ToDictionaryAsync(p => p.Id, p => p.NRQuantity);
+                    .Where(p => p.ProjectId == ProjectId)
+                    .ToDictionaryAsync(p => p.Id);
 
                 var fields = await _context.Fields
                     .Where(f => projectconfig.EnvelopeMakingCriteria.Contains(f.FieldId))
@@ -1345,7 +1356,6 @@ namespace Tools.Controllers
                     .Select(f => f.Name)
                     .ToList();
 
-                // Get results from database
                 IQueryable<EnvelopeBreakingResult> query = _context.EnvelopeBreakingResults
                     .Where(r => r.ProjectId == ProjectId);
 
@@ -1355,14 +1365,12 @@ namespace Tools.Controllers
                 }
                 else
                 {
-                    // Get latest batch
                     var maxBatch = await _context.EnvelopeBreakingResults
                         .Where(r => r.ProjectId == ProjectId)
                         .MaxAsync(r => (int?)r.UploadBatch);
+
                     if (maxBatch.HasValue)
-                    {
                         query = query.Where(r => r.UploadBatch == maxBatch.Value);
-                    }
                 }
 
                 var results = await query.ToListAsync();
@@ -1370,24 +1378,54 @@ namespace Tools.Controllers
                 if (!results.Any())
                     return NotFound("No envelope breaking results found");
 
-                // Build full data with all fields for sorting
                 var fullData = new List<dynamic>();
 
                 foreach (var result in results)
                 {
-                    var row = new System.Dynamic.ExpandoObject();
+                    var row = new ExpandoObject();
                     var rowDict = (IDictionary<string, object>)row;
-                    int nrQty = 0;
 
-                    if (result.NrDataId != 0 && nrDataDict.TryGetValue(result.NrDataId, out var qty))
+                    // ✅ Get NRData
+                    NRData nr = null;
+                    if (result.NrDataId != 0 && nrDataDict.TryGetValue(result.NrDataId, out var nrData))
                     {
-                        nrQty = qty;
+                        nr = nrData;
                     }
 
-                    // All fields already in DB - no need to join with NRData
+                    // ============================
+                    // ✅ ADD NRDATA FIELDS
+                    // ============================
+                    if (nr != null)
+                    {
+                        rowDict["SubjectName"] = nr.SubjectName;
+                        rowDict["Pages"] = nr.Pages;
+                        rowDict["Symbol"] = nr.Symbol;
+                        rowDict["Day"] = nr.Day;
+                        rowDict["NRQuantity"] = nr.NRQuantity;
+                    }
+
+                    // ============================
+                    // ✅ PARSE NRDatas JSON (Dynamic)
+                    // ============================
+                    if (nr != null && !string.IsNullOrEmpty(nr.NRDatas))
+                    {
+                        try
+                        {
+                            var extraFields = JsonSerializer.Deserialize<Dictionary<string, string>>(nr.NRDatas);
+
+                            foreach (var kvp in extraFields)
+                            {
+                                rowDict[kvp.Key] = kvp.Value;
+                            }
+                        }
+                        catch { }
+                    }
+
+                    // ============================
+                    // ✅ ENVELOPE BREAKING FIELDS
+                    // ============================
                     rowDict["CatchNo"] = result.CatchNo ?? "";
                     rowDict["CenterCode"] = result.CenterCode ?? "";
-                    // Use modified values if they exist (for extras), otherwise use original
                     rowDict["CenterSort"] = result.CenterSort;
                     rowDict["ExamTime"] = result.ExamTime ?? "";
                     rowDict["ExamDate"] = result.ExamDate ?? "";
@@ -1395,11 +1433,8 @@ namespace Tools.Controllers
                     rowDict["NodalCode"] = result.NodalCode ?? "";
                     rowDict["NodalSort"] = result.NodalSort;
                     rowDict["Route"] = result.Route ?? "";
-                    rowDict["RouteSort"] =  result.RouteSort;
-                    rowDict["NRQuantity"] = nrQty;
-                    rowDict["CourseName"] = result.CourseName ?? "";
+                    rowDict["RouteSort"] = result.RouteSort;
 
-                    // Envelope breaking fields
                     rowDict["EnvQuantity"] = result.EnvQuantity;
                     rowDict["CenterEnv"] = result.CenterEnv;
                     rowDict["TotalEnv"] = result.TotalEnv;
@@ -1407,10 +1442,14 @@ namespace Tools.Controllers
                     rowDict["SerialNumber"] = result.SerialNumber;
                     rowDict["BookletSerial"] = result.BookletSerial ?? "";
                     rowDict["OmrSerial"] = result.OmrSerial;
+                    rowDict["CourseName"] = result.CourseName ?? "";
+
                     fullData.Add(row);
                 }
 
-                // Apply sorting based on EnvelopeMakingCriteria
+                // ============================
+                // ✅ SORTING
+                // ============================
                 IOrderedEnumerable<dynamic> ordered = null;
 
                 foreach (var fieldName in fieldNames)
@@ -1418,137 +1457,122 @@ namespace Tools.Controllers
                     Func<dynamic, object> keySelector = record =>
                     {
                         var dict = (IDictionary<string, object>)record;
+
                         if (!dict.ContainsKey(fieldName)) return null;
 
                         var val = dict[fieldName];
                         if (val == null) return null;
 
-                        // Type-safe handling per field
                         switch (fieldName)
                         {
                             case "RouteSort":
-                                if (int.TryParse(val.ToString(), out int routeSort))
-                                    return routeSort;
-                                return 0;
+                                return int.TryParse(val.ToString(), out int r) ? r : 0;
+
                             case "CenterSort":
-                                if (int.TryParse(val.ToString(), out int centerSort))
-                                    return centerSort;
-                                return 0;
+                                return int.TryParse(val.ToString(), out int c) ? c : 0;
+
                             case "NodalSort":
-                                if (double.TryParse(val.ToString(), out double nodalSort))
-                                    return nodalSort;
-                                return 0.0;
+                                return double.TryParse(val.ToString(), out double n) ? n : 0;
+
                             case "ExamDate":
-                                if (DateTime.TryParseExact(val.ToString(), "dd-MM-yyyy",
-                                    System.Globalization.CultureInfo.InvariantCulture,
-                                    System.Globalization.DateTimeStyles.None, out DateTime examDate))
-                                    return examDate;
-                                return DateTime.MinValue;
+                                return DateTime.TryParseExact(val.ToString(), "dd-MM-yyyy",
+                                    CultureInfo.InvariantCulture,
+                                    DateTimeStyles.None, out DateTime d)
+                                    ? d : DateTime.MinValue;
+
                             default:
                                 return val.ToString().Trim();
                         }
                     };
 
-                    if (ordered == null)
-                        ordered = fullData.OrderBy(keySelector);
-                    else
-                        ordered = ordered.ThenBy(keySelector);
+                    ordered = ordered == null
+                        ? fullData.OrderBy(keySelector)
+                        : ordered.ThenBy(keySelector);
                 }
 
                 var sortedList = ordered?.ToList() ?? fullData;
 
-                // Calculate SerialNumber after sorting
+                // ============================
+                // ✅ SERIAL RESET PER CATCH
+                // ============================
                 int serial = 1;
-                string prevCatchNo = null;
+                string prevCatch = null;
 
                 foreach (var item in sortedList)
                 {
                     var dict = (IDictionary<string, object>)item;
-                    string currentCatchNo = dict["CatchNo"]?.ToString();
+                    string currentCatch = dict["CatchNo"]?.ToString();
 
-                    if (prevCatchNo != null && currentCatchNo != prevCatchNo)
-                    {
+                    if (prevCatch != null && currentCatch != prevCatch)
                         serial = 1;
-                    }
 
                     dict["SerialNumber"] = serial++;
-                    prevCatchNo = currentCatchNo;
+                    prevCatch = currentCatch;
                 }
 
-                // Generate Excel
+                // ============================
+                // ✅ DYNAMIC HEADERS
+                // ============================
+                var allKeys = sortedList
+                    .SelectMany(x => ((IDictionary<string, object>)x).Keys)
+                    .Distinct()
+                    .ToList();
+
+                // ============================
+                // ✅ EXCEL GENERATION
+                // ============================
                 var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
                 Directory.CreateDirectory(reportPath);
 
                 var filePath = Path.Combine(reportPath, "EnvelopeBreakingFromDB.xlsx");
                 if (System.IO.File.Exists(filePath))
-                {
                     System.IO.File.Delete(filePath);
-                }
 
                 using (var package = new ExcelPackage())
                 {
                     var ws = package.Workbook.Worksheets.Add("Envelope Report");
 
-                    var headers = new[] { "Serial Number", "Catch No", "Center Code", "Center Sort", "Quantity", "EnvQuantity",
-                        "Center Env", "Total Env", "Env", "NRQuantity", "Nodal Code", "Nodal Sort", "Route", "Route Sort",
-                        "Exam Time", "Exam Date", "BookletSerial","OmrSerial", "CourseName" };
-
-                    for (int i = 0; i < headers.Length; i++)
+                    // Headers
+                    for (int i = 0; i < allKeys.Count; i++)
                     {
-                        ws.Cells[1, i + 1].Value = headers[i];
+                        ws.Cells[1, i + 1].Value = allKeys[i];
                         ws.Cells[1, i + 1].Style.Font.Bold = true;
                     }
 
+                    // Data
                     int rowIdx = 2;
+
                     foreach (var item in sortedList)
                     {
                         var dict = (IDictionary<string, object>)item;
 
-                        ws.Cells[rowIdx, 1].Value = dict.ContainsKey("SerialNumber") ? dict["SerialNumber"] : "";
-                        ws.Cells[rowIdx, 2].Value = dict.ContainsKey("CatchNo") ? dict["CatchNo"] : "";
-                        ws.Cells[rowIdx, 3].Value = dict.ContainsKey("CenterCode") ? dict["CenterCode"] : "";
-                        ws.Cells[rowIdx, 4].Value = dict.ContainsKey("CenterSort") ? dict["CenterSort"] : 0;
-                        ws.Cells[rowIdx, 5].Value = dict.ContainsKey("Quantity") ? dict["Quantity"] : 0;
-                        ws.Cells[rowIdx, 6].Value = dict.ContainsKey("EnvQuantity") ? dict["EnvQuantity"] : 0;
-                        ws.Cells[rowIdx, 7].Value = dict.ContainsKey("CenterEnv") ? dict["CenterEnv"] : 0;
-                        ws.Cells[rowIdx, 8].Value = dict.ContainsKey("TotalEnv") ? dict["TotalEnv"] : 0;
-                        ws.Cells[rowIdx, 9].Value = dict.ContainsKey("Env") ? dict["Env"] : "";
-                        ws.Cells[rowIdx, 10].Value = dict.ContainsKey("NRQuantity") ? dict["NRQuantity"] : 0;
-                        ws.Cells[rowIdx, 11].Value = dict.ContainsKey("NodalCode") ? dict["NodalCode"] : "";
-                        ws.Cells[rowIdx, 12].Value = dict.ContainsKey("NodalSort") ? dict["NodalSort"] : 0;
-                        ws.Cells[rowIdx, 13].Value = dict.ContainsKey("Route") ? dict["Route"] : "";
-                        ws.Cells[rowIdx, 14].Value = dict.ContainsKey("RouteSort") ? dict["RouteSort"] : 0;
-                        ws.Cells[rowIdx, 15].Value = dict.ContainsKey("ExamTime") ? dict["ExamTime"] : "";
-                        ws.Cells[rowIdx, 16].Value = dict.ContainsKey("ExamDate") ? dict["ExamDate"] : "";
-                        ws.Cells[rowIdx, 17].Value = dict.ContainsKey("BookletSerial") ? dict["BookletSerial"] : "";
-                        ws.Cells[rowIdx, 18].Value = dict.ContainsKey("OmrSerial") ? dict["OmrSerial"] : "";
-                        ws.Cells[rowIdx, 19].Value = dict.ContainsKey("CourseName") ? dict["CourseName"] : "";
+                        for (int col = 0; col < allKeys.Count; col++)
+                        {
+                            var key = allKeys[col];
+                            ws.Cells[rowIdx, col + 1].Value =
+                                dict.ContainsKey(key) ? dict[key] : "";
+                        }
+
                         rowIdx++;
                     }
 
                     ws.Cells[ws.Dimension.Address].AutoFitColumns();
                     ws.View.FreezePanes(2, 1);
+
                     package.SaveAs(new FileInfo(filePath));
                 }
-
-                _loggerService.LogEvent(
-                    $"Generated envelope breaking report from DB for ProjectId {ProjectId}",
-                    "EnvelopeBreakageProcessing",
-                    User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
-                    ProjectId);
 
                 return Ok(new
                 {
                     message = "Report generated successfully",
-                    filePath = filePath,
+                    filePath,
                     recordsCount = sortedList.Count
                 });
             }
             catch (Exception ex)
             {
-                _loggerService.LogError("Error generating envelope breaking report", ex.Message, nameof(EnvelopeBreakageProcessingController));
                 return StatusCode(500, new { error = ex.Message });
             }
         }
     }
-}
+    }

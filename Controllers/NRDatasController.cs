@@ -456,6 +456,13 @@ namespace Tools.Controllers
                         }
                     }
 
+                    // ✅ Auto-calculate Day from ExamDate
+                    if (!string.IsNullOrWhiteSpace(nRData.ExamDate) &&
+     DateTime.TryParse(nRData.ExamDate, out DateTime examDate))
+                    {
+                        nRData.Day = examDate.DayOfWeek.ToString();
+                    }
+
                     if (extraData.Any())
                         nRData.NRDatas = JsonSerializer.Serialize(extraData);
 

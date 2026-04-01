@@ -192,11 +192,7 @@ namespace Tools.Controllers
                 if (config != null)
                 {
                     _loggerService.LogEvent($"ProjectConfig for {config.ProjectId} already exists", "ProjectConfig", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, projectConfig.ProjectId);
-                    var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", config.ProjectId.ToString());
-                    if (Directory.Exists(reportPath))
-                    {
-                        Directory.Delete(reportPath, true); // 'true' allows recursive deletion of files and subdirectories
-                    }
+                   
                     _context.ProjectConfigs.Remove(config);
                     await _context.SaveChangesAsync();
                 }
@@ -212,6 +208,84 @@ namespace Tools.Controllers
             }
         }
 
+        public class ModuleDeleteRequest
+        {
+            public int ProjectId { get; set; }
+            public List<int> ModuleIds { get; set; } = new List<int>();
+        }
+
+        [HttpPost("DeleteModuleReports")]
+        public async Task<IActionResult> DeleteModuleReports([FromBody] ModuleDeleteRequest request)
+        {
+            try
+            {
+                var userId = User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0;
+
+                // 🔹 Step 1: Get module names from DB
+                var moduleNames = await _context.Modules
+                    .Where(m => request.ModuleIds.Contains(m.Id))
+                    .Select(m => m.Name)
+                    .ToListAsync();
+
+                // 🔹 Step 2: Mapping (name → report key)
+                var moduleToReportKeyMap = GetModuleToReportKeyMap();
+
+                var reportKeys = moduleNames
+                    .Select(name => name?.Trim().ToLower())
+                    .Where(name => name != null && moduleToReportKeyMap.ContainsKey(name))
+                    .Select(name => moduleToReportKeyMap[name])
+                    .Distinct()
+                    .ToList();
+
+                // 🔹 Step 3: Base path
+                var basePath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", request.ProjectId.ToString());
+
+                if (!Directory.Exists(basePath))
+                    return Ok("No project folder found");
+
+                // 🔹 Step 4: Delete matching files
+                foreach (var key in reportKeys)
+                {
+                    var files = Directory.GetFiles(basePath, $"{key}*");
+
+                    foreach (var file in files)
+                    {
+                        System.IO.File.Delete(file);
+                    }
+                }
+
+                _loggerService.LogEvent(
+                    $"Deleted reports: {string.Join(",", reportKeys)}",
+                    "ModuleCleanup",
+                    userId,
+                    request.ProjectId
+                );
+
+                return Ok(new
+                {
+                    DeletedModules = moduleNames,
+                    DeletedReports = reportKeys
+                });
+            }
+            catch (Exception ex)
+            {
+                _loggerService.LogError("Error deleting reports", ex.Message, nameof(ProjectConfigsController));
+                return StatusCode(500, "Internal server error");
+            }
+        }
+        private Dictionary<string, string> GetModuleToReportKeyMap()
+        {
+            return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+    {
+        { "duplicate tool", "duplicate" },
+        { "extra configuration", "extra" },
+        { "envelope breaking", "envelope" },
+        { "box breaking", "box" },
+        { "envelope summary", "envelopeSummary" },
+        { "catch summary report", "catchSummary" },
+        { "catchomrserialingreport", "catchOmrSerialing" }
+    };
+        }
         // DELETE: api/ProjectConfigs/5
         [HttpDelete("{id}")]
         public async Task<IActionResult> DeleteProjectConfig(int id)

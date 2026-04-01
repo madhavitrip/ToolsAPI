@@ -114,11 +114,7 @@ namespace Tools.Controllers
                 {
 
                     var projectId = extrasConfiguration.ProjectId;
-                    var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", projectId.ToString());
-                    if (Directory.Exists(reportPath))
-                    {
-                        Directory.Delete(reportPath, true); // 'true' allows recursive deletion of files and subdirectories
-                    }
+                   
                     _context.ExtraConfigurations.RemoveRange(extra);
                     await _context.SaveChangesAsync();
                     _loggerService.LogEvent($"Deleted {projectId} old ExtrasConfiguration record(s)",
