@@ -17,6 +17,7 @@ namespace Tools.Models
         public string? CatchNo { get; set; }
         public string? ExamDate { get; set; }
         public string? ExamTime { get; set; }
+        public string? Day { get; set; }
         public string? NRDatas { get; set; }
         public string ? NodalCode { get; set; }
         public int Pages { get; set; }
@@ -27,8 +28,12 @@ namespace Tools.Models
         public string? Symbol { get; set; }
         public bool Status { get; set; } = true;
         public int? NRDataId { get; set; } = 0;
+<<<<<<< HEAD
         public string? Day {  get; set; }
         public int Steps { get; set; }
         public List<int> UploadList { get; set; }
+=======
+        public int? LotNo { get; set; }
+>>>>>>> Prabhat
     }
 }

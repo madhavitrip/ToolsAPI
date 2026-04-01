@@ -6,5 +6,6 @@ namespace Tools.Models
         public string EnvelopeBreakageUrl { get; set; }
         public string EnvelopeBreaking {  get; set; }
         public string BoxBreaking { get; set; }
+        public string RptParserUrl { get; set; }
     }
 }

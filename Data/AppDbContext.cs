@@ -32,7 +32,13 @@ namespace ERPToolsAPI.Data
         public DbSet<ConflictingFields> ConflictingFields { get; set; }
         public DbSet<BoxBreakingResult> BoxBreakingResults { get; set; }
         public DbSet<EnvelopeBreakingResult> EnvelopeBreakingResults { get; set; }
+<<<<<<< HEAD
         public DbSet<Mss> Mss { get; set; }
+=======
+        public DbSet<RPTTemplate> RPTTemplates { get; set; }
+
+        public DbSet<RPTMapping> RPTMappings { get; set; }
+>>>>>>> Prabhat
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);
@@ -45,6 +51,7 @@ namespace ERPToolsAPI.Data
                 .HasIndex(e => new { e.ProjectId, e.BoxNo })
                 .IsUnique(false);
         }
+        
     }
 
     
