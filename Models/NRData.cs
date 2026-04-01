@@ -28,5 +28,7 @@ namespace Tools.Models
         public bool Status { get; set; } = true;
         public int? NRDataId { get; set; } = 0;
         public string? Day {  get; set; }
+        public int Steps { get; set; }
+        public List<int> UploadList { get; set; }
     }
 }

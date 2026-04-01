@@ -33,157 +33,166 @@ namespace Tools.Controllers
         {
             try
             {
-                // Get project data
                 var data = await _context.NRDatas
-                    .Where(p => p.ProjectId == ProjectId && p.Status==true)
+                    .Where(p => p.ProjectId == ProjectId && p.Status == true)
                     .ToListAsync();
 
                 var projectconfig = await _context.ProjectConfigs
-                    .Where(p => p.ProjectId == ProjectId).FirstOrDefaultAsync();
+                    .FirstOrDefaultAsync(p => p.ProjectId == ProjectId);
 
                 if (projectconfig == null)
-                {
                     return NotFound("Project config not exists for this project");
-                }
+
                 var mergeFieldIds = projectconfig.DuplicateCriteria.ToList();
 
                 var fieldNames = await _context.Fields
-                .Where(f => mergeFieldIds.Contains(f.FieldId)) // Match with the field IDs
-                .Select(f => f.Name) // Get the field names
-                .ToListAsync();
+                    .Where(f => mergeFieldIds.Contains(f.FieldId))
+                    .Select(f => f.Name)
+                    .ToListAsync();
 
                 if (!data.Any())
                     return NotFound("Nr data not found for this project.");
 
-                // Group the data based on the merge fields
                 var grouped = data.GroupBy(d =>
                 {
                     var key = new List<string>();
+
                     foreach (var field in fieldNames)
                     {
-                        var value = d.GetType().GetProperty(field, BindingFlags.IgnoreCase | BindingFlags.Public | BindingFlags.Instance)
-                                     ?.GetValue(d)?.ToString()?.Trim() ?? "";
+                        var value = d.GetType()
+                            .GetProperty(field, BindingFlags.IgnoreCase | BindingFlags.Public | BindingFlags.Instance)
+                            ?.GetValue(d)?.ToString()?.Trim() ?? "";
+
                         key.Add(value);
                     }
-                    return string.Join("|", key); // Composite key
+
+                    return string.Join("|", key);
                 });
 
                 int mergedCount = 0;
                 var deletedRows = new List<NRData>();
                 var reportRows = new List<NRData>();
-                var retainedRows = new List<NRData>();
+                var newRows = new List<NRData>(); // ✅ track new rows
 
                 foreach (var group in grouped)
                 {
-                    reportRows.AddRange(group); // Include all rows for reporting
+                    reportRows.AddRange(group);
 
                     if (group.Count() <= 1)
                         continue;
-                    var keep = group.First();
-                    retainedRows.Add(keep); 
-                    keep.NRQuantity = group.Sum(x => x.NRQuantity);
-                    var subjectValues = group.Select(x => x.SubjectName?.Trim())
-                                 .Where(v => !string.IsNullOrEmpty(v))
-                                 .Distinct(StringComparer.OrdinalIgnoreCase)
-                                 .ToList();
 
-                    if (subjectValues.Count > 1)
-                        keep.SubjectName = string.Join(" / ", subjectValues);
-                    else if (subjectValues.Count == 1)
-                        keep.SubjectName = subjectValues.First();
+                    var first = group.First();
 
-                    var courseValues = group.Select(x => x.CourseName?.Trim())
-                                            .Where(v => !string.IsNullOrEmpty(v))
-                                            .Distinct(StringComparer.OrdinalIgnoreCase)
-                                            .ToList();
+                    // 🔹 Clone
+                    var newRow = new NRData();
 
-                    if (courseValues.Count > 1)
-                        keep.CourseName = string.Join(" / ", courseValues);
-                    else if (courseValues.Count == 1)
-                        keep.CourseName = courseValues.First();
-
-                    var duplicates = group.Skip(1).ToList();
-
-                    foreach (var dup in duplicates)
+                    foreach (var prop in typeof(NRData).GetProperties(BindingFlags.Public | BindingFlags.Instance))
                     {
-                        dup.Status = false;          // mark as inactive instead of deleting
-                        dup.NRDataId = keep.Id;  // reference to retained merged row
+                        if (!prop.CanWrite || prop.Name == "Id")
+                            continue;
+
+                        prop.SetValue(newRow, prop.GetValue(first));
                     }
 
-                    mergedCount += duplicates.Count;
-                    deletedRows.AddRange(duplicates);
+                    // 🔹 Override merged values
+                    newRow.Status = true;
+                    newRow.NRQuantity = group.Sum(x => x.NRQuantity);
+                    newRow.Steps = 1;
+                    var subjectValues = group.Select(x => x.SubjectName?.Trim())
+                        .Where(v => !string.IsNullOrEmpty(v))
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .ToList();
+
+                    newRow.SubjectName = subjectValues.Count > 1
+                        ? string.Join(" / ", subjectValues)
+                        : subjectValues.FirstOrDefault();
+
+                    var courseValues = group.Select(x => x.CourseName?.Trim())
+                        .Where(v => !string.IsNullOrEmpty(v))
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .ToList();
+
+                    newRow.CourseName = courseValues.Count > 1
+                        ? string.Join(" / ", courseValues)
+                        : courseValues.FirstOrDefault();
+
+                    await _context.NRDatas.AddAsync(newRow);
+                    newRows.Add(newRow); // ✅ track
+
+                    foreach (var item in group)
+                    {
+                        item.Status = false;
+                        deletedRows.Add(item);
+                    }
+
+                    mergedCount += group.Count() - 1;
                 }
+                foreach (var row in data)
+                {
+                    row.Steps = 1;
+                }
+                await _context.SaveChangesAsync();
+
+                // ✅ Add new rows to report AFTER save (IDs generated)
+                reportRows.AddRange(newRows);
 
                 var triggeredBy = LogHelper.GetTriggeredBy(User);
+
                 _logger.LogEvent(
-                    "Duplicates has been deleted",
+                    "Duplicates merged and new rows created",
                     "Duplicates",
                     triggeredBy,
                     ProjectId,
                     string.Empty,
-                    LogHelper.ToJson(new { ProjectId, DeletedCount = mergedCount })
+                    LogHelper.ToJson(new { ProjectId, MergedCount = mergedCount })
                 );
-                await _context.SaveChangesAsync();
-                // Excel Report Path
+
+                // ================= REPORT =================
+
                 var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
                 if (!Directory.Exists(reportPath))
-                {
-                    // Create the directory if it doesn't exist
                     Directory.CreateDirectory(reportPath);
-                }
 
-                var filename = "DuplicateTool.xlsx";
-                var filePath = Path.Combine(reportPath, filename);
+                var filePath = Path.Combine(reportPath, "DuplicateTool.xlsx");
                 if (System.IO.File.Exists(filePath))
-                {
                     System.IO.File.Delete(filePath);
-                }
-                // Gather static properties (excluding NRDatas)
+
                 var baseProperties = typeof(NRData).GetProperties(BindingFlags.Public | BindingFlags.Instance)
-                                                   .Where(p => p.Name != "NRDatas" && p.Name != "Id" && p.Name != "ProjectId")
-                                                   .Where(p => reportRows.Any(row => p.GetValue(row) != null && !string.IsNullOrEmpty(p.GetValue(row)?.ToString())))
-                                                   .ToList();
+                    .Where(p => p.Name != "NRDatas" && p.Name != "Id" && p.Name != "ProjectId")
+                    .Where(p => reportRows.Any(row => p.GetValue(row) != null && !string.IsNullOrEmpty(p.GetValue(row)?.ToString())))
+                    .ToList();
 
                 var extraHeaders = new HashSet<string>();
                 var parsedRows = new List<(NRData row, Dictionary<string, string> extras)>();
-                try
-                {
-                    foreach (var row in reportRows)
-                    {
-                        var extras = new Dictionary<string, string>();
 
-                        if (!string.IsNullOrEmpty(row.NRDatas))
+                foreach (var row in reportRows)
+                {
+                    var extras = new Dictionary<string, string>();
+
+                    if (!string.IsNullOrEmpty(row.NRDatas))
+                    {
+                        try
                         {
-                            try
+                            extras = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(row.NRDatas);
+                            if (extras != null)
                             {
-                                extras = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(row.NRDatas);
-                                if (extras != null)
-                                {
-                                    foreach (var key in extras.Keys)
-                                        extraHeaders.Add(key);
-                                }
-                            }
-                            catch(Exception ex) 
-                            {
-                                _logger.LogError("Error in deserializing NRData", ex.Message, nameof(DuplicateController));
-                                return StatusCode(500, "Internal server error");
+                                foreach (var key in extras.Keys)
+                                    extraHeaders.Add(key);
                             }
                         }
-
-                        parsedRows.Add((row, extras));
+                        catch
+                        {
+                            extras = new Dictionary<string, string>();
+                        }
                     }
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError("Error in reportrows", ex.Message, nameof(DuplicateController));
-                    return StatusCode(500, "Internal server error");
 
+                    parsedRows.Add((row, extras));
                 }
+
                 using (var package = new ExcelPackage())
                 {
                     var ws = package.Workbook.Worksheets.Add("Merge Report");
 
-                    // Write Headers
                     int col = 1;
                     foreach (var prop in baseProperties)
                     {
@@ -192,7 +201,8 @@ namespace Tools.Controllers
                         col++;
                     }
 
-                    var extraHeaderList = extraHeaders.OrderBy(k => k).ToList();
+                    var extraHeaderList = extraHeaders.OrderBy(x => x).ToList();
+
                     foreach (var key in extraHeaderList)
                     {
                         ws.Cells[1, col].Value = key;
@@ -200,17 +210,14 @@ namespace Tools.Controllers
                         col++;
                     }
 
-                    // Write Rows
                     int rowIdx = 2;
+
                     foreach (var (item, extras) in parsedRows)
                     {
                         col = 1;
 
                         foreach (var prop in baseProperties)
-                        {
-                            var value = prop.GetValue(item);
-                            ws.Cells[rowIdx, col++].Value = value?.ToString() ?? "";
-                        }
+                            ws.Cells[rowIdx, col++].Value = prop.GetValue(item)?.ToString() ?? "";
 
                         foreach (var key in extraHeaderList)
                         {
@@ -218,21 +225,15 @@ namespace Tools.Controllers
                             ws.Cells[rowIdx, col++].Value = val ?? "";
                         }
 
-                        // Highlight deleted rows
                         using (var range = ws.Cells[rowIdx, 1, rowIdx, col - 1])
                         {
                             range.Style.Fill.PatternType = ExcelFillStyle.Solid;
 
                             if (deletedRows.Any(x => x.Id == item.Id))
-                            {
-                                // 🔴 Deleted row
-                                range.Style.Fill.BackgroundColor.SetColor(Color.LightCoral);
-                            }
-                            else if (retainedRows.Any(x => x.Id == item.Id))
-                            {
-                                // 🟢 Retained merged row
-                                range.Style.Fill.BackgroundColor.SetColor(Color.LightGreen);
-                            }
+                                range.Style.Fill.BackgroundColor.SetColor(Color.LightCoral); // 🔴 old
+
+                            else if (newRows.Any(x => x.Id == item.Id))
+                                range.Style.Fill.BackgroundColor.SetColor(Color.LightGreen); // 🟢 new
                         }
 
                         rowIdx++;
@@ -240,9 +241,10 @@ namespace Tools.Controllers
 
                     ws.Cells[ws.Dimension.Address].AutoFitColumns();
                     ws.View.FreezePanes(2, 1);
+
+                    // ✅ CLEAN SHEET (FINAL DATA)
                     var wsClean = package.Workbook.Worksheets.Add("Clean NRData");
 
-                    // Write headers (same as base properties)
                     col = 1;
                     foreach (var prop in baseProperties)
                     {
@@ -251,31 +253,28 @@ namespace Tools.Controllers
                         col++;
                     }
 
+                    var cleanRows = await _context.NRDatas
+                        .Where(x => x.ProjectId == ProjectId && x.Status == true)
+                        .ToListAsync();
+
                     int cleanRow = 2;
-                    // Only include rows that are NOT deleted
-                    var cleanRows = reportRows.Where(r => !deletedRows.Any(d => d.Id == r.Id)).ToList();
 
                     foreach (var item in cleanRows)
                     {
                         col = 1;
                         foreach (var prop in baseProperties)
-                        {
-                            var value = prop.GetValue(item);
-                            wsClean.Cells[cleanRow, col++].Value = value?.ToString() ?? "";
-                        }
+                            wsClean.Cells[cleanRow, col++].Value = prop.GetValue(item)?.ToString() ?? "";
+
                         cleanRow++;
                     }
 
                     wsClean.Cells[wsClean.Dimension.Address].AutoFitColumns();
-                    ws.View.FreezePanes(2, 1);
+                    wsClean.View.FreezePanes(2, 1);
+
                     package.SaveAs(new FileInfo(filePath));
-                    _logger.LogEvent($"Duplicates report has been created", "Duplicates", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, ProjectId);
                 }
 
-                return Ok(new
-                {
-                MergedRows = mergedCount
-                });
+                return Ok(new { MergedRows = mergedCount });
             }
             catch (Exception ex)
             {
@@ -283,7 +282,6 @@ namespace Tools.Controllers
                 return StatusCode(500, "Internal server error");
             }
         }
-
         [HttpPost("Enhancement")]
         public async Task<IActionResult> ApplyEnhancement(int ProjectId)
         {
