@@ -26,7 +26,7 @@ namespace Tools.Models
         public bool ResetOmrSerialOnCatchChange { get; set; }
         public int? BookletSerialNumber { get; set; }
         public bool? ResetBookletSerialOnCatchChange { get; set; }
-        public List<int> MssTypes { get; set; }
+        public List<int> MssTypes { get; set; } = new List<int>();
         public string MssAttached {  get; set; }
     }
 }

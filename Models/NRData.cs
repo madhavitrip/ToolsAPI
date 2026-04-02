@@ -29,7 +29,7 @@ namespace Tools.Models
         public bool Status { get; set; } = true;
         public int? NRDataId { get; set; } = 0;
         public int Steps { get; set; }
-        public List<int> UploadList { get; set; }
-        public int? LotNo { get; set; }
+        public string UploadList { get; set; }
+        public int LotNo { get; set; } = 0;
     }
 }
