@@ -56,7 +56,7 @@ namespace ERPToolsAPI.Controllers
                 // ✅ Decode token to get UserId
                 var handler = new JwtSecurityTokenHandler();
                 var token = handler.ReadJwtToken(jwtToken);
-                var userIdClaim = token.Claims.FirstOrDefault(c => c.Type == ClaimTypes.Name); // or "sub" or custom
+                var userIdClaim = token.Claims.FirstOrDefault(c => c.Type == "userid"); // or "sub" or custom
                 if (userIdClaim == null)
                     return StatusCode(500, "UserId not found in token");
 

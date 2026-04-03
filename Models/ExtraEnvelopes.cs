@@ -14,5 +14,6 @@ namespace Tools.Models
         public int Quantity { get; set; }
         public string InnerEnvelope {  get; set; }
         public string OuterEnvelope { get; set; }
+        public int Status { get; set; } = 1;
     }
 }

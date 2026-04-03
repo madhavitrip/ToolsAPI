@@ -52,7 +52,7 @@ namespace Tools.Controllers
                      .Where(p => p.ProjectId == ProjectId)
                      .ToListAsync();
                  var extras = await _context.ExtrasEnvelope
-                     .Where(p => p.ProjectId == ProjectId)
+                     .Where(p => p.ProjectId == ProjectId && p.Status == 1)
                      .ToListAsync();
 
                  var projectconfig = await _context.ProjectConfigs
@@ -628,7 +628,7 @@ namespace Tools.Controllers
                     .ToListAsync();
 
                 var extras = await _context.ExtrasEnvelope
-                    .Where(p => p.ProjectId == ProjectId)
+                    .Where(p => p.ProjectId == ProjectId && p.Status == 1)
                     .ToListAsync();
 
                 var projectconfig = await _context.ProjectConfigs

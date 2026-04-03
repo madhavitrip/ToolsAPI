@@ -508,7 +508,7 @@ namespace Tools.Controllers
 
             // Step 2: Fetch ExtrasEnvelope data and then group/sum in-memory
             var extraEnvelopeData = await _context.ExtrasEnvelope
-                .Where(p => p.ProjectId == ProjectId)
+                .Where(p => p.ProjectId == ProjectId && p.Status == 1)
                 .ToListAsync();
 
             var ExtraEnvGrouped = extraEnvelopeData
