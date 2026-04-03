@@ -393,6 +393,90 @@ namespace Tools.Controllers
             return NoContent();
         }
 
+        // PUT: api/NRDatas/UpdateSingle/{id}
+        [HttpPut("UpdateSingle/{id}")]
+        public async Task<IActionResult> UpdateSingleNRData(int id, [FromBody] JsonElement inputData)
+        {
+            try
+            {
+                var existingRecord = await _context.NRDatas.FindAsync(id);
+                if (existingRecord == null)
+                {
+                    return NotFound($"NRData with ID {id} not found");
+                }
+
+                var nRDataType = typeof(NRData);
+                var properties = nRDataType.GetProperties().ToDictionary(p => p.Name.ToLower(), p => p);
+                var extraData = new Dictionary<string, string>();
+
+                foreach (var prop in inputData.EnumerateObject())
+                {
+                    string key = prop.Name.Replace(" ", "").ToLower();
+                    string value = prop.Value.ToString();
+
+                    // Skip Id and ProjectId as they shouldn't be updated
+                    if (key == "id" || key == "projectid")
+                        continue;
+
+                    if (properties.TryGetValue(key, out var propInfo))
+                    {
+                        try
+                        {
+                            var targetType = Nullable.GetUnderlyingType(propInfo.PropertyType) ?? propInfo.PropertyType;
+                            object convertedValue = string.IsNullOrWhiteSpace(value)
+                                ? null
+                                : Convert.ChangeType(value, targetType);
+
+                            propInfo.SetValue(existingRecord, convertedValue);
+                        }
+                        catch (Exception e)
+                        {
+                            throw new Exception($"Error converting '{prop.Name}' value '{value}' to {propInfo.PropertyType.Name}", e);
+                        }
+                    }
+                    else
+                    {
+                        extraData[prop.Name] = value;
+                    }
+                }
+
+                // Update NRDatas JSON field if there are extra fields
+                if (extraData.Any())
+                {
+                    existingRecord.NRDatas = JsonSerializer.Serialize(extraData);
+                }
+
+                // Auto-calculate Day from ExamDate if provided
+                if (!string.IsNullOrWhiteSpace(existingRecord.ExamDate) &&
+                    DateTime.TryParse(existingRecord.ExamDate, out DateTime examDate))
+                {
+                    existingRecord.Day = examDate.DayOfWeek.ToString();
+                }
+
+                await _context.SaveChangesAsync();
+
+                _loggerService.LogEvent(
+                    $"Updated NRData with ID {id}",
+                    "NRData",
+                    User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
+                    existingRecord.ProjectId
+                );
+
+                return Ok(new { message = "Data updated successfully", data = existingRecord });
+            }
+            catch (DbUpdateException dbEx)
+            {
+                var error = dbEx.InnerException?.Message ?? dbEx.Message;
+                _loggerService.LogError("Database update error", error, nameof(NRDatasController));
+                return StatusCode(500, error);
+            }
+            catch (Exception ex)
+            {
+                _loggerService.LogError("NRData update error", ex.ToString(), nameof(NRDatasController));
+                return StatusCode(500, ex.Message);
+            }
+        }
+
         // POST: api/NRDatas
         // To protect from overposting attacks, see https://go.microsoft.com/fwlink/?linkid=2123754
         [HttpPost]
