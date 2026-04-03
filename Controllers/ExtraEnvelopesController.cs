@@ -101,154 +101,161 @@ namespace Tools.Controllers
         {
             try
             {
-                var nrDataList = await _context.NRDatas
-                    .Where(d => d.ProjectId == ProjectId && d.Status == true)
-                    .ToListAsync();
+                // ✅ Get GroupId
+                var project = await _context.Projects
+                    .Where(p => p.ProjectId == ProjectId)
+                    .Select(p => new { p.GroupId })
+                    .FirstOrDefaultAsync();
 
-                var groupedNR = nrDataList
-                    .GroupBy(x => x.CatchNo)
-                    .Select(g => new
-                    {
-                        CatchNo = g.Key,
-                        Quantity = g.Sum(x => x.Quantity)
-                    })
-                    .ToList();
-                if (!groupedNR.Any())
+                if (project == null)
+                    return BadRequest("Project not found");
+
+                bool isOnlyReport = project.GroupId == 28;
+
+                List<ExtraEnvelopes> envelopesToUse = new();
+
+                // =====================================================
+                // ✅ CASE 1: REPORT ONLY (GroupId = 28)
+                // =====================================================
+                if (isOnlyReport)
                 {
-                    return BadRequest("No grouping found");
+                    envelopesToUse = await _context.ExtrasEnvelope
+                        .Where(e => e.ProjectId == ProjectId)
+                        .ToListAsync();
+
+                    if (!envelopesToUse.Any())
+                        return BadRequest("No existing ExtraEnvelope data found for report.");
                 }
-
-                var extraConfig = await _context.ExtraConfigurations
-                    .Where(c => c.ProjectId == ProjectId)
-                    .ToListAsync();
-
-                if (!extraConfig.Any())
-                    return BadRequest("No ExtraConfiguration found for the project.");
-
-                var existingCombinations = await _context.ExtrasEnvelope
-                  .Where(e => e.ProjectId == ProjectId)
-                  .ToListAsync();
-
-
-                if (existingCombinations.Any())
+                else
                 {
-                    // Remove existing duplicates
-                    _context.ExtrasEnvelope.RemoveRange(existingCombinations);
-                    await _context.SaveChangesAsync();
-                }
-                var envelopesToAdd = new List<ExtraEnvelopes>();
-                foreach (var config in extraConfig)
-                {
-                    EnvelopeType envelopeType;
-                    try
-                    {
-                        envelopeType = JsonSerializer.Deserialize<EnvelopeType>(config.EnvelopeType);
-                    }
-                    catch
-                    {
-                        return BadRequest($"Invalid EnvelopeType JSON for ExtraType {config.ExtraType}");
-                    }
+                    // =====================================================
+                    // ✅ CASE 2: NORMAL FLOW (CALCULATE + SAVE)
+                    // =====================================================
 
-                    int innerCapacity = GetEnvelopeCapacity(envelopeType.Inner);
-                    int outerCapacity = GetEnvelopeCapacity(envelopeType.Outer);
+                    var nrDataList = await _context.NRDatas
+                        .Where(d => d.ProjectId == ProjectId && d.Status == true)
+                        .ToListAsync();
 
-                    foreach (var data in groupedNR)
-                    {
-                        int calculatedQuantity = 0;
-                        switch (config.Mode)
+                    var groupedNR = nrDataList
+                        .GroupBy(x => x.CatchNo)
+                        .Select(g => new
                         {
-                            case "Fixed":
-                                calculatedQuantity = int.Parse(config.Value);
-                                break;
-                            case "Percentage":
-                                if (decimal.TryParse(config.Value, out var percentValue))
-                                {
-                                    // Step 1: Calculate raw percent of quantity
-                                    var rawQuantity = (double)(data.Quantity * percentValue) / 100;
-                                    // Step 3: Round up to next multiple of innerCapacity
-                                    if (innerCapacity > 10)
-                                    {
-                                    calculatedQuantity = (int)Math.Ceiling(rawQuantity / (double)innerCapacity) * innerCapacity;
-                                    }
-                                    else
-                                    {
-                                        calculatedQuantity = (int)Math.Ceiling(rawQuantity / (double)outerCapacity) * outerCapacity;
-                                    }
-                                }
-                                else
-                                {
-                                    calculatedQuantity = 0; // Or apply fallback logic
-                                }
-                                break;
-                                //Range added by Akshaya 
-                            case "Range":
+                            CatchNo = g.Key,
+                            Quantity = g.Sum(x => x.Quantity)
+                        })
+                        .ToList();
 
-                                if (string.IsNullOrEmpty(config.RangeConfig))
-                                {
-                                    calculatedQuantity = 0;
+                    if (!groupedNR.Any())
+                        return BadRequest("No grouping found");
+
+                    var extraConfig = await _context.ExtraConfigurations
+                        .Where(c => c.ProjectId == ProjectId)
+                        .ToListAsync();
+
+                    if (!extraConfig.Any())
+                        return BadRequest("No ExtraConfiguration found");
+
+                    var existingCombinations = await _context.ExtrasEnvelope
+                        .Where(e => e.ProjectId == ProjectId)
+                        .ToListAsync();
+
+                    if (existingCombinations.Any())
+                    {
+                        _context.ExtrasEnvelope.RemoveRange(existingCombinations);
+                        await _context.SaveChangesAsync();
+                    }
+
+                    var envelopesToAdd = new List<ExtraEnvelopes>();
+
+                    foreach (var config in extraConfig)
+                    {
+                        EnvelopeType envelopeType;
+
+                        try
+                        {
+                            envelopeType = JsonSerializer.Deserialize<EnvelopeType>(config.EnvelopeType);
+                        }
+                        catch
+                        {
+                            return BadRequest($"Invalid EnvelopeType JSON for ExtraType {config.ExtraType}");
+                        }
+
+                        int innerCapacity = GetEnvelopeCapacity(envelopeType.Inner);
+                        int outerCapacity = GetEnvelopeCapacity(envelopeType.Outer);
+
+                        foreach (var data in groupedNR)
+                        {
+                            int calculatedQuantity = 0;
+
+                            switch (config.Mode)
+                            {
+                                case "Fixed":
+                                    calculatedQuantity = int.Parse(config.Value);
                                     break;
-                                }
 
-                                try
-                                {
-                                    var rangeConfig = JsonSerializer.Deserialize<RangeConfigModel>(config.RangeConfig);
-
-                                    if (rangeConfig?.ranges != null)
+                                case "Percentage":
+                                    if (decimal.TryParse(config.Value, out var percentValue))
                                     {
-                                        var range = rangeConfig.ranges
+                                        var rawQuantity = (double)(data.Quantity * percentValue) / 100;
+
+                                        if (innerCapacity > 10)
+                                            calculatedQuantity = (int)Math.Ceiling(rawQuantity / innerCapacity) * innerCapacity;
+                                        else
+                                            calculatedQuantity = (int)Math.Ceiling(rawQuantity / outerCapacity) * outerCapacity;
+                                    }
+                                    break;
+
+                                case "Range":
+                                    if (!string.IsNullOrEmpty(config.RangeConfig))
+                                    {
+                                        var rangeConfig = JsonSerializer.Deserialize<RangeConfigModel>(config.RangeConfig);
+
+                                        var range = rangeConfig?.ranges?
                                             .FirstOrDefault(r => data.Quantity >= r.from && data.Quantity <= r.to);
 
                                         if (range != null)
-                                        {
                                             calculatedQuantity = range.value;
-                                        }
-                                        else
-                                        {
-                                            calculatedQuantity = 0;
-                                        }
                                     }
-                                }
-                                catch
-                                {
-                                    return BadRequest($"Invalid RangeConfig JSON for ExtraType {config.ExtraType}");
-                                }
+                                    break;
+                            }
 
-                                break;
+                            int innerCount = innerCapacity > 0
+                                ? (int)Math.Ceiling((double)calculatedQuantity / innerCapacity)
+                                : 0;
 
+                            int outerCount = outerCapacity > 0
+                                ? (int)Math.Ceiling((double)calculatedQuantity / outerCapacity)
+                                : 0;
+
+                            envelopesToAdd.Add(new ExtraEnvelopes
+                            {
+                                ProjectId = ProjectId,
+                                CatchNo = data.CatchNo,
+                                ExtraId = config.ExtraType,
+                                Quantity = calculatedQuantity,
+                                InnerEnvelope = innerCount.ToString(),
+                                OuterEnvelope = outerCount.ToString(),
+                            });
                         }
-
-                        int innerCount = (int)Math.Ceiling((double)calculatedQuantity / innerCapacity);
-                        int outerCount = (int)Math.Ceiling((double)calculatedQuantity / outerCapacity);
-
-                        envelopesToAdd.Add(new ExtraEnvelopes
-                        {
-                            ProjectId = ProjectId,
-                            CatchNo = data.CatchNo,
-                            ExtraId = config.ExtraType,
-                            Quantity = calculatedQuantity,
-                            InnerEnvelope = innerCount.ToString(),
-                            OuterEnvelope = outerCount.ToString(),
-                        });
                     }
+
+                    await _context.ExtrasEnvelope.AddRangeAsync(envelopesToAdd);
+                    await _context.SaveChangesAsync();
+
+                    envelopesToUse = envelopesToAdd;
                 }
 
-                await _context.ExtrasEnvelope.AddRangeAsync(envelopesToAdd);
-                await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Created ExtraEnvelopes for Project {ProjectId}", "ExtraEnvelopes", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, ProjectId);
-
-                // ------------------- 📊 Generate Excel Report -------------------
+                // =====================================================
+                // ✅ COMMON EXCEL GENERATION (USED BY BOTH MODES)
+                // =====================================================
 
                 var allNRData = await _context.NRDatas
                     .Where(x => x.ProjectId == ProjectId)
                     .ToListAsync();
 
-                var extraconfig = await _context.ExtraConfigurations
-                    .Where(x => x.ProjectId == ProjectId).ToListAsync();
-                if (extraConfig == null || !extraConfig.Any())
-                {
-                    _loggerService.LogError($"No ExtraConfiguration found for ProjectId: {ProjectId}", "", "ExtraEnvelopes");
-                    return BadRequest("No ExtraConfiguration found for the project.");
-                }
+                var extraConfigList = await _context.ExtraConfigurations
+                    .Where(x => x.ProjectId == ProjectId)
+                    .ToListAsync();
 
                 var groupedByNodal = allNRData.GroupBy(x => x.NodalCode).ToList();
 
@@ -261,174 +268,90 @@ namespace Tools.Controllers
                 foreach (var nodalGroup in groupedByNodal)
                 {
                     var catchNos = nodalGroup.Select(x => x.CatchNo).ToHashSet();
-                    var extras1 = envelopesToAdd.Where(e => e.ExtraId == 1 && catchNos.Contains(e.CatchNo)).ToList();
-                    if (!extras1.Any())
-                    {
-                        continue;
-                    }
+
+                    var extras1 = envelopesToUse
+                        .Where(e => e.ExtraId == 1 && catchNos.Contains(e.CatchNo))
+                        .ToList();
+
                     foreach (var extra in extras1)
                     {
                         var baseRow = allNRData.FirstOrDefault(x => x.CatchNo == extra.CatchNo);
+                        var config = extraConfigList.FirstOrDefault(c => c.ExtraType == extra.ExtraId);
 
-                        if (baseRow == null)
-                        {
-                            _loggerService.LogError($"Base row not found for CatchNo: {extra.CatchNo} in NRData", "", "ExtraEnvelopes");
-                            continue; // Skip to the next entry
-                        }
-
-
-                        var config = extraConfig.FirstOrDefault(c => c.ExtraType == extra.ExtraId);
-                        if (config == null) continue;
+                        if (baseRow == null || config == null) continue;
 
                         var dict = ExtraEnvelopeToDictionary(baseRow, extra, config, extraHeaders, innerKeys, outerKeys);
                         allRows.Add(dict);
-
                     }
                 }
 
-                // ➕ Add ExtraTypeId = 2 (University) and 3 (Office) at the end
                 foreach (var extraType in new[] { 2, 3 })
                 {
-                    var extras = envelopesToAdd.Where(e => e.ExtraId == extraType).ToList();
-                    if (!extras.Any())
-                    {
-                        continue;
-                    }
+                    var extras = envelopesToUse.Where(e => e.ExtraId == extraType).ToList();
+
                     foreach (var extra in extras)
                     {
                         var baseRow = allNRData.FirstOrDefault(x => x.CatchNo == extra.CatchNo);
-                        if (baseRow == null)
-                        {
-                            continue;
-                        }
-                        var config = extraConfig.FirstOrDefault(c => c.ExtraType == extra.ExtraId);
-                        if (config == null) continue;
+                        var config = extraConfigList.FirstOrDefault(c => c.ExtraType == extra.ExtraId);
+
+                        if (baseRow == null || config == null) continue;
 
                         var dict = ExtraEnvelopeToDictionary(baseRow, extra, config, extraHeaders, innerKeys, outerKeys);
                         allRows.Add(dict);
-
-
                     }
                 }
+
                 if (!allRows.Any())
-                {
-                    _loggerService.LogError("No valid rows found for Excel generation", "", "ExtraEnvelopes");
-                    return BadRequest("No valid data to generate Excel report.");
-                }
+                    return BadRequest("No valid data for Excel");
 
-                // Create Excel
-                var allHeaders = typeof(Tools.Models.NRData).GetProperties().Select(p => p.Name).Where(p => p != "Id" && p != "ProjectId").ToList();
-                // Ensure CenterSort and NodalSort columns always appear in the Excel file
-                if (!allHeaders.Contains("NodalSort")) allHeaders.Add("NodalSort");
-                if (!allHeaders.Contains("CenterSort")) allHeaders.Add("CenterSort");
-                if (!allHeaders.Contains("RouteSort")) allHeaders.Add("RouteSort");
+                var headers = typeof(NRData).GetProperties()
+                    .Select(p => p.Name)
+                    .Where(p => p != "Id" && p != "ProjectId")
+                    .ToList();
 
-                allHeaders.AddRange(extraHeaders.OrderBy(x => x));
-                allHeaders.AddRange(innerKeys.OrderBy(x => x));
-                allHeaders.AddRange(outerKeys.OrderBy(x => x));
+                headers.AddRange(extraHeaders);
+                headers.AddRange(innerKeys);
+                headers.AddRange(outerKeys);
 
-                var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
-                if (!Directory.Exists(reportPath))
-                {
-                    Directory.CreateDirectory(reportPath);
-                }
-                var filename = "ExtrasCalculation.xlsx";
-                var filePath = Path.Combine(reportPath, filename);
+                var path = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
+                if (!Directory.Exists(path))
+                    Directory.CreateDirectory(path);
 
-                // 📁 Skip generation if file already exists
+                var filePath = Path.Combine(path, "ExtrasCalculation.xlsx");
+
                 if (System.IO.File.Exists(filePath))
-                {
                     System.IO.File.Delete(filePath);
-                }
-                var nonEmptyColumns = new List<string>();
 
-                // List to hold all rows after removing empty columns
-                var filteredRows = new List<Dictionary<string, object>>();
-
-                // Iterate over allRows to check for non-empty columns
-                try
+                using (var package = new ExcelPackage())
                 {
-                    foreach (var row in allRows)
+                    var ws = package.Workbook.Worksheets.Add("Extra Envelope");
+
+                    for (int i = 0; i < headers.Count; i++)
+                        ws.Cells[1, i + 1].Value = headers[i];
+
+                    int row = 2;
+
+                    foreach (var data in allRows)
                     {
-                        var filteredRow = new Dictionary<string, object>();
-                        if (!row.ContainsKey("NodalSort")) row["NodalSort"] = "";
-                        if (!row.ContainsKey("CenterSort")) row["CenterSort"] = "";
-                        if (!row.ContainsKey("RouteSort")) row["RouteSort"] = "";
-                        foreach (var header in allHeaders)
+                        for (int col = 0; col < headers.Count; col++)
                         {
-                            if (row.ContainsKey(header))
-                            {
-                                row.TryGetValue(header, out var value);
-                                if (value != null && !string.IsNullOrEmpty(value.ToString()))
-                                {
-                                    filteredRow[header] = value;
-                                    if (!nonEmptyColumns.Contains(header))
-                                    {
-                                        nonEmptyColumns.Add(header);  // Mark the column as non-empty
-                                    }
-                                }
-                            }
+                            data.TryGetValue(headers[col], out object val);
+                            ws.Cells[row, col + 1].Value = val?.ToString();
                         }
-
-                        if (filteredRow.Any())  // Add row only if it has any data
-                        {
-                            filteredRows.Add(filteredRow);
-                        }
+                        row++;
                     }
+
+                    ws.Cells[ws.Dimension.Address].AutoFitColumns();
+                    package.SaveAs(new FileInfo(filePath));
                 }
-                catch (Exception ex)
+
+                return Ok(new
                 {
-                    _loggerService.LogError("Error processing rows for Excel file", ex.ToString(), "ExtraEnvelopesController");
-                    throw new Exception("Error generating Excel report", ex); // Rethrow after logging
-                }
-
-                if (!filteredRows.Any())
-                {
-                    _loggerService.LogError("No valid rows found after filtering", "", "ExtraEnvelopes");
-                    return BadRequest("No valid data to save in the Excel file.");
-                }
-                try
-                {
-                    using (var package = new ExcelPackage())
-                    {
-                        var ws = package.Workbook.Worksheets.Add("Extra Envelope");
-                        if (!nonEmptyColumns.Any())
-                        {
-                            _loggerService.LogError("No non-empty columns found for Excel report", "", "ExtraEnvelopes");
-                            return BadRequest("No data to write to Excel.");
-                        }
-
-                        var validHeaders = nonEmptyColumns;
-                        for (int i = 0; i < validHeaders.Count; i++)
-                        {
-                            ws.Cells[1, i + 1].Value = validHeaders[i];
-                            ws.Cells[1, i + 1].Style.Font.Bold = true;
-                        }
-
-                        int rowIdx = 2;
-                        foreach (var row in filteredRows)
-                        {
-                            for (int colIdx = 0; colIdx < validHeaders.Count; colIdx++)
-                            {
-                                var key = validHeaders[colIdx];
-                                row.TryGetValue(key, out object value);
-                                ws.Cells[rowIdx, colIdx + 1].Value = value?.ToString() ?? "";
-                            }
-                            rowIdx++;
-                        }
-
-                        ws.Cells[ws.Dimension.Address].AutoFitColumns();
-                        ws.View.FreezePanes(2, 1);
-                        package.SaveAs(new FileInfo(filePath));
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _loggerService.LogError("Error saving Excel file", ex.ToString(), "ExtraEnvelopesController");
-                    throw new Exception("Error generating Excel report", ex); // Rethrow after logging
-                }
-
-                return Ok(envelopesToAdd);
+                    message = isOnlyReport
+                        ? "Report generated from existing data (GroupId = 28)"
+                        : "Data calculated, saved, and report generated",
+                    data = envelopesToUse
+                });
             }
             catch (Exception ex)
             {
@@ -463,7 +386,7 @@ namespace Tools.Controllers
                 ["CatchNo"] = baseRow.CatchNo,
                 ["ExamTime"] = baseRow.ExamTime,
                 ["ExamDate"] = baseRow.ExamDate,
-                ["NodalCode"] = baseRow.NodalCode,
+                ["NodalCode"] = "",
                 ["Quantity"] = extra.Quantity,
                 ["CenterSort"] = baseRow.CenterCode,
                 ["RouteSort"] = baseRow.RouteSort
