@@ -624,12 +624,10 @@ namespace Tools.Controllers
                     .Where(x => x.ProjectId == projectId)
                     .ToListAsync();
 
-
                 var nrDatasToAdd = new List<NRData>();
                 var extraEnvelopesToAdd = new List<ExtraEnvelopes>();
 
-                var nRDataType = typeof(NRData);
-                var properties = nRDataType
+                var properties = typeof(NRData)
                     .GetProperties()
                     .ToDictionary(p => p.Name.ToLower(), p => p);
 
@@ -637,8 +635,7 @@ namespace Tools.Controllers
                 {
                     var nRData = new NRData
                     {
-                        ProjectId = projectId,
-                        
+                        ProjectId = projectId
                     };
 
                     var extraData = new Dictionary<string, string>();
@@ -662,7 +659,7 @@ namespace Tools.Controllers
                             }
                             catch (Exception e)
                             {
-                                throw new Exception($"Error converting '{prop.Name}' value '{value}' to {propInfo.PropertyType.Name}", e);
+                                throw new Exception($"Error converting '{prop.Name}' value '{value}'", e);
                             }
                         }
                         else
@@ -671,9 +668,9 @@ namespace Tools.Controllers
                         }
                     }
 
-                    // ✅ Auto-calculate Day from ExamDate
+                    // ✅ Day calculation
                     if (!string.IsNullOrWhiteSpace(nRData.ExamDate) &&
-     DateTime.TryParse(nRData.ExamDate, out DateTime examDate))
+                        DateTime.TryParse(nRData.ExamDate, out DateTime examDate))
                     {
                         nRData.Day = examDate.DayOfWeek.ToString();
                     }
@@ -682,9 +679,32 @@ namespace Tools.Controllers
                         nRData.NRDatas = JsonSerializer.Serialize(extraData);
 
                     // =============================
+                    // ✅ DUPLICATE CHECK
+                    // =============================
+                    var existingRecord = await _context.NRDatas.FirstOrDefaultAsync(x =>
+                        x.ProjectId == projectId &&
+                        x.CatchNo == nRData.CatchNo &&
+                        x.CenterCode == nRData.CenterCode &&
+                        x.ExamDate == nRData.ExamDate
+                    );
+
+                    if (existingRecord != null)
+                    {
+                        if (existingRecord.UploadList == null || !existingRecord.UploadList.Any())
+                            existingRecord.UploadList = new List<int> { 1 };
+                        else
+                            existingRecord.UploadList.Add(existingRecord.UploadList.Max() + 1);
+
+                        continue;
+                    }
+                    else
+                    {
+                        nRData.UploadList = new List<int> { 1 };
+                    }
+
+                    // =============================
                     // EXTRA CENTER LOGIC
                     // =============================
-
                     int? extraTypeId = nRData.CenterCode switch
                     {
                         "Nodal Extra" => 1,
@@ -692,15 +712,14 @@ namespace Tools.Controllers
                         "Office Extra" => 3,
                         _ => null
                     };
-                  
 
-                   
                     if (extraTypeId.HasValue)
                     {
                         var config = extraConfigs.FirstOrDefault(x => x.ExtraType == extraTypeId);
                         if (config != null)
                         {
                             EnvelopeType envelopeType = null;
+
                             if (!string.IsNullOrWhiteSpace(config.EnvelopeType))
                             {
                                 try
@@ -712,20 +731,21 @@ namespace Tools.Controllers
 
                             int? innerCapacity = envelopeType != null ? GetEnvelopeCapacity(envelopeType.Inner) : null;
                             int? outerCapacity = envelopeType != null ? GetEnvelopeCapacity(envelopeType.Outer) : null;
+
                             int roundedQty = nRData.NRQuantity;
 
-                            // 🔥 Pick lowest available envelope
                             if (innerCapacity > 0)
                                 roundedQty = (int)Math.Ceiling((double)nRData.NRQuantity / innerCapacity.Value) * innerCapacity.Value;
                             else if (outerCapacity > 0)
                                 roundedQty = (int)Math.Ceiling((double)nRData.NRQuantity / outerCapacity.Value) * outerCapacity.Value;
 
                             string innerEnvelope = innerCapacity > 0
-                                 ? Math.Ceiling((double)roundedQty / innerCapacity.Value).ToString()
-                                 : null;
+                                ? Math.Ceiling((double)roundedQty / innerCapacity.Value).ToString()
+                                : "0";
+
                             string outerEnvelope = outerCapacity > 0
                                 ? Math.Ceiling((double)roundedQty / outerCapacity.Value).ToString()
-                                : null;
+                                : "0";
 
                             extraEnvelopesToAdd.Add(new ExtraEnvelopes
                             {
@@ -738,6 +758,7 @@ namespace Tools.Controllers
                                 Status = 1
                             });
                         }
+
                         continue;
                     }
 
@@ -752,12 +773,6 @@ namespace Tools.Controllers
 
                 await _context.SaveChangesAsync();
 
-                _loggerService.LogEvent(
-                    $"Created NRData/Extras for Project {projectId}",
-                    "NRData",
-                    User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
-                    projectId);
-
                 return Ok(new
                 {
                     message = "Data inserted successfully",
@@ -765,18 +780,8 @@ namespace Tools.Controllers
                     ExtraEnvelopeCount = extraEnvelopesToAdd.Count
                 });
             }
-            catch (DbUpdateException dbEx)
-            {
-                var error = dbEx.InnerException?.Message ?? dbEx.Message;
-
-                _loggerService.LogError("Database update error", error, nameof(NRDatasController));
-
-                return StatusCode(500, error);
-            }
             catch (Exception ex)
             {
-                _loggerService.LogError("NRData processing error", ex.ToString(), nameof(NRDatasController));
-
                 return StatusCode(500, ex.Message);
             }
         }

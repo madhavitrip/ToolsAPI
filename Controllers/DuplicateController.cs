@@ -34,7 +34,7 @@ namespace Tools.Controllers
             try
             {
                 var data = await _context.NRDatas
-                    .Where(p => p.ProjectId == ProjectId && p.Status == true)
+                    .Where(p => p.ProjectId == ProjectId && p.Status == true && p.Steps==0)
                     .ToListAsync();
 
                 var projectconfig = await _context.ProjectConfigs

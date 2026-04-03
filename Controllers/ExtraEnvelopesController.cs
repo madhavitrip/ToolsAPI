@@ -160,7 +160,7 @@ namespace Tools.Controllers
             try
             {
                 var nrDataList = await _context.NRDatas
-                    .Where(d => d.ProjectId == ProjectId && d.Status == true)
+                    .Where(d => d.ProjectId == ProjectId && d.Status == true && d.Steps==1)
                     .ToListAsync();
 
                 var groupedNR = nrDataList
@@ -292,15 +292,16 @@ namespace Tools.Controllers
                 }
 
                 await _context.ExtrasEnvelope.AddRangeAsync(envelopesToAdd);
+                foreach (var nrData in nrDataList)
+                {
+                    nrData.Steps = 2; // Assuming NRData has a Step property
+                }
+                await _context.SaveChangesAsync();
                 await _context.SaveChangesAsync();
                 _loggerService.LogEvent($"Created ExtraEnvelopes for Project {ProjectId}", "ExtraEnvelopes", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, ProjectId);
 
                 // ------------------- 📊 Generate Excel Report -------------------
-
-                var allNRData = await _context.NRDatas
-                    .Where(x => x.ProjectId == ProjectId)
-                    .ToListAsync();
-
+               
                 var extraconfig = await _context.ExtraConfigurations
                     .Where(x => x.ProjectId == ProjectId).ToListAsync();
                 if (extraConfig == null || !extraConfig.Any())
@@ -309,7 +310,7 @@ namespace Tools.Controllers
                     return BadRequest("No ExtraConfiguration found for the project.");
                 }
 
-                var groupedByNodal = allNRData.GroupBy(x => x.NodalCode).ToList();
+                var groupedByNodal = nrDataList.GroupBy(x => x.NodalCode).ToList();
 
                 var extraHeaders = new HashSet<string>();
                 var innerKeys = new HashSet<string>();
@@ -327,7 +328,7 @@ namespace Tools.Controllers
                     }
                     foreach (var extra in extras1)
                     {
-                        var baseRow = allNRData.FirstOrDefault(x => x.CatchNo == extra.CatchNo);
+                        var baseRow = nrDataList.FirstOrDefault(x => x.CatchNo == extra.CatchNo);
 
                         if (baseRow == null)
                         {
@@ -355,7 +356,7 @@ namespace Tools.Controllers
                     }
                     foreach (var extra in extras)
                     {
-                        var baseRow = allNRData.FirstOrDefault(x => x.CatchNo == extra.CatchNo);
+                        var baseRow = nrDataList.FirstOrDefault(x => x.CatchNo == extra.CatchNo);
                         if (baseRow == null)
                         {
                             continue;
