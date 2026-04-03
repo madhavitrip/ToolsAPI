@@ -508,10 +508,10 @@ namespace Tools.Controllers
 
                             string innerEnvelope = innerCapacity > 0
                                  ? Math.Ceiling((double)roundedQty / innerCapacity.Value).ToString()
-                                 : null;
+                                 :"0";
                             string outerEnvelope = outerCapacity > 0
                                 ? Math.Ceiling((double)roundedQty / outerCapacity.Value).ToString()
-                                : null;
+                                : "0";
 
                             extraEnvelopesToAdd.Add(new ExtraEnvelopes
                             {
