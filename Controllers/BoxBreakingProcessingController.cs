@@ -591,6 +591,11 @@ namespace Tools.Controllers
                 }
              
                 _context.BoxBreakingResults.AddRange(boxResults);
+                foreach (var nr in nrData)
+                {
+                    nr.Steps = 4; // Assuming NRData has a Step property
+                }
+                await _context.SaveChangesAsync();
                 await _context.SaveChangesAsync();
 
                 _loggerService.LogEvent(
