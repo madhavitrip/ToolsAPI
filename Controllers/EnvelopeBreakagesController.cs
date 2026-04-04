@@ -235,7 +235,7 @@ namespace Tools.Controllers
 
 
         // GET: api/EnvelopeBreakages/5
-        [HttpGet("{id}")]
+        [HttpGet("{id:int}")]
         public async Task<ActionResult<EnvelopeBreakage>> GetEnvelopeBreakage(int id)
         {
             var envelopeBreakage = await _context.EnvelopeBreakages.FindAsync(id);

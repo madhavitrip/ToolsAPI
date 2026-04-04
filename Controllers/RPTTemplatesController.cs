@@ -486,6 +486,35 @@ namespace Tools.Controllers
             });
         }
 
+        // POST: api/RPTTemplates/{id}/activate
+        // Marks a specific version as active for its scope (standard/group/project)
+        [HttpPost("{id}/activate")]
+        public async Task<ActionResult> ActivateTemplate(int id)
+        {
+            var template = await _context.RPTTemplates.FindAsync(id);
+            if (template == null) return NotFound("Template not found.");
+
+            var scopeQuery = _context.RPTTemplates
+                .Where(t => t.TypeId == template.TypeId
+                            && t.TemplateName == template.TemplateName
+                            && t.GroupId == template.GroupId
+                            && t.ProjectId == template.ProjectId);
+
+            var items = await scopeQuery.ToListAsync();
+            if (items.Count == 0)
+                return NotFound("Template scope not found.");
+
+            var now = DateTime.Now;
+            foreach (var item in items)
+            {
+                item.IsActive = item.TemplateId == template.TemplateId;
+                item.UpdatedDate = now;
+            }
+
+            await _context.SaveChangesAsync();
+            return Ok(new { templateId = template.TemplateId, message = "Template activated." });
+        }
+
         // POST: api/RPTTemplates/import-from-group
         // Copy all active templates from a source group+type to a new group+type
         [HttpPost("import-from-group")]
