@@ -478,7 +478,7 @@ namespace Tools.Controllers
                     .ToListAsync();
 
                 var extraEnvelopes = await _context.ExtrasEnvelope
-                    .Where(x => x.ProjectId == ProjectId)
+                    .Where(x => x.ProjectId == ProjectId && x.Status == 1)
                     .ToListAsync();
 
                 var extraConfigs = await _context.ExtraConfigurations
@@ -771,7 +771,7 @@ namespace Tools.Controllers
                 // 3️⃣ Get ExtraEnvelopes and Configurations
                 // ==============================
                 var extraEnvelopes = await _context.ExtrasEnvelope
-                    .Where(x => x.ProjectId == ProjectId)
+                    .Where(x => x.ProjectId == ProjectId && x.Status == 1)
                     .ToListAsync();
 
                 var extraConfigs = await _context.ExtraConfigurations
@@ -1979,7 +1979,7 @@ namespace Tools.Controllers
                 .ToListAsync();
 
             var extras = await _context.ExtrasEnvelope
-                .Where(p => p.ProjectId == ProjectId)
+                .Where(p => p.ProjectId == ProjectId && p.Status == 1)
                 .ToListAsync();
 
             var projectconfig = await _context.ProjectConfigs

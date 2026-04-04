@@ -132,7 +132,8 @@ namespace Tools.Controllers
                                 ExtraId = extraTypeId.Value,
                                 Quantity = roundedQty,
                                 InnerEnvelope = innerEnvelope,
-                                OuterEnvelope = outerEnvelope
+                                OuterEnvelope = outerEnvelope,
+                                Status = 1
                             });
                         }
 

@@ -36,7 +36,65 @@ namespace Tools.Controllers
         {
             var NrData = await _context.NRDatas.Where(p => p.ProjectId == ProjectId && p.Status == true).ToListAsync();
 
-            return await _context.ExtrasEnvelope.ToListAsync();
+            return await _context.ExtrasEnvelope
+                .Where(e => e.ProjectId == ProjectId && e.Status == 1)
+                .ToListAsync();
+        }
+
+        public class ExtraEnvelopeByCatchRequest
+        {
+            public int ProjectId { get; set; }
+            public List<string> CatchNos { get; set; } = new();
+        }
+
+        [HttpPost("ByCatchNos")]
+        public async Task<ActionResult<IEnumerable<ExtraEnvelopes>>> GetExtrasByCatchNos(
+            [FromBody] ExtraEnvelopeByCatchRequest request)
+        {
+            if (request == null || request.ProjectId <= 0)
+            {
+                return BadRequest("ProjectId is required.");
+            }
+
+            var normalizedCatchNos = (request.CatchNos ?? new List<string>())
+                .Select(c => (c ?? string.Empty).Trim())
+                .Where(c => !string.IsNullOrWhiteSpace(c))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (!normalizedCatchNos.Any())
+            {
+                return Ok(new List<ExtraEnvelopes>());
+            }
+
+            var extras = await _context.ExtrasEnvelope
+                .Where(e =>
+                    e.ProjectId == request.ProjectId &&
+                    e.Status == 1 &&
+                    e.CatchNo != null &&
+                    normalizedCatchNos.Contains(e.CatchNo))
+                .ToListAsync();
+
+            var uniqueExtras = extras
+                .GroupBy(e => new { CatchNo = e.CatchNo, ExtraId = e.ExtraId })
+                .Select(group =>
+                {
+                    var latest = group.OrderByDescending(e => e.Id).First();
+                    return new ExtraEnvelopes
+                    {
+                        Id = latest.Id,
+                        ProjectId = latest.ProjectId,
+                        CatchNo = latest.CatchNo,
+                        ExtraId = latest.ExtraId,
+                        Quantity = latest.Quantity,
+                        InnerEnvelope = latest.InnerEnvelope,
+                        OuterEnvelope = latest.OuterEnvelope,
+                        Status = latest.Status,
+                    };
+                })
+                .ToList();
+
+            return Ok(uniqueExtras);
         }
 
         // GET: api/ExtraEnvelopes/5
@@ -230,6 +288,7 @@ namespace Tools.Controllers
                                 Quantity = calculatedQuantity,
                                 InnerEnvelope = innerCount.ToString(),
                                 OuterEnvelope = outerCount.ToString(),
+                                Status = 1
                             });
                         }
                     }
