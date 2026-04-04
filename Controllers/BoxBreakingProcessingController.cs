@@ -39,7 +39,7 @@ namespace Tools.Controllers
                     return NotFound("No envelope breaking results found. Run ProcessEnvelopeBreaking first.");
 
                 var envelopeResults = await _context.EnvelopeBreakingResults
-                    .Where(r => r.ProjectId == ProjectId && r.UploadBatch == maxBatch.Value)
+                    .Where(r => r.ProjectId == ProjectId && r.UploadBatch == maxBatch.Value && r.SerialNumber != 0)
                     .ToListAsync();
 
                 var nrData = await _context.NRDatas
@@ -629,7 +629,7 @@ namespace Tools.Controllers
         {
             try
             {
-                var maxBatch = await _context.EnvelopeBreakingResults
+                var maxBatch = await _context.BoxBreakingResults
                    .Where(r => r.ProjectId == ProjectId)
                    .MaxAsync(r => (int?)r.UploadBatch);
                 var boxResults = await _context.BoxBreakingResults

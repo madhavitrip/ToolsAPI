@@ -104,12 +104,12 @@ namespace Tools.Controllers
                         mssDict["isMss"] = true;
                         mssDict["ExtraAttached"] = false;
                         mssDict["CatchNo"] = catchNo;
-                        mssDict["CenterCode"] = mss.MssType;
+                        mssDict["CenterCode"] = "";
                         mssDict["CourseName"] = courseName;
                         mssDict["ExamTime"] = examTime;
                         mssDict["ExamDate"] = examDate;
                         mssDict["Quantity"] = 0;
-                        mssDict["EnvQuantity"] = 0;
+                        mssDict["EnvQuantity"] = mss.MssType;
                         mssDict["NodalCode"] = "";
                         mssDict["CenterEnv"] = 0;
                         mssDict["TotalEnv"] = 0;
@@ -555,7 +555,7 @@ namespace Tools.Controllers
                             NrDataId = 0,
                             ExtraId = null,
                             CatchNo = catchNo,
-                            EnvQuantity = 0,
+                            EnvQuantity = dict["EnvQuantity"]?.ToString(),
                             CenterEnv = 0,
                             TotalEnv = 0,
                             Env = "",
@@ -629,7 +629,7 @@ namespace Tools.Controllers
                         NrDataId = nrDataId ?? 0,
                         ExtraId = extraId,
                         CatchNo = catchNo,
-                        EnvQuantity = (int)dict["EnvQuantity"],
+                        EnvQuantity = dict["EnvQuantity"]?.ToString(),
                         CenterEnv = (int)dict["CenterEnv"],
                         TotalEnv = (int)dict["TotalEnv"],
                         Env = dict["Env"]?.ToString(),
@@ -769,7 +769,6 @@ namespace Tools.Controllers
                 if (projectconfig == null)
                     return NotFound("Project config not found");
 
-                // ✅ Get FULL NRData (not just NRQuantity)
                 var nrDataDict = await _context.NRDatas
                     .Where(p => p.ProjectId == ProjectId)
                     .ToDictionaryAsync(p => p.Id);
@@ -786,14 +785,14 @@ namespace Tools.Controllers
                 IQueryable<EnvelopeBreakingResult> query = _context.EnvelopeBreakingResults
                     .Where(r => r.ProjectId == ProjectId);
 
-                    var maxBatch = await _context.EnvelopeBreakingResults
-                        .Where(r => r.ProjectId == ProjectId)
-                        .MaxAsync(r => (int?)r.UploadBatch);
+                var maxBatch = await _context.EnvelopeBreakingResults
+                    .Where(r => r.ProjectId == ProjectId)
+                    .MaxAsync(r => (int?)r.UploadBatch);
 
-                    if (maxBatch.HasValue)
-                       query = query.Where(r => r.UploadBatch == maxBatch.Value);
+                if (maxBatch.HasValue)
+                    query = query.Where(r => r.UploadBatch == maxBatch.Value);
 
-                var results = await query.ToListAsync();
+                var results = await query.OrderBy(r => r.Id).ToListAsync();
 
                 if (!results.Any())
                     return NotFound("No envelope breaking results found");
@@ -805,9 +804,13 @@ namespace Tools.Controllers
                     var row = new ExpandoObject();
                     var rowDict = (IDictionary<string, object>)row;
 
-                    // ✅ Get NRData
+                    // ✅ Identify MSS rows: SerialNumber == 0 and NrDataId == 0
+                    bool isMssRow = result.NrDataId == 0 && result.SerialNumber == 0;
+                    rowDict["isMss"] = isMssRow;
+
+                    // ✅ Get NRData (only for non-MSS rows)
                     NRData nr = null;
-                    if (result.NrDataId != 0 && nrDataDict.TryGetValue(result.NrDataId, out var nrData))
+                    if (!isMssRow && result.NrDataId != 0 && nrDataDict.TryGetValue(result.NrDataId, out var nrData))
                     {
                         nr = nrData;
                     }
@@ -832,7 +835,6 @@ namespace Tools.Controllers
                         try
                         {
                             var extraFields = JsonSerializer.Deserialize<Dictionary<string, string>>(nr.NRDatas);
-
                             foreach (var kvp in extraFields)
                             {
                                 rowDict[kvp.Key] = kvp.Value;
@@ -844,6 +846,7 @@ namespace Tools.Controllers
                     // ============================
                     // ✅ ENVELOPE BREAKING FIELDS
                     // ============================
+                    rowDict["SerialNo"] = result.SerialNumber;
                     rowDict["CatchNo"] = result.CatchNo ?? "";
                     rowDict["CenterCode"] = result.CenterCode ?? "";
                     rowDict["CenterSort"] = result.CenterSort;
@@ -854,21 +857,38 @@ namespace Tools.Controllers
                     rowDict["NodalSort"] = result.NodalSort;
                     rowDict["Route"] = result.Route ?? "";
                     rowDict["RouteSort"] = result.RouteSort;
-
                     rowDict["EnvQuantity"] = result.EnvQuantity;
                     rowDict["CenterEnv"] = result.CenterEnv;
                     rowDict["TotalEnv"] = result.TotalEnv;
                     rowDict["Env"] = result.Env ?? "";
                     rowDict["SerialNumber"] = result.SerialNumber;
                     rowDict["BookletSerial"] = result.BookletSerial ?? "";
-                    rowDict["OmrSerial"] = result.OmrSerial;
+                    rowDict["OmrSerial"] = result.OmrSerial ?? "";
                     rowDict["CourseName"] = result.CourseName ?? "";
 
                     fullData.Add(row);
                 }
 
                 // ============================
-                // ✅ SORTING
+                // ✅ STEP 1: Separate MSS and non-MSS rows
+                // ============================
+                var nonMssData = fullData
+                    .Where(x => {
+                        var d = (IDictionary<string, object>)x;
+                        return d.ContainsKey("isMss") && !(bool)d["isMss"];
+                    }).ToList();
+
+                // Group MSS rows by CatchNo for re-insertion later
+                var mssRowsByCatch = fullData
+                    .Where(x => {
+                        var d = (IDictionary<string, object>)x;
+                        return d.ContainsKey("isMss") && (bool)d["isMss"];
+                    })
+                    .GroupBy(x => ((IDictionary<string, object>)x)["CatchNo"]?.ToString())
+                    .ToDictionary(g => g.Key, g => g.ToList());
+
+                // ============================
+                // ✅ STEP 2: Sort only non-MSS rows
                 // ============================
                 IOrderedEnumerable<dynamic> ordered = null;
 
@@ -906,35 +926,67 @@ namespace Tools.Controllers
                     };
 
                     ordered = ordered == null
-                        ? fullData.OrderBy(keySelector)
+                        ? nonMssData.OrderBy(keySelector)
                         : ordered.ThenBy(keySelector);
                 }
 
-                var sortedList = ordered?.ToList() ?? fullData;
+                var sortedNonMss = ordered?.ToList() ?? nonMssData;
 
                 // ============================
-                // ✅ SERIAL RESET PER CATCH
+                // ✅ STEP 3: Re-insert MSS rows at correct positions
                 // ============================
-                int serial = 1;
-                string prevCatch = null;
+                string mssMode = projectconfig.MssAttached?.ToLower();
+                var finalSortedList = new List<dynamic>();
+                string lastCatchForMss = null;
+                var buffer = new List<dynamic>();
 
-                foreach (var item in sortedList)
+                foreach (var item in sortedNonMss)
                 {
-                    var dict = (IDictionary<string, object>)item;
-                    string currentCatch = dict["CatchNo"]?.ToString();
+                    var itemDict = (IDictionary<string, object>)item;
+                    string catchNo = itemDict["CatchNo"]?.ToString();
 
-                    if (prevCatch != null && currentCatch != prevCatch)
-                        serial = 1;
+                    if (catchNo != lastCatchForMss && lastCatchForMss != null)
+                    {
+                        if (mssMode == "end")
+                        {
+                            finalSortedList.AddRange(buffer);
+                            if (mssRowsByCatch.ContainsKey(lastCatchForMss))
+                                finalSortedList.AddRange(mssRowsByCatch[lastCatchForMss]);
+                        }
+                        else if (mssMode == "start")
+                        {
+                            finalSortedList.AddRange(buffer);
+                            if (mssRowsByCatch.ContainsKey(catchNo))
+                                finalSortedList.AddRange(mssRowsByCatch[catchNo]);
+                        }
+                        buffer.Clear();
+                    }
 
-                    dict["SerialNumber"] = serial++;
-                    prevCatch = currentCatch;
+                    // Very first catch in start mode
+                    if (mssMode == "start" && lastCatchForMss == null)
+                    {
+                        if (mssRowsByCatch.ContainsKey(catchNo))
+                            finalSortedList.AddRange(mssRowsByCatch[catchNo]);
+                    }
+
+                    buffer.Add(item);
+                    lastCatchForMss = catchNo;
+                }
+
+                // Flush last buffer
+                if (buffer.Count > 0)
+                {
+                    finalSortedList.AddRange(buffer);
+                    if (mssMode == "end" && lastCatchForMss != null && mssRowsByCatch.ContainsKey(lastCatchForMss))
+                        finalSortedList.AddRange(mssRowsByCatch[lastCatchForMss]);
                 }
 
                 // ============================
-                // ✅ DYNAMIC HEADERS
+                // ✅ STEP 4: Collect all keys excluding internal "isMss" flag
                 // ============================
-                var allKeys = sortedList
+                var allKeys = finalSortedList
                     .SelectMany(x => ((IDictionary<string, object>)x).Keys)
+                    .Where(k => k != "isMss")   // ← exclude internal flag from Excel
                     .Distinct()
                     .ToList();
 
@@ -961,8 +1013,7 @@ namespace Tools.Controllers
 
                     // Data
                     int rowIdx = 2;
-
-                    foreach (var item in sortedList)
+                    foreach (var item in finalSortedList)
                     {
                         var dict = (IDictionary<string, object>)item;
 
@@ -986,7 +1037,7 @@ namespace Tools.Controllers
                 {
                     message = "Report generated successfully",
                     filePath,
-                    recordsCount = sortedList.Count
+                    recordsCount = finalSortedList.Count
                 });
             }
             catch (Exception ex)
