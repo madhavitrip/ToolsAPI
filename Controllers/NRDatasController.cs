@@ -708,6 +708,15 @@ namespace Tools.Controllers
                     .Where(x => x.ProjectId == projectId)
                     .ToListAsync();
 
+                // =============================
+                // ✅ GET CURRENT BATCH NUMBER
+                // =============================
+                int currentBatch = await _context.NRDatas
+                    .Where(x => x.ProjectId == projectId && x.UploadList != null)
+                    .SelectMany(x => x.UploadList)
+                    .DefaultIfEmpty(0)
+                    .MaxAsync() + 1;
+
                 var nrDatasToAdd = new List<NRData>();
                 var extraEnvelopesToAdd = new List<ExtraEnvelopes>();
 
@@ -752,7 +761,9 @@ namespace Tools.Controllers
                         }
                     }
 
+                    // =============================
                     // ✅ Day calculation
+                    // =============================
                     if (!string.IsNullOrWhiteSpace(nRData.ExamDate) &&
                         DateTime.TryParse(nRData.ExamDate, out DateTime examDate))
                     {
@@ -774,16 +785,21 @@ namespace Tools.Controllers
 
                     if (existingRecord != null)
                     {
-                        if (existingRecord.UploadList == null || !existingRecord.UploadList.Any())
-                            existingRecord.UploadList = new List<int> { 1 };
-                        else
-                            existingRecord.UploadList.Add(existingRecord.UploadList.Max() + 1);
+                        if (existingRecord.UploadList == null)
+                            existingRecord.UploadList = new List<int>();
+
+                        // ✅ Add current batch only if not already present
+                        if (!existingRecord.UploadList.Contains(currentBatch))
+                        {
+                            existingRecord.UploadList.Add(currentBatch);
+                        }
 
                         continue;
                     }
                     else
                     {
-                        nRData.UploadList = new List<int> { 1 };
+                        // ✅ New record gets current batch
+                        nRData.UploadList = new List<int> { currentBatch };
                     }
 
                     // =============================
@@ -860,6 +876,7 @@ namespace Tools.Controllers
                 return Ok(new
                 {
                     message = "Data inserted successfully",
+                    Batch = currentBatch,
                     NRDataCount = nrDatasToAdd.Count,
                     ExtraEnvelopeCount = extraEnvelopesToAdd.Count
                 });
