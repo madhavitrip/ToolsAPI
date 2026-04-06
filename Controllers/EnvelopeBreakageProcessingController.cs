@@ -808,20 +808,16 @@ namespace Tools.Controllers
                     var row = new ExpandoObject();
                     var rowDict = (IDictionary<string, object>)row;
 
-                    // ✅ Identify MSS rows: SerialNumber == 0 and NrDataId == 0
                     bool isMssRow = result.NrDataId == 0 && result.SerialNumber == 0;
                     rowDict["isMss"] = isMssRow;
 
-                    // ✅ Get NRData (only for non-MSS rows)
                     NRData nr = null;
                     if (!isMssRow && result.NrDataId != 0 && nrDataDict.TryGetValue(result.NrDataId, out var nrData))
                     {
                         nr = nrData;
                     }
 
-                    // ============================
-                    // ✅ ADD NRDATA FIELDS
-                    // ============================
+                    // NR fields
                     if (nr != null)
                     {
                         rowDict["SubjectName"] = nr.SubjectName;
@@ -831,25 +827,24 @@ namespace Tools.Controllers
                         rowDict["NRQuantity"] = nr.NRQuantity;
                     }
 
-                    // ============================
-                    // ✅ PARSE NRDatas JSON (Dynamic)
-                    // ============================
+                    // JSON fields
                     if (nr != null && !string.IsNullOrEmpty(nr.NRDatas))
                     {
                         try
                         {
                             var extraFields = JsonSerializer.Deserialize<Dictionary<string, string>>(nr.NRDatas);
-                            foreach (var kvp in extraFields)
+                            if (extraFields != null)
                             {
-                                rowDict[kvp.Key] = kvp.Value;
+                                foreach (var kvp in extraFields)
+                                {
+                                    rowDict[kvp.Key] = kvp.Value;
+                                }
                             }
                         }
                         catch { }
                     }
 
-                    // ============================
-                    // ✅ ENVELOPE BREAKING FIELDS
-                    // ============================
+                    // Envelope fields
                     rowDict["SerialNo"] = result.SerialNumber;
                     rowDict["CatchNo"] = result.CatchNo ?? "";
                     rowDict["CenterCode"] = result.CenterCode ?? "";
@@ -873,27 +868,23 @@ namespace Tools.Controllers
                     fullData.Add(row);
                 }
 
-                // ============================
-                // ✅ STEP 1: Separate MSS and non-MSS rows
-                // ============================
-                var nonMssData = fullData
-                    .Where(x => {
-                        var d = (IDictionary<string, object>)x;
-                        return d.ContainsKey("isMss") && !(bool)d["isMss"];
-                    }).ToList();
+                // Separate MSS
+                var nonMssData = fullData.Where(x =>
+                {
+                    var d = (IDictionary<string, object>)x;
+                    return d.ContainsKey("isMss") && !(bool)d["isMss"];
+                }).ToList();
 
-                // Group MSS rows by CatchNo for re-insertion later
                 var mssRowsByCatch = fullData
-                    .Where(x => {
+                    .Where(x =>
+                    {
                         var d = (IDictionary<string, object>)x;
                         return d.ContainsKey("isMss") && (bool)d["isMss"];
                     })
                     .GroupBy(x => ((IDictionary<string, object>)x)["CatchNo"]?.ToString())
                     .ToDictionary(g => g.Key, g => g.ToList());
 
-                // ============================
-                // ✅ STEP 2: Sort only non-MSS rows
-                // ============================
+                // Sorting
                 IOrderedEnumerable<dynamic> ordered = null;
 
                 foreach (var fieldName in fieldNames)
@@ -902,27 +893,25 @@ namespace Tools.Controllers
                     {
                         var dict = (IDictionary<string, object>)record;
 
-                        if (!dict.ContainsKey(fieldName)) return null;
+                        if (!dict.ContainsKey(fieldName) || dict[fieldName] == null)
+                            return "";
 
                         var val = dict[fieldName];
-                        if (val == null) return null;
 
                         switch (fieldName)
                         {
                             case "RouteSort":
-                                return int.TryParse(val.ToString(), out int r) ? r : 0;
-
                             case "CenterSort":
-                                return int.TryParse(val.ToString(), out int c) ? c : 0;
+                                return int.TryParse(val.ToString(), out int i) ? i : 0;
 
                             case "NodalSort":
-                                return double.TryParse(val.ToString(), out double n) ? n : 0;
+                                return double.TryParse(val.ToString(), out double d) ? d : 0;
 
                             case "ExamDate":
                                 return DateTime.TryParseExact(val.ToString(), "dd-MM-yyyy",
                                     CultureInfo.InvariantCulture,
-                                    DateTimeStyles.None, out DateTime d)
-                                    ? d : DateTime.MinValue;
+                                    DateTimeStyles.None, out DateTime dt)
+                                    ? dt : DateTime.MinValue;
 
                             default:
                                 return val.ToString().Trim();
@@ -936,67 +925,59 @@ namespace Tools.Controllers
 
                 var sortedNonMss = ordered?.ToList() ?? nonMssData;
 
-                // ============================
-                // ✅ STEP 3: Re-insert MSS rows at correct positions
-                // ============================
+                // Reinsert MSS
                 string mssMode = projectconfig.MssAttached?.ToLower();
                 var finalSortedList = new List<dynamic>();
-                string lastCatchForMss = null;
+
+                string lastCatch = null;
                 var buffer = new List<dynamic>();
 
                 foreach (var item in sortedNonMss)
                 {
-                    var itemDict = (IDictionary<string, object>)item;
-                    string catchNo = itemDict["CatchNo"]?.ToString();
+                    var dict = (IDictionary<string, object>)item;
+                    string catchNo = dict["CatchNo"]?.ToString();
 
-                    if (catchNo != lastCatchForMss && lastCatchForMss != null)
+                    if (catchNo != lastCatch && lastCatch != null)
                     {
-                        if (mssMode == "end")
-                        {
-                            finalSortedList.AddRange(buffer);
-                            if (mssRowsByCatch.ContainsKey(lastCatchForMss))
-                                finalSortedList.AddRange(mssRowsByCatch[lastCatchForMss]);
-                        }
-                        else if (mssMode == "start")
-                        {
-                            finalSortedList.AddRange(buffer);
-                            if (mssRowsByCatch.ContainsKey(catchNo))
-                                finalSortedList.AddRange(mssRowsByCatch[catchNo]);
-                        }
+                        finalSortedList.AddRange(buffer);
+
+                        if (mssMode == "end" && mssRowsByCatch.ContainsKey(lastCatch))
+                            finalSortedList.AddRange(mssRowsByCatch[lastCatch]);
+
                         buffer.Clear();
                     }
 
-                    // Very first catch in start mode
-                    if (mssMode == "start" && lastCatchForMss == null)
+                    if (mssMode == "start" && lastCatch == null && mssRowsByCatch.ContainsKey(catchNo))
                     {
-                        if (mssRowsByCatch.ContainsKey(catchNo))
-                            finalSortedList.AddRange(mssRowsByCatch[catchNo]);
+                        finalSortedList.AddRange(mssRowsByCatch[catchNo]);
                     }
 
                     buffer.Add(item);
-                    lastCatchForMss = catchNo;
+                    lastCatch = catchNo;
                 }
 
-                // Flush last buffer
                 if (buffer.Count > 0)
                 {
                     finalSortedList.AddRange(buffer);
-                    if (mssMode == "end" && lastCatchForMss != null && mssRowsByCatch.ContainsKey(lastCatchForMss))
-                        finalSortedList.AddRange(mssRowsByCatch[lastCatchForMss]);
+
+                    if (mssMode == "end" && lastCatch != null && mssRowsByCatch.ContainsKey(lastCatch))
+                        finalSortedList.AddRange(mssRowsByCatch[lastCatch]);
                 }
 
-                // ============================
-                // ✅ STEP 4: Collect all keys excluding internal "isMss" flag
-                // ============================
+                // Columns
                 var allKeys = finalSortedList
                     .SelectMany(x => ((IDictionary<string, object>)x).Keys)
-                    .Where(k => k != "isMss")   // ← exclude internal flag from Excel
+                    .Where(k => k != "isMss")
                     .Distinct()
                     .ToList();
 
-                // ============================
-                // ✅ EXCEL GENERATION
-                // ============================
+                // SAFETY FIX
+                if (!finalSortedList.Any() || !allKeys.Any())
+                {
+                    return BadRequest("No data available to generate Excel.");
+                }
+
+                // Excel
                 var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
                 Directory.CreateDirectory(reportPath);
 
@@ -1017,6 +998,7 @@ namespace Tools.Controllers
 
                     // Data
                     int rowIdx = 2;
+
                     foreach (var item in finalSortedList)
                     {
                         var dict = (IDictionary<string, object>)item;
@@ -1031,7 +1013,12 @@ namespace Tools.Controllers
                         rowIdx++;
                     }
 
-                    ws.Cells[ws.Dimension.Address].AutoFitColumns();
+                    // ✅ CRITICAL FIX
+                    if (ws.Dimension != null)
+                    {
+                        ws.Cells[ws.Dimension.Address].AutoFitColumns();
+                    }
+
                     ws.View.FreezePanes(2, 1);
 
                     package.SaveAs(new FileInfo(filePath));
@@ -1046,7 +1033,11 @@ namespace Tools.Controllers
             }
             catch (Exception ex)
             {
-                return StatusCode(500, new { error = ex.Message });
+                return StatusCode(500, new
+                {
+                    error = ex.Message,
+                    stack = ex.StackTrace // helpful for debugging
+                });
             }
         }
     }
