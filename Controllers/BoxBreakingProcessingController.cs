@@ -43,7 +43,7 @@ namespace Tools.Controllers
                     .ToListAsync();
 
                 var nrData = await _context.NRDatas
-                    .Where(p => p.ProjectId == ProjectId && p.Status == true)
+                    .Where(p => p.ProjectId == ProjectId && p.Status == true && p.Steps==3 && p.LotNo!=0)
                     .ToListAsync();
 
                 var projectconfig = await _context.ProjectConfigs
@@ -647,7 +647,7 @@ namespace Tools.Controllers
 
                 var envelopeResults = await _context.EnvelopeBreakingResults.ToListAsync();
                 var nrData = await _context.NRDatas
-                    .Where(p => p.ProjectId == ProjectId && p.Status == true)
+                    .Where(p => p.ProjectId == ProjectId && p.Status == true && p.Steps==3)
                     .ToListAsync();
 
                 var projectconfig = await _context.ProjectConfigs
