@@ -1901,18 +1901,28 @@ namespace Tools.Controllers
                     return NotFound($"No NRData found for ProjectId {ProjectId}");
                 }
 
+                // ❌ REMOVE FILE DELETE if not needed
+                // (keeping it optional — you can remove this block if you want full soft behavior)
                 var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
-
                 if (Directory.Exists(reportPath))
                 {
                     Directory.Delete(reportPath, true);
                 }
 
-                _context.NRDatas.RemoveRange(nrDataList);
-
-                if (conflictList.Any())
+                // =============================
+                // ✅ SOFT DELETE NRData
+                // =============================
+                foreach (var item in nrDataList)
                 {
-                    _context.ConflictingFields.RemoveRange(conflictList);
+                    item.Status = false; // or 0 if int
+                }
+
+                // =============================
+                // ✅ SOFT DELETE ConflictingFields (optional)
+                // =============================
+                foreach (var conflict in conflictList)
+                {
+                    conflict.Status = 0; // assuming int, adjust if bool
                 }
 
                 await _context.SaveChangesAsync();
@@ -1921,13 +1931,17 @@ namespace Tools.Controllers
                 int.TryParse(User.Identity?.Name, out userId);
 
                 _loggerService.LogEvent(
-                    $"Deleted all NRData and conflict records for ProjectId {ProjectId}",
+                    $"Soft deleted (Status=0) all NRData and conflict records for ProjectId {ProjectId}",
                     "NRData",
                     userId,
                     ProjectId
                 );
 
-                return NoContent();
+                return Ok(new
+                {
+                    message = "NRData marked as inactive (soft deleted)",
+                    totalUpdated = nrDataList.Count
+                });
             }
             catch (Exception ex)
             {
