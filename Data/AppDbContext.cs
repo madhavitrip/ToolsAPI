@@ -60,7 +60,6 @@ namespace ERPToolsAPI.Data
                 .HasIndex(e => e.ProjectId)
                 .IsUnique();
             modelBuilder.Entity<BoxBreakingResult>()
-<<<<<<< HEAD
                 .HasIndex(e => new { e.ProjectId, e.BoxNo })
                 .IsUnique(false);
 
@@ -137,10 +136,7 @@ namespace ERPToolsAPI.Data
         private static string SerializeUploadList(List<int> value)
         {
             return JsonSerializer.Serialize(value ?? new List<int>());
-=======
-                .HasIndex(e => new { e.ProjectId, e.BoxNo,e.UploadBatch })
-                .IsUnique();
->>>>>>> Production
+              
         }
         
     }
