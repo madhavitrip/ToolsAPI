@@ -149,6 +149,7 @@ namespace Tools.Controllers
             var boxColumns = FilterColumns(GetModelColumns<BoxBreakingResult>());
 
             var nrJsonKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var envBreakageJsonKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             List<int> projectIds = new();
             if (groupId > 0 && typeId > 0)
             {
@@ -187,6 +188,35 @@ namespace Tools.Controllers
                 }
             }
 
+            var envBreakageQuery = _context.EnvelopeBreakages.AsQueryable();
+            if (projectIds.Count > 0)
+            {
+                envBreakageQuery = envBreakageQuery.Where(e => projectIds.Contains(e.ProjectId));
+            }
+
+            var envBreakageInnerRows = await envBreakageQuery
+                .Where(e => !string.IsNullOrWhiteSpace(e.InnerEnvelope))
+                .Select(e => e.InnerEnvelope)
+                .ToListAsync();
+
+            foreach (var json in envBreakageInnerRows)
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(json);
+                    if (doc.RootElement.ValueKind != JsonValueKind.Object) continue;
+                    foreach (var prop in doc.RootElement.EnumerateObject())
+                    {
+                        if (!string.IsNullOrWhiteSpace(prop.Name))
+                            envBreakageJsonKeys.Add(prop.Name);
+                    }
+                }
+                catch
+                {
+                    // ignore malformed JSON rows
+                }
+            }
+
             return Ok(new
             {
                 nrColumns = nrColumns.OrderBy(x => x).ToList(),
@@ -194,6 +224,10 @@ namespace Tools.Controllers
                 envBreakageColumns = envBreakageColumns.OrderBy(x => x).ToList(),
                 boxColumns = boxColumns.OrderBy(x => x).ToList(),
                 nrJsonKeys = nrJsonKeys
+                    .Where(k => !excludeColumns.Contains(k))
+                    .OrderBy(x => x)
+                    .ToList(),
+                envBreakageJsonKeys = envBreakageJsonKeys
                     .Where(k => !excludeColumns.Contains(k))
                     .OrderBy(x => x)
                     .ToList()
@@ -484,6 +518,35 @@ namespace Tools.Controllers
                     likelyLayoutOnly
                 }
             });
+        }
+
+        // POST: api/RPTTemplates/{id}/activate
+        // Marks a specific version as active for its scope (standard/group/project)
+        [HttpPost("{id}/activate")]
+        public async Task<ActionResult> ActivateTemplate(int id)
+        {
+            var template = await _context.RPTTemplates.FindAsync(id);
+            if (template == null) return NotFound("Template not found.");
+
+            var scopeQuery = _context.RPTTemplates
+                .Where(t => t.TypeId == template.TypeId
+                            && t.TemplateName == template.TemplateName
+                            && t.GroupId == template.GroupId
+                            && t.ProjectId == template.ProjectId);
+
+            var items = await scopeQuery.ToListAsync();
+            if (items.Count == 0)
+                return NotFound("Template scope not found.");
+
+            var now = DateTime.Now;
+            foreach (var item in items)
+            {
+                item.IsActive = item.TemplateId == template.TemplateId;
+                item.UpdatedDate = now;
+            }
+
+            await _context.SaveChangesAsync();
+            return Ok(new { templateId = template.TemplateId, message = "Template activated." });
         }
 
         // POST: api/RPTTemplates/import-from-group
