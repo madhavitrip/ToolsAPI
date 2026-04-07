@@ -109,7 +109,7 @@ namespace Tools.Controllers
                     rowDict["CenterCode"] = result.CenterCode ?? "";
                     rowDict["CenterSort"] = result.CenterSort;
                     rowDict["ExamTime"] = result.ExamTime ?? "";
-                    rowDict["ExamDate"] = result.ExamDate ?? "";
+                    rowDict["ExamDate"] = result.ExamDate;
                     rowDict["Quantity"] = result.Quantity;
                     rowDict["TotalEnv"] = result.TotalEnv;
                     rowDict["NodalCode"] = result.NodalCode ?? "";

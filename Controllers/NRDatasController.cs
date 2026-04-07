@@ -432,7 +432,7 @@ namespace Tools.Controllers
                     foreach (var prop in item.EnumerateObject())
                     {
                         string key = prop.Name.Replace(" ", "").ToLower();
-                        string value = prop.Value.ToString();
+                        string value = prop.Value.ToString().Trim();
 
                         if (properties.TryGetValue(key, out var propInfo))
                         {
