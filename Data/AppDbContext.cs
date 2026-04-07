@@ -44,11 +44,23 @@ namespace ERPToolsAPI.Data
         {
             base.OnModelCreating(modelBuilder);
 
-            modelBuilder.Entity<EnvelopeBreakage>()
-                .HasIndex(e => e.NrDataId)
+            modelBuilder.Entity<ExtraEnvelopes>()
+                .HasIndex(e => new { e.CatchNo, e.ExtraId, e.ProjectId})
                 .IsUnique();
-
+            modelBuilder.Entity<EnvelopeBreakage>()
+                .HasIndex(e => new { e.NrDataId, e.ProjectId })
+                .IsUnique();
+            modelBuilder.Entity<ExtrasConfiguration>()
+                .HasIndex(e => new { e.ExtraType, e.ProjectId })
+                .IsUnique();
+            modelBuilder.Entity<ProjectConfig>()
+                .HasIndex(e => e.ProjectId)
+                .IsUnique();
+            modelBuilder.Entity<Project>()
+                .HasIndex(e => e.ProjectId)
+                .IsUnique();
             modelBuilder.Entity<BoxBreakingResult>()
+<<<<<<< HEAD
                 .HasIndex(e => new { e.ProjectId, e.BoxNo })
                 .IsUnique(false);
 
@@ -125,6 +137,10 @@ namespace ERPToolsAPI.Data
         private static string SerializeUploadList(List<int> value)
         {
             return JsonSerializer.Serialize(value ?? new List<int>());
+=======
+                .HasIndex(e => new { e.ProjectId, e.BoxNo,e.UploadBatch })
+                .IsUnique();
+>>>>>>> Production
         }
         
     }
