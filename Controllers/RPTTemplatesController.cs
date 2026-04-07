@@ -128,6 +128,7 @@ namespace Tools.Controllers
             {
                 "id",
                 "projectid",
+                "envelopetype",
                 "envelopebreakingresultid",
                 "createdat",
                 "uploadedbatch",
@@ -147,9 +148,11 @@ namespace Tools.Controllers
             var envColumns = FilterColumns(GetModelColumns<EnvelopeBreakingResult>());
             var envBreakageColumns = FilterColumns(GetModelColumns<EnvelopeBreakage>());
             var boxColumns = FilterColumns(GetModelColumns<BoxBreakingResult>());
+            var extraConfigColumns = FilterColumns(GetModelColumns<ExtrasConfiguration>());
 
             var nrJsonKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var envBreakageJsonKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var extraConfigJsonKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             List<int> projectIds = new();
             if (groupId > 0 && typeId > 0)
             {
@@ -217,18 +220,55 @@ namespace Tools.Controllers
                 }
             }
 
+            var extraConfigQuery = _context.ExtraConfigurations.AsQueryable();
+            if (projectIds.Count > 0)
+            {
+                extraConfigQuery = extraConfigQuery.Where(e => projectIds.Contains(e.ProjectId));
+            }
+
+            var extraEnvelopeRows = await extraConfigQuery
+                .Where(e => !string.IsNullOrWhiteSpace(e.EnvelopeType))
+                .Select(e => e.EnvelopeType)
+                .ToListAsync();
+
+            foreach (var json in extraEnvelopeRows)
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(json);
+                    if (doc.RootElement.ValueKind != JsonValueKind.Object) continue;
+                    foreach (var prop in doc.RootElement.EnumerateObject())
+                    {
+                        if (!string.IsNullOrWhiteSpace(prop.Name))
+                            extraConfigJsonKeys.Add(prop.Name);
+                    }
+                }
+                catch
+                {
+                    // ignore malformed JSON rows
+                }
+            }
+
             return Ok(new
             {
                 nrColumns = nrColumns.OrderBy(x => x).ToList(),
                 envColumns = envColumns.OrderBy(x => x).ToList(),
                 envBreakageColumns = envBreakageColumns.OrderBy(x => x).ToList(),
                 boxColumns = boxColumns.OrderBy(x => x).ToList(),
+                extraConfigColumns = extraConfigColumns.OrderBy(x => x).ToList(),
                 nrJsonKeys = nrJsonKeys
                     .Where(k => !excludeColumns.Contains(k))
+                    .Where(k => !nrColumns.Any(c => string.Equals(c, k, StringComparison.OrdinalIgnoreCase)))
                     .OrderBy(x => x)
                     .ToList(),
                 envBreakageJsonKeys = envBreakageJsonKeys
                     .Where(k => !excludeColumns.Contains(k))
+                    .Where(k => !envBreakageColumns.Any(c => string.Equals(c, k, StringComparison.OrdinalIgnoreCase)))
+                    .OrderBy(x => x)
+                    .ToList(),
+                extraConfigJsonKeys = extraConfigJsonKeys
+                    .Where(k => !excludeColumns.Contains(k))
+                    .Where(k => !extraConfigColumns.Any(c => string.Equals(c, k, StringComparison.OrdinalIgnoreCase)))
                     .OrderBy(x => x)
                     .ToList()
             });

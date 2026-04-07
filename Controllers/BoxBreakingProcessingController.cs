@@ -43,7 +43,7 @@ namespace Tools.Controllers
                     .ToListAsync();
 
                 var nrData = await _context.NRDatas
-                    .Where(p => p.ProjectId == ProjectId && p.Status == true && p.Steps==3 && p.LotNo!=0)
+                    .Where(p => p.ProjectId == ProjectId && p.Status == true )
                     .ToListAsync();
 
                 var projectconfig = await _context.ProjectConfigs
