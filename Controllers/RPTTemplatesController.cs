@@ -228,6 +228,18 @@ namespace Tools.Controllers
                 ["label"] = "TotalCenters"
             });
 
+            // Virtual computed fields — not real columns, resolved to SQL expressions at report generation
+            result.Add(new Dictionary<string, string>
+            {
+                ["value"] = "calc:BOX_RANGE",
+                ["label"] = "Box Range"
+            });
+            result.Add(new Dictionary<string, string>
+            {
+                ["value"] = "calc:TOTAL_BOXES",
+                ["label"] = "Total Boxes"
+            });
+
             // x.Inner — store as eb.<actualValue> so the mapping saves the real field reference
             // e.g. if Inner = "E10", value = "eb.E10", label = "E10"
             if (!string.IsNullOrWhiteSpace(innerEnvelopeValue)
