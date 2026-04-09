@@ -33,22 +33,27 @@ namespace Tools.Controllers
         {
             try
             {
+                Console.WriteLine("inside");
                 var data = await _context.NRDatas
-                    .Where(p => p.ProjectId == ProjectId && p.Status == true && p.Steps==0)
+                    .Where(p => p.ProjectId == ProjectId && p.Status == true)
                     .ToListAsync();
-
+                Console.WriteLine(data.Count.ToString());
                 var projectconfig = await _context.ProjectConfigs
                     .FirstOrDefaultAsync(p => p.ProjectId == ProjectId);
-
                 if (projectconfig == null)
                     return NotFound("Project config not exists for this project");
+                Console.WriteLine(projectconfig.ToString());
 
-                var mergeFieldIds = projectconfig.DuplicateCriteria.ToList();
+                var mergeFieldIds = projectconfig.DuplicateCriteria ?? new List<int>();
+                if (!mergeFieldIds.Any())
+                    return BadRequest("Duplicate criteria is not configured for this project.");
 
                 var fieldNames = await _context.Fields
                     .Where(f => mergeFieldIds.Contains(f.FieldId))
                     .Select(f => f.Name)
                     .ToListAsync();
+                if (!fieldNames.Any())
+                    return BadRequest("Duplicate criteria fields not found.");
 
                 if (!data.Any())
                     return NotFound("Nr data not found for this project.");
@@ -287,8 +292,21 @@ namespace Tools.Controllers
         {
             try
             {
+                // Normalize NULL numeric fields to 0 to avoid materialization errors
+                await _context.Database.ExecuteSqlRawAsync(@"
+UPDATE NRDatas
+SET Quantity = IFNULL(Quantity, 0),
+    NRQuantity = IFNULL(NRQuantity, 0),
+    Pages = IFNULL(Pages, 0),
+    RouteSort = IFNULL(RouteSort, 0),
+    CenterSort = IFNULL(CenterSort, 0),
+    NodalSort = IFNULL(NodalSort, 0),
+    Steps = IFNULL(Steps, 0),
+    LotNo = IFNULL(LotNo, 0)
+WHERE ProjectId = {0};", ProjectId);
+
                 var data = await _context.NRDatas
-                    .Where(p => p.ProjectId == ProjectId)
+                    .Where(p => p.ProjectId == ProjectId && p.Status==true)
                     .ToListAsync();
 
                 if (!data.Any())
@@ -346,7 +364,8 @@ namespace Tools.Controllers
                     catch (Exception ex)
                     {
                         _logger.LogError("Error in serializing Envelope", ex.Message, nameof(DuplicateController));
-                        return StatusCode(500, "Internal server error");
+                        // Fallback: proceed without envelope-based rounding
+                        smallestInner = 0;
                     }
                 }
 
@@ -508,7 +527,7 @@ namespace Tools.Controllers
 
             // Step 2: Fetch ExtrasEnvelope data and then group/sum in-memory
             var extraEnvelopeData = await _context.ExtrasEnvelope
-                .Where(p => p.ProjectId == ProjectId)
+                .Where(p => p.ProjectId == ProjectId && p.Status == 1)
                 .ToListAsync();
 
             var ExtraEnvGrouped = extraEnvelopeData

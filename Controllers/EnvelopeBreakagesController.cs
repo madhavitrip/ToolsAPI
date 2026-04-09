@@ -235,7 +235,7 @@ namespace Tools.Controllers
 
 
         // GET: api/EnvelopeBreakages/5
-        [HttpGet("{id}")]
+        [HttpGet("{id:int}")]
         public async Task<ActionResult<EnvelopeBreakage>> GetEnvelopeBreakage(int id)
         {
             var envelopeBreakage = await _context.EnvelopeBreakages.FindAsync(id);
@@ -426,15 +426,20 @@ namespace Tools.Controllers
 
 
                 using var client = new HttpClient();
-                var response = await client.GetAsync($"{_apiSettings.EnvelopeBreakageUrl}?ProjectId={ProjectId}");
+                var response = await client.PostAsync(
+     $"{_apiSettings.EnvelopeBreakageUrl}?ProjectId={ProjectId}",
+     new StringContent("") // required
+ );
                 if (!response.IsSuccessStatusCode)
                 {
-                    // Handle failure from GET call as needed
-                    _loggerService.LogError("Failed to generate report", "", nameof(EnvelopeBreakagesController));
-                    return StatusCode((int)response.StatusCode, "Failed to get envelope breakages after configuration.");
+                    var error = await response.Content.ReadAsStringAsync();
+                    Console.WriteLine($"API Failed: {response.StatusCode}, {error}");
                 }
-
-                var jsonString = await response.Content.ReadAsStringAsync();
+                else
+                {
+                    var data = await response.Content.ReadAsStringAsync();
+                    Console.WriteLine($"API Success: {data}");
+                }
                 return Ok("Envelope breakdown report has been successfully created.");
             }
             catch (Exception ex)
@@ -473,7 +478,7 @@ namespace Tools.Controllers
                     .ToListAsync();
 
                 var extraEnvelopes = await _context.ExtrasEnvelope
-                    .Where(x => x.ProjectId == ProjectId)
+                    .Where(x => x.ProjectId == ProjectId && x.Status == 1)
                     .ToListAsync();
 
                 var extraConfigs = await _context.ExtraConfigurations
@@ -766,7 +771,7 @@ namespace Tools.Controllers
                 // 3️⃣ Get ExtraEnvelopes and Configurations
                 // ==============================
                 var extraEnvelopes = await _context.ExtrasEnvelope
-                    .Where(x => x.ProjectId == ProjectId)
+                    .Where(x => x.ProjectId == ProjectId && x.Status == 1)
                     .ToListAsync();
 
                 var extraConfigs = await _context.ExtraConfigurations
@@ -1013,7 +1018,7 @@ namespace Tools.Controllers
         }
 
 
-        [HttpGet("Replication")]
+       /* [HttpGet("Replication")]
         public async Task<IActionResult> ReplicationConfiguration(int ProjectId)
         {
             // Envelope capacities map (can be pulled from DB if needed)
@@ -1679,7 +1684,7 @@ namespace Tools.Controllers
             }
 
             // 🔹 Maintain ordering
-            /*  finalWithBoxes = resetOnSymbolChange
+            *//*  finalWithBoxes = resetOnSymbolChange
                   ? finalWithBoxes
                       .OrderBy(x => x.CourseName?.ToString() ?? "")  // ✅ group by course first
                       .ThenBy(x =>
@@ -1690,7 +1695,7 @@ namespace Tools.Controllers
                       })
                       .ToList()
                   : finalWithBoxes.OrderBy(x => (int)x.BoxNo).ToList();
-  */
+  *//*
 
             // Step 5: Export to Excel
             try
@@ -1949,9 +1954,9 @@ namespace Tools.Controllers
             public string OmrSerial { get; set; }
             public string CourseName { get; set; }
         }
+*/
 
-
-        [HttpGet("EnvelopeBreakage")]
+      /*  [HttpGet("EnvelopeBreakage")]
         public async Task<IActionResult> BreakageConfiguration(int ProjectId)
         {
             // Fetch all data sequentially
@@ -1974,7 +1979,7 @@ namespace Tools.Controllers
                 .ToListAsync();
 
             var extras = await _context.ExtrasEnvelope
-                .Where(p => p.ProjectId == ProjectId)
+                .Where(p => p.ProjectId == ProjectId && p.Status == 1)
                 .ToListAsync();
 
             var projectconfig = await _context.ProjectConfigs
@@ -2605,7 +2610,7 @@ namespace Tools.Controllers
                 return Ok(new { Result = resultList });
             }
 
-        }
+        }*/
 
         // DELETE: api/EnvelopeBreakages/5
         [HttpDelete("{id}")]

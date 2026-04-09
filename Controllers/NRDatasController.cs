@@ -169,6 +169,7 @@ namespace Tools.Controllers
                     d.RouteSort,
                     d.Symbol,
                     d.LotNo,
+                    d.NRDatas,
 
                 })
                 .ToListAsync();
@@ -237,8 +238,8 @@ namespace Tools.Controllers
             }
 
             var normalizedRequestedCatchNos = requestedCatchNos
-                .Select(value => value.Trim().ToLowerInvariant())
-                .Distinct()
+                .Select(value => value.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
             var selectedRows = await _context.NRDatas
@@ -246,7 +247,7 @@ namespace Tools.Controllers
                     item.ProjectId == ProjectId &&
                     item.Status == true &&
                     item.CatchNo != null &&
-                    normalizedRequestedCatchNos.Contains(item.CatchNo.Trim().ToLower()))
+                    normalizedRequestedCatchNos.Contains(item.CatchNo))
                 .ToListAsync();
 
             if (selectedRows.Count == 0)
@@ -274,9 +275,103 @@ namespace Tools.Controllers
                 .Distinct()
                 .ToList();
 
-            if (normalizedSchedules.Count != 1)
+            var overrideExamDate = NormalizeText(request.ExamDate);
+            var overrideExamTime = NormalizeText(request.ExamTime);
+            var hasExamOverride = !string.IsNullOrWhiteSpace(overrideExamDate) ||
+                                  !string.IsNullOrWhiteSpace(overrideExamTime);
+
+            if (normalizedSchedules.Count != 1 && !hasExamOverride)
             {
-                return BadRequest("Catch numbers can only be merged when ExamDate and ExamTime are the same.");
+                return BadRequest("Catch numbers can only be merged when ExamDate and ExamTime are the same, or provide a single ExamDate/ExamTime for the merge.");
+            }
+
+            if (hasExamOverride)
+            {
+                foreach (var row in selectedRows)
+                {
+                    if (!string.IsNullOrWhiteSpace(overrideExamDate))
+                    {
+                        row.ExamDate = overrideExamDate;
+                    }
+                    if (!string.IsNullOrWhiteSpace(overrideExamTime))
+                    {
+                        row.ExamTime = overrideExamTime;
+                    }
+                }
+            }
+
+            var abcdOverrides = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            if (request.AbcdValues != null)
+            {
+                foreach (var kvp in request.AbcdValues)
+                {
+                    var value = NormalizeText(kvp.Value);
+                    if (!string.IsNullOrWhiteSpace(value))
+                    {
+                        abcdOverrides[kvp.Key] = value;
+                    }
+                }
+            }
+
+            var abcdValues = selectedRows
+                .Select(row =>
+                {
+                    var jsonValues = ParseNrDatas(row.NRDatas);
+                    return new
+                    {
+                        A = ReadDictionaryValue(jsonValues, "A"),
+                        B = ReadDictionaryValue(jsonValues, "B"),
+                        C = ReadDictionaryValue(jsonValues, "C"),
+                        D = ReadDictionaryValue(jsonValues, "D")
+                    };
+                })
+                .ToList();
+
+            var distinctA = abcdValues.Select(v => NormalizeText(v.A)).Distinct().ToList();
+            var distinctB = abcdValues.Select(v => NormalizeText(v.B)).Distinct().ToList();
+            var distinctC = abcdValues.Select(v => NormalizeText(v.C)).Distinct().ToList();
+            var distinctD = abcdValues.Select(v => NormalizeText(v.D)).Distinct().ToList();
+
+            if (distinctA.Count > 1 && !abcdOverrides.ContainsKey("A"))
+            {
+                return BadRequest("A values differ across selected catch numbers. Please choose which A value to keep.");
+            }
+            if (distinctB.Count > 1 && !abcdOverrides.ContainsKey("B"))
+            {
+                return BadRequest("B values differ across selected catch numbers. Please choose which B value to keep.");
+            }
+            if (distinctC.Count > 1 && !abcdOverrides.ContainsKey("C"))
+            {
+                return BadRequest("C values differ across selected catch numbers. Please choose which C value to keep.");
+            }
+            if (distinctD.Count > 1 && !abcdOverrides.ContainsKey("D"))
+            {
+                return BadRequest("D values differ across selected catch numbers. Please choose which D value to keep.");
+            }
+
+            if (abcdOverrides.Any())
+            {
+                foreach (var row in selectedRows)
+                {
+                    var jsonValues = ParseNrDatas(row.NRDatas);
+                    if (abcdOverrides.TryGetValue("A", out var aValue))
+                    {
+                        SetJsonValue(jsonValues, "A", aValue);
+                    }
+                    if (abcdOverrides.TryGetValue("B", out var bValue))
+                    {
+                        SetJsonValue(jsonValues, "B", bValue);
+                    }
+                    if (abcdOverrides.TryGetValue("C", out var cValue))
+                    {
+                        SetJsonValue(jsonValues, "C", cValue);
+                    }
+                    if (abcdOverrides.TryGetValue("D", out var dValue))
+                    {
+                        SetJsonValue(jsonValues, "D", dValue);
+                    }
+                    row.NRDatas = JsonSerializer.Serialize(jsonValues);
+                }
             }
 
             // Build merged catch number safely (no duplicates)
@@ -289,6 +384,15 @@ namespace Tools.Controllers
 
             int centersCollapsed = 0;
             int rowsUpdated = 0;
+            var newMergedRows = new List<NRData>();
+            var rowsToLink = new List<(NRData Row, string CenterKey)>();
+            var mergedRowByCenter = new Dictionary<string, NRData>(StringComparer.OrdinalIgnoreCase);
+            var totalQuantity = selectedRows.Sum(item => item.Quantity);
+            var perCatchTotals = selectedRows
+                .Where(item => !string.IsNullOrWhiteSpace(item.CatchNo))
+                .GroupBy(item => NormalizeText(item.CatchNo), StringComparer.OrdinalIgnoreCase)
+                .Select(group => group.Sum(item => item.Quantity))
+                .ToList();
 
             foreach (var centerGroup in selectedRowsByCenter)
             {
@@ -296,6 +400,7 @@ namespace Tools.Controllers
                 if (!groupRows.Any())
                     continue;
 
+                var centerKey = NormalizeText(centerGroup.Key);
                 var groupCatchNos = groupRows
                     .Select(item => NormalizeText(item.CatchNo))
                     .Where(value => !string.IsNullOrWhiteSpace(value))
@@ -307,8 +412,8 @@ namespace Tools.Controllers
                     .Count(req => groupCatchNos
                         .Any(gc => string.Equals(gc, req, StringComparison.OrdinalIgnoreCase)));
 
-                // If at least 2 match → merge
-                if (matchingCount >= 2)
+                // Always create a merged row per center when any selected catch exists
+                if (matchingCount >= 1)
                 {
                     centersCollapsed++;
 
@@ -316,24 +421,133 @@ namespace Tools.Controllers
                         .OrderBy(item => item.Id)
                         .First();
 
-                    primaryRow.CatchNo = mergedCatchNo;
-                    primaryRow.Quantity = groupRows.Sum(item => item.Quantity);
-                    primaryRow.NRQuantity = groupRows.Sum(item => item.NRQuantity);
+                    var mergedRow = new NRData
+                    {
+                        ProjectId = primaryRow.ProjectId,
+                        CourseName = primaryRow.CourseName,
+                        SubjectName = primaryRow.SubjectName,
+                        CenterCode = primaryRow.CenterCode,
+                        Quantity = groupRows.Sum(item => item.Quantity),
+                        NRQuantity = groupRows.Sum(item => item.NRQuantity),
+                        CatchNo = mergedCatchNo,
+                        ExamDate = primaryRow.ExamDate,
+                        ExamTime = primaryRow.ExamTime,
+                        Day = primaryRow.Day,
+                        NRDatas = primaryRow.NRDatas,
+                        NodalCode = primaryRow.NodalCode,
+                        Pages = primaryRow.Pages,
+                        Route = primaryRow.Route,
+                        RouteSort = primaryRow.RouteSort,
+                        CenterSort = primaryRow.CenterSort,
+                        NodalSort = primaryRow.NodalSort,
+                        Symbol = primaryRow.Symbol,
+                        Status = true,
+                        NRDataId = null,
+                        Steps = primaryRow.Steps,
+                        UploadList = primaryRow.UploadList != null
+                            ? new List<int>(primaryRow.UploadList)
+                            : new List<int>(),
+                        LotNo = primaryRow.LotNo
+                    };
 
-                    foreach (var row in groupRows.Where(item => item.Id != primaryRow.Id))
+                    newMergedRows.Add(mergedRow);
+                    mergedRowByCenter[centerKey] = mergedRow;
+
+                    foreach (var row in groupRows)
                     {
                         row.Status = false;               // soft delete
-                        row.NRDataId = primaryRow.Id;     // reference to merged row
+                        rowsToLink.Add((row, centerKey)); // reference after merged row saved
                         rowsUpdated++;
                     }
                 }
-                else
+            }
+
+            if (newMergedRows.Any())
+            {
+                await _context.NRDatas.AddRangeAsync(newMergedRows);
+                await _context.SaveChangesAsync();
+
+                foreach (var link in rowsToLink)
                 {
-                    // Only one catch number present → just rename
-                    foreach (var row in groupRows)
+                    if (mergedRowByCenter.TryGetValue(link.CenterKey, out var mergedRow))
                     {
-                        row.CatchNo = mergedCatchNo;
+                        link.Row.NRDataId = mergedRow.Id;
                     }
+                }
+            }
+
+            var extraConfigs = await _context.ExtraConfigurations
+                .Where(x => x.ProjectId == ProjectId)
+                .ToListAsync();
+
+            if (extraConfigs.Any())
+            {
+                var affectedCatchNos = normalizedRequestedCatchNos
+                    .Concat(new[] { mergedCatchNo })
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+
+                var extrasToDisable = await _context.ExtrasEnvelope
+                    .Where(x =>
+                        x.ProjectId == ProjectId &&
+                        x.CatchNo != null &&
+                        affectedCatchNos.Contains(x.CatchNo))
+                    .ToListAsync();
+
+                if (extrasToDisable.Any())
+                {
+                    foreach (var extra in extrasToDisable)
+                    {
+                        extra.Status = 0;
+                    }
+                }
+
+                var extraOverrides = (request.ExtraQuantities ?? new List<ExtraQuantityOverride>())
+                    .Where(x => x.ExtraType > 0)
+                    .GroupBy(x => x.ExtraType)
+                    .ToDictionary(g => g.Key, g => g.Last().Quantity);
+
+                var extrasToAdd = new List<ExtraEnvelopes>();
+
+                foreach (var config in extraConfigs)
+                {
+                    var (innerCapacity, outerCapacity) = GetEnvelopeCapacities(config.EnvelopeType);
+                    var calculatedQuantity = perCatchTotals.Any()
+                        ? perCatchTotals
+                            .Select(qty => CalculateExtraQuantity(config, qty))
+                            .DefaultIfEmpty(0)
+                            .Sum()
+                        : CalculateExtraQuantity(config, totalQuantity);
+                    if (extraOverrides.TryGetValue(config.ExtraType, out var overrideQuantity))
+                    {
+                        var roundedOverride = RoundUpToMinimumCapacity(
+                            Math.Max(overrideQuantity, 0),
+                            innerCapacity,
+                            outerCapacity);
+                        calculatedQuantity = roundedOverride;
+                    }
+                    var innerCount = innerCapacity > 0
+                        ? (int)Math.Ceiling((double)calculatedQuantity / innerCapacity)
+                        : 0;
+                    var outerCount = outerCapacity > 0
+                        ? (int)Math.Ceiling((double)calculatedQuantity / outerCapacity)
+                        : 0;
+
+                    extrasToAdd.Add(new ExtraEnvelopes
+                    {
+                        ProjectId = ProjectId,
+                        CatchNo = mergedCatchNo,
+                        ExtraId = config.ExtraType,
+                        Quantity = calculatedQuantity,
+                        InnerEnvelope = innerCount.ToString(),
+                        OuterEnvelope = outerCount.ToString(),
+                        Status = 1
+                    });
+                }
+
+                if (extrasToAdd.Any())
+                {
+                    await _context.ExtrasEnvelope.AddRangeAsync(extrasToAdd);
                 }
             }
 
@@ -494,6 +708,17 @@ namespace Tools.Controllers
                     .Where(x => x.ProjectId == projectId)
                     .ToListAsync();
 
+                // =============================
+                // ✅ GET CURRENT BATCH NUMBER
+                // =============================
+                int currentBatch = (await _context.NRDatas
+         .Where(x => x.ProjectId == projectId && x.UploadList != null)
+         .Select(x => x.UploadList)
+         .ToListAsync())
+     .SelectMany(x => x)
+     .DefaultIfEmpty(0)
+     .Max() + 1;
+
                 var nrDatasToAdd = new List<NRData>();
                 var extraEnvelopesToAdd = new List<ExtraEnvelopes>();
 
@@ -513,7 +738,7 @@ namespace Tools.Controllers
                     foreach (var prop in item.EnumerateObject())
                     {
                         string key = prop.Name.Replace(" ", "").ToLower();
-                        string value = prop.Value.ToString();
+                        string value = prop.Value.ToString().Trim();
 
                         if (properties.TryGetValue(key, out var propInfo))
                         {
@@ -538,7 +763,9 @@ namespace Tools.Controllers
                         }
                     }
 
+                    // =============================
                     // ✅ Day calculation
+                    // =============================
                     if (!string.IsNullOrWhiteSpace(nRData.ExamDate) &&
                         DateTime.TryParse(nRData.ExamDate, out DateTime examDate))
                     {
@@ -560,16 +787,21 @@ namespace Tools.Controllers
 
                     if (existingRecord != null)
                     {
-                        if (existingRecord.UploadList == null || !existingRecord.UploadList.Any())
-                            existingRecord.UploadList = new List<int> { 1 };
-                        else
-                            existingRecord.UploadList.Add(existingRecord.UploadList.Max() + 1);
+                        if (existingRecord.UploadList == null)
+                            existingRecord.UploadList = new List<int>();
+
+                        // ✅ Add current batch only if not already present
+                        if (!existingRecord.UploadList.Contains(currentBatch))
+                        {
+                            existingRecord.UploadList.Add(currentBatch);
+                        }
 
                         continue;
                     }
                     else
                     {
-                        nRData.UploadList = new List<int> { 1 };
+                        // ✅ New record gets current batch
+                        nRData.UploadList = new List<int> { currentBatch };
                     }
 
                     // =============================
@@ -624,7 +856,8 @@ namespace Tools.Controllers
                                 ExtraId = extraTypeId.Value,
                                 Quantity = roundedQty,
                                 InnerEnvelope = innerEnvelope,
-                                OuterEnvelope = outerEnvelope
+                                OuterEnvelope = outerEnvelope,
+                                Status = 1
                             });
                         }
 
@@ -645,6 +878,7 @@ namespace Tools.Controllers
                 return Ok(new
                 {
                     message = "Data inserted successfully",
+                    Batch = currentBatch,
                     NRDataCount = nrDatasToAdd.Count,
                     ExtraEnvelopeCount = extraEnvelopesToAdd.Count
                 });
@@ -1473,6 +1707,144 @@ namespace Tools.Controllers
             return NormalizeText(fallbackEntry.Value);
         }
 
+        private static void SetJsonValue(Dictionary<string, string> jsonValues, string key, string value)
+        {
+            if (jsonValues == null)
+            {
+                return;
+            }
+
+            var existingKey = jsonValues.Keys.FirstOrDefault(k =>
+                string.Equals(k, key, StringComparison.OrdinalIgnoreCase));
+
+            if (existingKey != null)
+            {
+                jsonValues[existingKey] = value;
+            }
+            else
+            {
+                jsonValues[key] = value;
+            }
+        }
+
+        private class ExtraEnvelopeType
+        {
+            public string? Inner { get; set; }
+            public string? Outer { get; set; }
+        }
+
+        private class RangeConfigModel
+        {
+            public string? rangeType { get; set; }
+            public List<RangeItem>? ranges { get; set; }
+        }
+
+        private class RangeItem
+        {
+            public int from { get; set; }
+            public int to { get; set; }
+            public int value { get; set; }
+        }
+
+        private static (int innerCapacity, int outerCapacity) GetEnvelopeCapacities(string? envelopeTypeJson)
+        {
+            if (string.IsNullOrWhiteSpace(envelopeTypeJson))
+            {
+                return (0, 0);
+            }
+
+            try
+            {
+                var envelopeType = JsonSerializer.Deserialize<ExtraEnvelopeType>(envelopeTypeJson);
+                var innerCapacity = GetEnvelopeCapacitySafe(envelopeType?.Inner);
+                var outerCapacity = GetEnvelopeCapacitySafe(envelopeType?.Outer);
+                return (innerCapacity, outerCapacity);
+            }
+            catch
+            {
+                return (0, 0);
+            }
+        }
+
+        private static int GetEnvelopeCapacitySafe(string? envelopeCode)
+        {
+            if (string.IsNullOrWhiteSpace(envelopeCode))
+            {
+                return 0;
+            }
+
+            var numberPart = new string(envelopeCode.Where(char.IsDigit).ToArray());
+            return int.TryParse(numberPart, out var capacity) ? capacity : 0;
+        }
+
+        private static int CalculateExtraQuantity(ExtrasConfiguration config, int totalQuantity)
+        {
+            if (config == null)
+            {
+                return 0;
+            }
+
+            switch (NormalizeText(config.Mode).ToLowerInvariant())
+            {
+                case "fixed":
+                    return int.TryParse(config.Value, out var fixedValue) ? fixedValue : 0;
+                case "percentage":
+                    if (!decimal.TryParse(config.Value, out var percentValue))
+                    {
+                        return 0;
+                    }
+                    var rawQuantity = (double)(totalQuantity * percentValue) / 100;
+                    var (innerCapacity, outerCapacity) = GetEnvelopeCapacities(config.EnvelopeType);
+                    if (innerCapacity > 10)
+                    {
+                        return innerCapacity > 0
+                            ? (int)Math.Ceiling(rawQuantity / innerCapacity) * innerCapacity
+                            : (int)Math.Ceiling(rawQuantity);
+                    }
+                    return outerCapacity > 0
+                        ? (int)Math.Ceiling(rawQuantity / outerCapacity) * outerCapacity
+                        : (int)Math.Ceiling(rawQuantity);
+                case "range":
+                    if (string.IsNullOrWhiteSpace(config.RangeConfig))
+                    {
+                        return 0;
+                    }
+                    try
+                    {
+                        var rangeConfig = JsonSerializer.Deserialize<RangeConfigModel>(config.RangeConfig);
+                        var range = rangeConfig?.ranges?.FirstOrDefault(
+                            r => totalQuantity >= r.from && totalQuantity <= r.to);
+                        return range?.value ?? 0;
+                    }
+                    catch
+                    {
+                        return 0;
+                    }
+                default:
+                    return 0;
+            }
+        }
+
+        private static int RoundUpToMinimumCapacity(int quantity, int innerCapacity, int outerCapacity)
+        {
+            if (quantity <= 0)
+            {
+                return 0;
+            }
+
+            if (innerCapacity > 0)
+            {
+                return (int)Math.Ceiling((double)quantity / innerCapacity) * innerCapacity;
+            }
+
+            if (outerCapacity > 0)
+            {
+                return (int)Math.Ceiling((double)quantity / outerCapacity) * outerCapacity;
+            }
+
+            return quantity;
+        }
+
         private static void BuildCollegeConflicts(
             List<ConflictReportItem> conflicts,
             List<NRDataConflictProjection> rows,
@@ -1856,6 +2228,16 @@ namespace Tools.Controllers
             public List<int> RowIds { get; set; } = new();
             public List<string> CatchNos { get; set; } = new();
             public string? Separator { get; set; }
+            public string? ExamDate { get; set; }
+            public string? ExamTime { get; set; }
+            public Dictionary<string, string>? AbcdValues { get; set; }
+            public List<ExtraQuantityOverride> ExtraQuantities { get; set; } = new();
+        }
+
+        public class ExtraQuantityOverride
+        {
+            public int ExtraType { get; set; }
+            public int Quantity { get; set; }
         }
 
         public class UpsertRequest
@@ -1990,18 +2372,28 @@ namespace Tools.Controllers
                     return NotFound($"No NRData found for ProjectId {ProjectId}");
                 }
 
+                // ❌ REMOVE FILE DELETE if not needed
+                // (keeping it optional — you can remove this block if you want full soft behavior)
                 var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
-
                 if (Directory.Exists(reportPath))
                 {
                     Directory.Delete(reportPath, true);
                 }
 
-                _context.NRDatas.RemoveRange(nrDataList);
-
-                if (conflictList.Any())
+                // =============================
+                // ✅ SOFT DELETE NRData
+                // =============================
+                foreach (var item in nrDataList)
                 {
-                    _context.ConflictingFields.RemoveRange(conflictList);
+                    item.Status = false; // or 0 if int
+                }
+
+                // =============================
+                // ✅ SOFT DELETE ConflictingFields (optional)
+                // =============================
+                foreach (var conflict in conflictList)
+                {
+                    conflict.Status = 0; // assuming int, adjust if bool
                 }
 
                 await _context.SaveChangesAsync();
@@ -2010,13 +2402,17 @@ namespace Tools.Controllers
                 int.TryParse(User.Identity?.Name, out userId);
 
                 _loggerService.LogEvent(
-                    $"Deleted all NRData and conflict records for ProjectId {ProjectId}",
+                    $"Soft deleted (Status=0) all NRData and conflict records for ProjectId {ProjectId}",
                     "NRData",
                     userId,
                     ProjectId
                 );
 
-                return NoContent();
+                return Ok(new
+                {
+                    message = "NRData marked as inactive (soft deleted)",
+                    totalUpdated = nrDataList.Count
+                });
             }
             catch (Exception ex)
             {

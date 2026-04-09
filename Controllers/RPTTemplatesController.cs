@@ -49,40 +49,70 @@ namespace Tools.Controllers
 
         // GET: api/RPTTemplates/by-group?typeId=2&groupId=1&projectId=10
         [HttpGet("by-group")]
-        public async Task<ActionResult> GetByGroup([FromQuery] int typeId, [FromQuery] int? groupId, [FromQuery] int? projectId)
+        public async Task<ActionResult> GetByGroup(
+     [FromQuery] int? typeId,
+     [FromQuery] int? groupId,
+     [FromQuery] int? projectId)
         {
-            if (typeId <= 0)
-                return BadRequest("typeId is required.");
-
             groupId = NormalizeNullableId(groupId);
             projectId = NormalizeNullableId(projectId);
 
-            if (projectId.HasValue && !groupId.HasValue)
-                return BadRequest("groupId is required when projectId is provided.");
-
             if (projectId.HasValue)
             {
-                var resolved = await ResolveTemplatesForContext(typeId, groupId.Value, projectId.Value);
+                var project = await _context.Projects
+                    .FirstOrDefaultAsync(p => p.ProjectId == projectId.Value);
+
+                if (project == null)
+                    return NotFound("Project not found.");
+
+                // Only fill missing values
+                if (!groupId.HasValue)
+                    groupId = project.GroupId;
+
+                if (!typeId.HasValue)
+                    typeId = project.TypeId;
+
+                // Still validate after attempting fill
+                if (!groupId.HasValue || !typeId.HasValue)
+                    return BadRequest("groupId and typeId could not be resolved.");
+
+                var resolved = await ResolveTemplatesForContext(
+                    typeId.Value,
+                    groupId.Value,
+                    projectId.Value);
+
                 return Ok(resolved);
             }
 
             if (groupId.HasValue)
             {
+                if (!typeId.HasValue)
+                    return BadRequest("typeId is required when groupId is provided.");
+
                 var groupTemplates = await _context.RPTTemplates
-                    .Where(t => t.GroupId == groupId && t.TypeId == typeId && t.ProjectId == null && t.IsActive)
+                    .Where(t => t.GroupId == groupId
+                                && t.TypeId == typeId
+                                && t.ProjectId == null
+                                && t.IsActive)
                     .OrderBy(t => t.TemplateName)
                     .ToListAsync();
+
                 return Ok(groupTemplates);
             }
 
+            if (!typeId.HasValue)
+                return BadRequest("typeId is required.");
+
             var standardTemplates = await _context.RPTTemplates
-                .Where(t => t.GroupId == null && t.ProjectId == null && t.TypeId == typeId && t.IsActive)
+                .Where(t => t.GroupId == null
+                            && t.ProjectId == null
+                            && t.TypeId == typeId
+                            && t.IsActive)
                 .OrderBy(t => t.TemplateName)
                 .ToListAsync();
 
             return Ok(standardTemplates);
         }
-
         // GET: api/RPTTemplates/versions?typeId=2&templateName=ABC&groupId=1&projectId=10
         [HttpGet("versions")]
         public async Task<ActionResult> GetVersions(
@@ -127,33 +157,27 @@ namespace Tools.Controllers
 
         // GET: api/RPTTemplates/mapping-options?groupId=1&typeId=2
         [HttpGet("mapping-options")]
-        public async Task<ActionResult> GetMappingOptions(int groupId, int typeId)
+        public async Task<ActionResult> GetMappingOptions(int groupId, int typeId, int? projectId = null)
         {
             var excludeColumns = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
-                "id",
-                "projectid",
-                "envelopebreakingresultid",
-                "createdat",
-                "uploadedbatch",
-                "uploadbatch",
-                "nrdataid",
-                "extraid",
-                "envelopid",
-                "envelopeid",
-                "status",
-                "lotno"
+                "id", "projectid", "envelopetype", "envelopebreakingresultid",
+                "createdat", "uploadedbatch", "uploadbatch", "nrdataid",
+                "extraid", "envelopid", "envelopeid", "status", "lotno"
             };
 
             List<string> FilterColumns(List<string> columns) =>
                 columns.Where(c => !excludeColumns.Contains(c)).ToList();
 
-            var nrColumns = FilterColumns(GetModelColumns<NRData>(exclude: new[] { "NRDatas" }));
-            var envColumns = FilterColumns(GetModelColumns<EnvelopeBreakingResult>());
-            var envBreakageColumns = FilterColumns(GetModelColumns<EnvelopeBreakage>());
-            var boxColumns = FilterColumns(GetModelColumns<BoxBreakingResult>());
+            var nrColumns       = FilterColumns(GetModelColumns<NRData>(exclude: new[] { "NRDatas" }));
+            var envColumns      = FilterColumns(GetModelColumns<EnvelopeBreakingResult>());
+            var envBreakageCols = FilterColumns(GetModelColumns<EnvelopeBreakage>());
+            var boxColumns      = FilterColumns(GetModelColumns<BoxBreakingResult>());
+            var extraConfigCols = FilterColumns(GetModelColumns<ExtrasConfiguration>());
 
-            var nrJsonKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var nrJsonKeys         = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var envBreakageJsonKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
             List<int> projectIds = new();
             if (groupId > 0 && typeId > 0)
             {
@@ -163,46 +187,108 @@ namespace Tools.Controllers
                     .ToListAsync();
             }
 
+            // NR JSON keys
             var nrQuery = _context.NRDatas.AsQueryable();
-            if (projectIds.Count > 0)
+            if (projectIds.Count > 0) nrQuery = nrQuery.Where(n => projectIds.Contains(n.ProjectId));
+            foreach (var json in await nrQuery.Where(n => !string.IsNullOrWhiteSpace(n.NRDatas)).Select(n => n.NRDatas).ToListAsync())
             {
-                nrQuery = nrQuery.Where(n => projectIds.Contains(n.ProjectId));
+                try { using var doc = JsonDocument.Parse(json); foreach (var p in doc.RootElement.EnumerateObject()) if (!string.IsNullOrWhiteSpace(p.Name)) nrJsonKeys.Add(p.Name); }
+                catch { }
             }
 
-            var nrJsonRows = await nrQuery
-                .Where(n => !string.IsNullOrWhiteSpace(n.NRDatas))
-                .Select(n => n.NRDatas)
-                .ToListAsync();
-
-            foreach (var json in nrJsonRows)
+            // EnvBreakage JSON keys
+            var ebQuery = _context.EnvelopeBreakages.AsQueryable();
+            if (projectIds.Count > 0) ebQuery = ebQuery.Where(e => projectIds.Contains(e.ProjectId));
+            foreach (var json in await ebQuery.Where(e => !string.IsNullOrWhiteSpace(e.InnerEnvelope)).Select(e => e.InnerEnvelope).ToListAsync())
             {
-                try
+                try { using var doc = JsonDocument.Parse(json); foreach (var p in doc.RootElement.EnumerateObject()) if (!string.IsNullOrWhiteSpace(p.Name)) envBreakageJsonKeys.Add(p.Name); }
+                catch { }
+            }
+
+            // ExtraConfig — only expose Inner from EnvelopeType JSON, label = actual value (e.g. "E10")
+            // Use projectId directly if provided, otherwise fall back to projectIds from group+type
+            string innerEnvelopeValue = null;
+            var extraProjectIds = projectId.HasValue && projectId.Value > 0
+                ? new List<int> { projectId.Value }
+                : projectIds;
+
+            if (extraProjectIds.Count > 0)
+            {
+                var envelopeTypeJson = await _context.ExtraConfigurations
+                    .Where(e => extraProjectIds.Contains(e.ProjectId) && !string.IsNullOrWhiteSpace(e.EnvelopeType))
+                    .Select(e => e.EnvelopeType)
+                    .FirstOrDefaultAsync();
+                if (!string.IsNullOrWhiteSpace(envelopeTypeJson))
                 {
-                    using var doc = JsonDocument.Parse(json);
-                    if (doc.RootElement.ValueKind != JsonValueKind.Object) continue;
-                    foreach (var prop in doc.RootElement.EnumerateObject())
+                    try
                     {
-                        if (!string.IsNullOrWhiteSpace(prop.Name))
-                            nrJsonKeys.Add(prop.Name);
+                        using var doc = JsonDocument.Parse(envelopeTypeJson);
+                        if (doc.RootElement.TryGetProperty("Inner", out var innerProp))
+                            innerEnvelopeValue = innerProp.GetString()?.Trim();
                     }
-                }
-                catch
-                {
-                    // ignore malformed JSON rows
+                    catch { }
                 }
             }
 
-            return Ok(new
+            // Build single deduplicated flat list — priority: b → e → n → eb → x
+            // Each column name appears exactly once, mapped to the highest-priority table prefix
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var result = new List<Dictionary<string, string>>();
+
+            void AddColumns(IEnumerable<string> cols, string prefix)
             {
-                nrColumns = nrColumns.OrderBy(x => x).ToList(),
-                envColumns = envColumns.OrderBy(x => x).ToList(),
-                envBreakageColumns = envBreakageColumns.OrderBy(x => x).ToList(),
-                boxColumns = boxColumns.OrderBy(x => x).ToList(),
-                nrJsonKeys = nrJsonKeys
-                    .Where(k => !excludeColumns.Contains(k))
-                    .OrderBy(x => x)
-                    .ToList()
+                foreach (var col in cols.OrderBy(x => x))
+                {
+                    if (excludeColumns.Contains(col)) continue;
+                    if (!seen.Add(col)) continue;
+                    result.Add(new Dictionary<string, string>
+                    {
+                        ["value"] = $"{prefix}{col}",
+                        ["label"] = col
+                    });
+                }
+            }
+
+            AddColumns(boxColumns,                                    "b.");
+            AddColumns(envColumns,                                    "e.");
+            AddColumns(nrColumns,                                     "n.");
+            AddColumns(nrJsonKeys,                                    "n.");
+            AddColumns(envBreakageCols,                               "eb.");
+            AddColumns(envBreakageJsonKeys.Where(k => !excludeColumns.Contains(k)), "eb.");
+
+            // Calculated fields for quantity sheet (sourced directly from SP result)
+            result.Add(new Dictionary<string, string>
+            {
+                ["value"] = "c.TotalCenters",
+                ["label"] = "TotalCenters"
             });
+
+            // Virtual computed fields — not real columns, resolved to SQL expressions at report generation
+            result.Add(new Dictionary<string, string>
+            {
+                ["value"] = "calc:BOX_RANGE",
+                ["label"] = "Box Range"
+            });
+            result.Add(new Dictionary<string, string>
+            {
+                ["value"] = "calc:TOTAL_BOXES",
+                ["label"] = "Total Boxes"
+            });
+
+            // x.Inner — store as eb.<actualValue> so the mapping saves the real field reference
+            // e.g. if Inner = "E10", value = "eb.E10", label = "E10"
+            if (!string.IsNullOrWhiteSpace(innerEnvelopeValue)
+                && seen.Add(innerEnvelopeValue)
+                && !result.Any(r => string.Equals(r["label"], innerEnvelopeValue, StringComparison.OrdinalIgnoreCase)))
+            {
+                result.Add(new Dictionary<string, string>
+                {
+                    ["value"] = $"eb.{innerEnvelopeValue}",
+                    ["label"] = innerEnvelopeValue
+                });
+            }
+
+            return Ok(result);
         }
 
         // GET: api/RPTTemplates/5

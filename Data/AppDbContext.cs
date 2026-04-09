@@ -1,5 +1,9 @@
 ﻿using ERPToolsAPI.Models;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.ChangeTracking;
+using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
+using System.Linq;
+using System.Text.Json;
 using Tools.Models;
 
 namespace ERPToolsAPI.Data
@@ -40,13 +44,99 @@ namespace ERPToolsAPI.Data
         {
             base.OnModelCreating(modelBuilder);
 
-            modelBuilder.Entity<EnvelopeBreakage>()
-                .HasIndex(e => e.NrDataId)
+            modelBuilder.Entity<ExtraEnvelopes>()
+                .HasIndex(e => new { e.CatchNo, e.ExtraId, e.ProjectId})
                 .IsUnique();
-
+            modelBuilder.Entity<EnvelopeBreakage>()
+                .HasIndex(e => new { e.NrDataId, e.ProjectId })
+                .IsUnique();
+            modelBuilder.Entity<ExtrasConfiguration>()
+                .HasIndex(e => new { e.ExtraType, e.ProjectId })
+                .IsUnique();
+            modelBuilder.Entity<ProjectConfig>()
+                .HasIndex(e => e.ProjectId)
+                .IsUnique();
+            modelBuilder.Entity<Project>()
+                .HasIndex(e => e.ProjectId)
+                .IsUnique();
             modelBuilder.Entity<BoxBreakingResult>()
                 .HasIndex(e => new { e.ProjectId, e.BoxNo })
                 .IsUnique(false);
+
+            var uploadListConverter = new ValueConverter<List<int>, string>(
+                v => SerializeUploadList(v),
+                v => DeserializeUploadList(v)
+            );
+
+            var uploadListComparer = new ValueComparer<List<int>>(
+                (l, r) => (l ?? new List<int>()).SequenceEqual(r ?? new List<int>()),
+                v => (v ?? new List<int>()).Aggregate(0, (a, item) => HashCode.Combine(a, item.GetHashCode())),
+                v => (v ?? new List<int>()).ToList()
+            );
+
+            modelBuilder.Entity<NRData>()
+                .Property(e => e.UploadList)
+                .HasConversion(uploadListConverter)
+                .Metadata.SetValueComparer(uploadListComparer);
+        }
+
+        private static List<int> DeserializeUploadList(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return new List<int>();
+            }
+
+            try
+            {
+                using var doc = JsonDocument.Parse(value);
+                var root = doc.RootElement;
+                if (root.ValueKind == JsonValueKind.Array)
+                {
+                    return root
+                        .EnumerateArray()
+                        .Where(x => x.ValueKind == JsonValueKind.Number)
+                        .Select(x => x.GetInt32())
+                        .ToList();
+                }
+                if (root.ValueKind == JsonValueKind.Number)
+                {
+                    return new List<int> { root.GetInt32() };
+                }
+                if (root.ValueKind == JsonValueKind.String)
+                {
+                    var text = root.GetString() ?? string.Empty;
+                    return ParseUploadListText(text);
+                }
+            }
+            catch
+            {
+                // Fallback to plain text parsing
+            }
+
+            return ParseUploadListText(value);
+        }
+
+        private static List<int> ParseUploadListText(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return new List<int>();
+            }
+            var parts = value
+                .Split(',', StringSplitOptions.RemoveEmptyEntries)
+                .Select(v => v.Trim())
+                .Where(v => int.TryParse(v, out _))
+                .Select(int.Parse)
+                .ToList();
+
+            return parts;
+        }
+
+        private static string SerializeUploadList(List<int> value)
+        {
+            return JsonSerializer.Serialize(value ?? new List<int>());
+              
         }
         
     }

@@ -39,11 +39,11 @@ namespace Tools.Controllers
                     return NotFound("No envelope breaking results found. Run ProcessEnvelopeBreaking first.");
 
                 var envelopeResults = await _context.EnvelopeBreakingResults
-                    .Where(r => r.ProjectId == ProjectId && r.UploadBatch == maxBatch.Value)
+                    .Where(r => r.ProjectId == ProjectId && r.UploadBatch == maxBatch.Value && r.SerialNumber != 0)
                     .ToListAsync();
 
                 var nrData = await _context.NRDatas
-                    .Where(p => p.ProjectId == ProjectId && p.Status == true)
+                    .Where(p => p.ProjectId == ProjectId && p.Status == true )
                     .ToListAsync();
 
                 var projectconfig = await _context.ProjectConfigs
@@ -109,7 +109,7 @@ namespace Tools.Controllers
                     rowDict["CenterCode"] = result.CenterCode ?? "";
                     rowDict["CenterSort"] = result.CenterSort;
                     rowDict["ExamTime"] = result.ExamTime ?? "";
-                    rowDict["ExamDate"] = result.ExamDate ?? "";
+                    rowDict["ExamDate"] = result.ExamDate;
                     rowDict["Quantity"] = result.Quantity;
                     rowDict["TotalEnv"] = result.TotalEnv;
                     rowDict["NodalCode"] = result.NodalCode ?? "";
@@ -603,7 +603,14 @@ namespace Tools.Controllers
                     "BoxBreakingProcessing",
                     User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
                     ProjectId);
-
+                using var client = new HttpClient();
+                var response = await client.GetAsync($"{_apiSettings.BoxBreaking}?ProjectId={ProjectId}");
+                if (!response.IsSuccessStatusCode)
+                {
+                    // Handle failure from GET call as needed
+                    _loggerService.LogError("Failed to generate report", "", nameof(BoxBreakingProcessingController));
+                    return StatusCode((int)response.StatusCode, "Failed to get envelope breakages after configuration.");
+                }
                 return Ok(new
                 {
                     message = "Box breaking data saved to database",
@@ -623,12 +630,15 @@ namespace Tools.Controllers
         /// </summary>
 
         [HttpGet("GetBoxBreakingReport")]
-        public async Task<IActionResult> GetBoxBreakingReport(int ProjectId, int UploadBatch)
+        public async Task<IActionResult> GetBoxBreakingReport(int ProjectId)
         {
             try
             {
+                var maxBatch = await _context.BoxBreakingResults
+                   .Where(r => r.ProjectId == ProjectId)
+                   .MaxAsync(r => (int?)r.UploadBatch);
                 var boxResults = await _context.BoxBreakingResults
-                    .Where(r => r.ProjectId == ProjectId && r.UploadBatch == UploadBatch)
+                    .Where(r => r.ProjectId == ProjectId && r.UploadBatch == maxBatch)
                     .OrderBy(r => r.Id)
                     .ToListAsync();
 
@@ -637,7 +647,7 @@ namespace Tools.Controllers
 
                 var envelopeResults = await _context.EnvelopeBreakingResults.ToListAsync();
                 var nrData = await _context.NRDatas
-                    .Where(p => p.ProjectId == ProjectId && p.Status == true)
+                    .Where(p => p.ProjectId == ProjectId && p.Status == true && p.Steps==3)
                     .ToListAsync();
 
                 var projectconfig = await _context.ProjectConfigs
@@ -713,7 +723,7 @@ namespace Tools.Controllers
                 if (!Directory.Exists(reportPath))
                     Directory.CreateDirectory(reportPath);
 
-                var filePath = Path.Combine(reportPath, "BoxBreakingReport.xlsx");
+                var filePath = Path.Combine(reportPath, "BoxBreaking.xlsx");
                 if (System.IO.File.Exists(filePath))
                     System.IO.File.Delete(filePath);
 
