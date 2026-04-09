@@ -171,7 +171,7 @@ namespace Tools.Controllers
                 if (project == null)
                     return BadRequest("Project not found");
 
-                bool isOnlyReport = project.GroupId == 28;
+                bool isOnlyReport = project.GroupId == 19;
 
                 List<ExtraEnvelopes> envelopesToUse = new();
 

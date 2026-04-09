@@ -35,7 +35,7 @@ namespace Tools.Controllers
             {
                 Console.WriteLine("inside");
                 var data = await _context.NRDatas
-                    .Where(p => p.ProjectId == ProjectId && p.Status == true && p.Steps==0)
+                    .Where(p => p.ProjectId == ProjectId && p.Status == true)
                     .ToListAsync();
                 Console.WriteLine(data.Count.ToString());
                 var projectconfig = await _context.ProjectConfigs
@@ -306,7 +306,7 @@ SET Quantity = IFNULL(Quantity, 0),
 WHERE ProjectId = {0};", ProjectId);
 
                 var data = await _context.NRDatas
-                    .Where(p => p.ProjectId == ProjectId)
+                    .Where(p => p.ProjectId == ProjectId && p.Status==true)
                     .ToListAsync();
 
                 if (!data.Any())

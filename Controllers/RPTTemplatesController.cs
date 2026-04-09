@@ -44,40 +44,70 @@ namespace Tools.Controllers
 
         // GET: api/RPTTemplates/by-group?typeId=2&groupId=1&projectId=10
         [HttpGet("by-group")]
-        public async Task<ActionResult> GetByGroup([FromQuery] int typeId, [FromQuery] int? groupId, [FromQuery] int? projectId)
+        public async Task<ActionResult> GetByGroup(
+     [FromQuery] int? typeId,
+     [FromQuery] int? groupId,
+     [FromQuery] int? projectId)
         {
-            if (typeId <= 0)
-                return BadRequest("typeId is required.");
-
             groupId = NormalizeNullableId(groupId);
             projectId = NormalizeNullableId(projectId);
 
-            if (projectId.HasValue && !groupId.HasValue)
-                return BadRequest("groupId is required when projectId is provided.");
-
             if (projectId.HasValue)
             {
-                var resolved = await ResolveTemplatesForContext(typeId, groupId.Value, projectId.Value);
+                var project = await _context.Projects
+                    .FirstOrDefaultAsync(p => p.ProjectId == projectId.Value);
+
+                if (project == null)
+                    return NotFound("Project not found.");
+
+                // Only fill missing values
+                if (!groupId.HasValue)
+                    groupId = project.GroupId;
+
+                if (!typeId.HasValue)
+                    typeId = project.TypeId;
+
+                // Still validate after attempting fill
+                if (!groupId.HasValue || !typeId.HasValue)
+                    return BadRequest("groupId and typeId could not be resolved.");
+
+                var resolved = await ResolveTemplatesForContext(
+                    typeId.Value,
+                    groupId.Value,
+                    projectId.Value);
+
                 return Ok(resolved);
             }
 
             if (groupId.HasValue)
             {
+                if (!typeId.HasValue)
+                    return BadRequest("typeId is required when groupId is provided.");
+
                 var groupTemplates = await _context.RPTTemplates
-                    .Where(t => t.GroupId == groupId && t.TypeId == typeId && t.ProjectId == null && t.IsActive)
+                    .Where(t => t.GroupId == groupId
+                                && t.TypeId == typeId
+                                && t.ProjectId == null
+                                && t.IsActive)
                     .OrderBy(t => t.TemplateName)
                     .ToListAsync();
+
                 return Ok(groupTemplates);
             }
 
+            if (!typeId.HasValue)
+                return BadRequest("typeId is required.");
+
             var standardTemplates = await _context.RPTTemplates
-                .Where(t => t.GroupId == null && t.ProjectId == null && t.TypeId == typeId && t.IsActive)
+                .Where(t => t.GroupId == null
+                            && t.ProjectId == null
+                            && t.TypeId == typeId
+                            && t.IsActive)
                 .OrderBy(t => t.TemplateName)
                 .ToListAsync();
 
             return Ok(standardTemplates);
         }
-
         // GET: api/RPTTemplates/versions?typeId=2&templateName=ABC&groupId=1&projectId=10
         [HttpGet("versions")]
         public async Task<ActionResult> GetVersions(

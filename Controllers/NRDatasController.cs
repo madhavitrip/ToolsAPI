@@ -711,11 +711,13 @@ namespace Tools.Controllers
                 // =============================
                 // ✅ GET CURRENT BATCH NUMBER
                 // =============================
-                int currentBatch = await _context.NRDatas
-                    .Where(x => x.ProjectId == projectId && x.UploadList != null)
-                    .SelectMany(x => x.UploadList)
-                    .DefaultIfEmpty(0)
-                    .MaxAsync() + 1;
+                int currentBatch = (await _context.NRDatas
+         .Where(x => x.ProjectId == projectId && x.UploadList != null)
+         .Select(x => x.UploadList)
+         .ToListAsync())
+     .SelectMany(x => x)
+     .DefaultIfEmpty(0)
+     .Max() + 1;
 
                 var nrDatasToAdd = new List<NRData>();
                 var extraEnvelopesToAdd = new List<ExtraEnvelopes>();
