@@ -6,5 +6,6 @@
         public int GroupId { get; set; }
         public int TypeId { get; set; }
         public List<int> UserAssigned {  get; set; }
+        public bool Status { get; set; }
     }
 }

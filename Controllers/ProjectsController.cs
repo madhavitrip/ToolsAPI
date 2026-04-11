@@ -124,7 +124,8 @@ namespace Tools.Controllers
                       p.ProjectId,
                       p.GroupId,
                       p.TypeId,
-                      LatestLoggedAt = l.LatestLoggedAt
+                      LatestLoggedAt = l.LatestLoggedAt,
+                      p.Status,
                     })
                  .OrderByDescending(x => x.LatestLoggedAt)   // ⭐ Order by latest access
                   .Select(x => new
@@ -132,7 +133,8 @@ namespace Tools.Controllers
                    x.ProjectId,
                    x.GroupId,
                    x.TypeId,
-                   TimeAgo = GetTimeAgo(x.LatestLoggedAt)
+                   TimeAgo = GetTimeAgo(x.LatestLoggedAt),
+                   x.Status,
                   })
                .ToList();
                 return Ok(result);
