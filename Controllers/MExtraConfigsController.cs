@@ -1,4 +1,4 @@
-﻿using ERPToolsAPI.Data;
+using ERPToolsAPI.Data;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -52,7 +52,7 @@ namespace Tools.Controllers
                     _loggerService.LogEvent(
                         $"Deleted old MExtrasConfiguration record(s) for TypeId {extrasConfiguration.TypeId} and GroupId {extrasConfiguration.GroupId}",
                         "MExtraConfigurations",
-                        User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
+                        LogHelper.GetTriggeredBy(User),
                         extrasConfiguration.GroupId
                     );
                 }
@@ -63,7 +63,7 @@ namespace Tools.Controllers
                 _loggerService.LogEvent(
                     $"Created new MExtrasConfiguration with TypeId {extrasConfiguration.TypeId} and GroupId {extrasConfiguration.GroupId}",
                     "MExtraConfigurations",
-                    User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
+                    LogHelper.GetTriggeredBy(User),
                     extrasConfiguration.GroupId
                 );
 
@@ -110,3 +110,4 @@ namespace Tools.Controllers
 
 
 }
+

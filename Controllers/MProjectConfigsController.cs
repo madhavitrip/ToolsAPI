@@ -1,4 +1,4 @@
-﻿using ERPToolsAPI.Data;
+using ERPToolsAPI.Data;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -34,7 +34,7 @@ namespace Tools.Controllers
                     _loggerService.LogEvent(
                         $"MProjectConfig for TypeId {config.TypeId} and GroupId {config.GroupId} already exists",
                         "MProjectConfigs",
-                        User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
+                        LogHelper.GetTriggeredBy(User),
                         config.GroupId
                     );
 
@@ -59,7 +59,7 @@ namespace Tools.Controllers
                 _loggerService.LogEvent(
                     $"Created a new MProjectConfig with TypeId {projectConfig.TypeId} and GroupId {projectConfig.GroupId}",
                     "MProjectConfigs",
-                    User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
+                    LogHelper.GetTriggeredBy(User),
                     projectConfig.GroupId
                 );
 
@@ -88,3 +88,4 @@ namespace Tools.Controllers
 
     }
 }
+

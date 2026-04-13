@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -75,14 +75,14 @@ namespace Tools.Controllers
             try
             {
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Updated Module for id {id}", "Module", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,0);
+                _loggerService.LogEvent($"Updated Module for id {id}", "Module", LogHelper.GetTriggeredBy(User),0);
 
             }
             catch (Exception ex)
             {
                 if (!ModuleExists(id))
                 {
-                    _loggerService.LogEvent($"Module with ID {id} not found during updating", "Module", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,0);
+                    _loggerService.LogEvent($"Module with ID {id} not found during updating", "Module", LogHelper.GetTriggeredBy(User),0);
 
                     return NotFound();
                 }
@@ -107,7 +107,7 @@ namespace Tools.Controllers
             {
                 _context.Modules.Add(@module);
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Created a new Module with ID {module.Id}", "Module", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,0);
+                _loggerService.LogEvent($"Created a new Module with ID {module.Id}", "Module", LogHelper.GetTriggeredBy(User),0);
 
                 return CreatedAtAction("GetModule", new { id = @module.Id }, @module);
             }
@@ -132,7 +132,7 @@ namespace Tools.Controllers
 
                 _context.Modules.Remove(@module);
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Deleted a Module with ID {id}", "Module", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,0);
+                _loggerService.LogEvent($"Deleted a Module with ID {id}", "Module", LogHelper.GetTriggeredBy(User),0);
 
                 return NoContent();
             }
@@ -149,3 +149,4 @@ namespace Tools.Controllers
         }
     }
 }
+

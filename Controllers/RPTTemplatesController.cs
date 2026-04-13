@@ -1,4 +1,4 @@
-﻿using ERPToolsAPI.Data;
+using ERPToolsAPI.Data;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -10,6 +10,7 @@ using System.Security.Cryptography;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using Tools.Models;
+using Tools.Services;
 
 namespace Tools.Controllers
 {
@@ -22,17 +23,20 @@ namespace Tools.Controllers
         private readonly IWebHostEnvironment _env;
         private readonly ApiSettings _apiSettings;
         private readonly IHttpClientFactory _httpClientFactory;
+        private readonly ILoggerService _loggerService;
 
         public RPTTemplatesController(
             ERPToolsDbContext context,
             IWebHostEnvironment env,
             IOptions<ApiSettings> apiSettings,
-            IHttpClientFactory httpClientFactory)
+            IHttpClientFactory httpClientFactory,
+            ILoggerService loggerService)
         {
             _context = context;
             _env = env;
             _apiSettings = apiSettings.Value;
             _httpClientFactory = httpClientFactory;
+            _loggerService = loggerService;
         }
 
         // GET: api/RPTTemplates
@@ -212,7 +216,7 @@ namespace Tools.Controllers
                 catch { }
             }
 
-            // ExtraConfig — only expose Inner from EnvelopeType JSON, label = actual value (e.g. "E10")
+            // ExtraConfig � only expose Inner from EnvelopeType JSON, label = actual value (e.g. "E10")
             // Use projectId directly if provided, otherwise fall back to projectIds from group+type
             string innerEnvelopeValue = null;
             var extraProjectIds = projectId.HasValue && projectId.Value > 0
@@ -240,7 +244,7 @@ namespace Tools.Controllers
             // Load all fields from the Fields table
             var allFields = await _context.Fields.OrderBy(f => f.Name).ToListAsync();
 
-            // Build single deduplicated flat list — priority: b → e → n → eb → x
+            // Build single deduplicated flat list � priority: b ? e ? n ? eb ? x
             // Each column name appears exactly once, mapped to the highest-priority table prefix
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var result = new List<Dictionary<string, string>>();
@@ -266,8 +270,8 @@ namespace Tools.Controllers
             AddColumns(envBreakageCols,                               "eb.");
             AddColumns(envBreakageJsonKeys.Where(k => !excludeColumns.Contains(k)), "eb.");
 
-            // Add Fields table entries — always use n. prefix.
-            // BuildSourceExpression handles the rest: direct column → n.`col`, otherwise → JSON_EXTRACT(n.NRDatas, ...)
+            // Add Fields table entries � always use n. prefix.
+            // BuildSourceExpression handles the rest: direct column ? n.`col`, otherwise ? JSON_EXTRACT(n.NRDatas, ...)
             foreach (var field in allFields)
             {
                 if (string.IsNullOrWhiteSpace(field.Name)) continue;
@@ -286,7 +290,7 @@ namespace Tools.Controllers
             result.Add(new Dictionary<string, string> { ["value"] = "c.TotalCenters",  ["label"] = "TotalCenters" });
             result.Add(new Dictionary<string, string> { ["value"] = "c.TotalNodal",    ["label"] = "TotalNodal" });
             
-            // Virtual computed fields — not real columns, resolved to SQL expressions at report generation
+            // Virtual computed fields � not real columns, resolved to SQL expressions at report generation
             result.Add(new Dictionary<string, string>
             {
                 ["value"] = "calc:BOX_RANGE",
@@ -298,7 +302,7 @@ namespace Tools.Controllers
                 ["label"] = "Total Boxes"
             });
 
-            // x.Inner — store as eb.<actualValue> so the mapping saves the real field reference
+            // x.Inner � store as eb.<actualValue> so the mapping saves the real field reference
             // e.g. if Inner = "E10", value = "eb.E10", label = "E10"
             if (!string.IsNullOrWhiteSpace(innerEnvelopeValue)
                 && seen.Add(innerEnvelopeValue)
@@ -365,6 +369,7 @@ namespace Tools.Controllers
             }
 
             await _context.SaveChangesAsync();
+            _loggerService.LogEvent($"Updated template {id} (applyToAll={updateAll})", "RPTTemplate", LogHelper.GetTriggeredBy(User), 0);
             return Ok(new { templateId = template.TemplateId, message = "Template updated." });
         }
 
@@ -489,7 +494,7 @@ namespace Tools.Controllers
             var previous = await scopeQuery.Where(t => t.IsActive).ToListAsync();
             previous.ForEach(t => t.IsActive = false);
 
-            var uploadedByUserId = GetUserIdFromToken();
+            var uploadedByUserId = LogHelper.GetTriggeredBy(User);
 
             var template = new RPTTemplate
             {
@@ -583,6 +588,7 @@ namespace Tools.Controllers
                 }
             }
 
+            _loggerService.LogEvent($"Uploaded template '{template.TemplateName}' v{template.Version} (id={template.TemplateId})", "RPTTemplate", LogHelper.GetTriggeredBy(User), 0);
             return Ok(new
             {
                 template.TemplateId,
@@ -626,6 +632,7 @@ namespace Tools.Controllers
             }
 
             await _context.SaveChangesAsync();
+            _loggerService.LogEvent($"Activated template {id}", "RPTTemplate", LogHelper.GetTriggeredBy(User), 0);
             return Ok(new { templateId = template.TemplateId, message = "Template activated." });
         }
 
@@ -639,7 +646,7 @@ namespace Tools.Controllers
             var targetProjectId = NormalizeNullableId(req.TargetProjectId);
             var targetGroupId = NormalizeNullableId(req.TargetGroupId);
             var targetTypeId = NormalizeNullableId(req.TargetTypeId);
-            var uploadedByUserId = GetUserIdFromToken();
+            var uploadedByUserId = LogHelper.GetTriggeredBy(User);
 
             if (targetProjectId.HasValue)
             {
@@ -782,6 +789,7 @@ namespace Tools.Controllers
                 imported.Add(new { newTemplate.TemplateId, newTemplate.TemplateName, newTemplate.Version });
             }
 
+            _loggerService.LogEvent($"Imported {imported.Count} template(s) from group {req.SourceGroupId} to group {targetGroupId}", "RPTTemplate", LogHelper.GetTriggeredBy(User), 0);
             return Ok(new { imported });
         }
 
@@ -813,6 +821,7 @@ namespace Tools.Controllers
             }
 
             await _context.SaveChangesAsync();
+            _loggerService.LogEvent($"Saved mapping for templateId {id}", "RPTMapping", LogHelper.GetTriggeredBy(User), 0);
             return Ok(new { templateId = id, message = "Mapping saved." });
         }
 
@@ -838,7 +847,7 @@ namespace Tools.Controllers
                 : null;
             t.UpdatedDate = DateTime.Now;
             await _context.SaveChangesAsync();
-
+            _loggerService.LogEvent($"Parsed fields for templateId {id}", "RPTTemplate", LogHelper.GetTriggeredBy(User), 0);
             return Ok(new { templateId = id, parsedFields });
         }
 
@@ -1057,3 +1066,4 @@ namespace Tools.Controllers
         public bool ApplyToAllVersions { get; set; } = true;
     }
 }
+

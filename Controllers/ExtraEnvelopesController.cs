@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -125,14 +125,14 @@ namespace Tools.Controllers
 
             try
             {
-                _loggerService.LogEvent($"Updated ExtraEnvelope with id {id}", "ExtraEnvelopes", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, extraEnvelopes.ProjectId);
+                _loggerService.LogEvent($"Updated ExtraEnvelope with id {id}", "ExtraEnvelopes", LogHelper.GetTriggeredBy(User), extraEnvelopes.ProjectId);
                 await _context.SaveChangesAsync();
             }
             catch (Exception ex)
             {
                 if (!ExtraEnvelopesExists(id))
                 {
-                    _loggerService.LogEvent($"ExtraEnvelopes with ID {id} not found during updating", "ExtraEnvelopes", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, extraEnvelopes.ProjectId);
+                    _loggerService.LogEvent($"ExtraEnvelopes with ID {id} not found during updating", "ExtraEnvelopes", LogHelper.GetTriggeredBy(User), extraEnvelopes.ProjectId);
                     return NotFound();
                 }
                 else
@@ -162,7 +162,7 @@ namespace Tools.Controllers
                 var nrDataList = await _context.NRDatas
                     .Where(d => d.ProjectId == ProjectId && d.Status == true && d.Steps==1)
                     .ToListAsync();
-                // ✅ Get GroupId
+                // ? Get GroupId
                 var project = await _context.Projects
                     .Where(p => p.ProjectId == ProjectId)
                     .Select(p => new { p.GroupId })
@@ -176,7 +176,7 @@ namespace Tools.Controllers
                 List<ExtraEnvelopes> envelopesToUse = new();
 
                 // =====================================================
-                // ✅ CASE 1: REPORT ONLY (GroupId = 28)
+                // ? CASE 1: REPORT ONLY (GroupId = 28)
                 // =====================================================
                 if (isOnlyReport)
                 {
@@ -304,9 +304,9 @@ namespace Tools.Controllers
                 }
 
                
-                _loggerService.LogEvent($"Created ExtraEnvelopes for Project {ProjectId}", "ExtraEnvelopes", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, ProjectId);
+                _loggerService.LogEvent($"Created ExtraEnvelopes for Project {ProjectId}", "ExtraEnvelopes", LogHelper.GetTriggeredBy(User), ProjectId);
 
-                // ------------------- 📊 Generate Excel Report -------------------
+                // ------------------- ?? Generate Excel Report -------------------
                
                 var extraconfig = await _context.ExtraConfigurations
                     .Where(x => x.ProjectId == ProjectId).ToListAsync();
@@ -497,7 +497,7 @@ namespace Tools.Controllers
                 catch { }
             }
 
-            // ✅ Set InnerEnvelope and OuterEnvelope values in proper columns
+            // ? Set InnerEnvelope and OuterEnvelope values in proper columns
             EnvelopeType envelopeType=null;
             try
             {
@@ -555,7 +555,7 @@ namespace Tools.Controllers
 
                 _context.ExtrasEnvelope.Remove(extraEnvelopes);
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"ExtraEnvelope with ID {id} is deleted", "ExtraEnvelope", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, extraEnvelopes.ProjectId);
+                _loggerService.LogEvent($"ExtraEnvelope with ID {id} is deleted", "ExtraEnvelope", LogHelper.GetTriggeredBy(User), extraEnvelopes.ProjectId);
                 return NoContent();
             }
             catch (Exception ex)
@@ -571,3 +571,4 @@ namespace Tools.Controllers
         }
     }
 }
+

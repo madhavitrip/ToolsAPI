@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -160,13 +160,13 @@ namespace Tools.Controllers
             try
             {
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Updated ProjectConfig for {projectConfig.ProjectId}", "ProjectConfig", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, projectConfig.ProjectId);
+                _loggerService.LogEvent($"Updated ProjectConfig for {projectConfig.ProjectId}", "ProjectConfig", LogHelper.GetTriggeredBy(User), projectConfig.ProjectId);
             }
             catch (Exception ex)
             {
                 if (!ProjectConfigExists(id))
                 {
-                    _loggerService.LogEvent($"ProjectConfig with ID {id} not found", "ProjectConfig", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, projectConfig.ProjectId);
+                    _loggerService.LogEvent($"ProjectConfig with ID {id} not found", "ProjectConfig", LogHelper.GetTriggeredBy(User), projectConfig.ProjectId);
                     return NotFound();
                 }
                 else
@@ -191,14 +191,14 @@ namespace Tools.Controllers
                 
                 if (config != null)
                 {
-                    _loggerService.LogEvent($"ProjectConfig for {config.ProjectId} already exists", "ProjectConfig", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, projectConfig.ProjectId);
+                    _loggerService.LogEvent($"ProjectConfig for {config.ProjectId} already exists", "ProjectConfig", LogHelper.GetTriggeredBy(User), projectConfig.ProjectId);
                    
                     _context.ProjectConfigs.Remove(config);
                     await _context.SaveChangesAsync();
                 }
                 _context.ProjectConfigs.Add(projectConfig);
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Created a new ProjectConfig with ID {projectConfig.ProjectId}", "ProjectConfig", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, projectConfig.ProjectId);
+                _loggerService.LogEvent($"Created a new ProjectConfig with ID {projectConfig.ProjectId}", "ProjectConfig", LogHelper.GetTriggeredBy(User), projectConfig.ProjectId);
                 return CreatedAtAction("GetProjectConfig", new { id = projectConfig.Id }, projectConfig);
             }
             catch (Exception ex)
@@ -219,15 +219,15 @@ namespace Tools.Controllers
         {
             try
             {
-                var userId = User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0;
+                var userId = LogHelper.GetTriggeredBy(User);
 
-                // 🔹 Step 1: Get module names from DB
+                // ?? Step 1: Get module names from DB
                 var moduleNames = await _context.Modules
                     .Where(m => request.ModuleIds.Contains(m.Id))
                     .Select(m => m.Name)
                     .ToListAsync();
 
-                // 🔹 Step 2: Mapping (name → report key)
+                // ?? Step 2: Mapping (name ? report key)
                 var moduleToReportKeyMap = GetModuleToReportKeyMap();
 
                 var reportKeys = moduleNames
@@ -237,13 +237,13 @@ namespace Tools.Controllers
                     .Distinct()
                     .ToList();
 
-                // 🔹 Step 3: Base path
+                // ?? Step 3: Base path
                 var basePath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", request.ProjectId.ToString());
 
                 if (!Directory.Exists(basePath))
                     return Ok("No project folder found");
 
-                // 🔹 Step 4: Delete matching files
+                // ?? Step 4: Delete matching files
                 foreach (var key in reportKeys)
                 {
                     var files = Directory.GetFiles(basePath, $"{key}*");
@@ -295,13 +295,13 @@ namespace Tools.Controllers
                 var projectConfig = await _context.ProjectConfigs.FindAsync(id);
                 if (projectConfig == null)
                 {
-                    _loggerService.LogEvent($"ProjectConfig with ID {id} not found during delete", "ProjectConfig", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,projectConfig.ProjectId);
+                    _loggerService.LogEvent($"ProjectConfig with ID {id} not found during delete", "ProjectConfig", LogHelper.GetTriggeredBy(User),projectConfig.ProjectId);
                     return NotFound();
                 }
 
                 _context.ProjectConfigs.Remove(projectConfig);
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Deleted a ProjectConfig with ID {projectConfig.ProjectId}", "ProjectConfig", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, projectConfig.ProjectId);
+                _loggerService.LogEvent($"Deleted a ProjectConfig with ID {projectConfig.ProjectId}", "ProjectConfig", LogHelper.GetTriggeredBy(User), projectConfig.ProjectId);
                 return NoContent();
             }
             catch (Exception ex)
@@ -317,3 +317,4 @@ namespace Tools.Controllers
         }
     }
 }
+
