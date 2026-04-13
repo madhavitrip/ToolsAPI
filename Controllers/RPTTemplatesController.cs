@@ -164,7 +164,12 @@ namespace Tools.Controllers
             List<string> FilterColumns(List<string> columns) =>
                 columns.Where(c => !excludeColumns.Contains(c)).ToList();
 
-            var nrColumns       = FilterColumns(GetModelColumns<NRData>(exclude: new[] { "NRDatas" }));
+            // Direct NRData model columns (excluding the JSON blob column itself)
+            var nrDirectColumns = new HashSet<string>(
+                GetModelColumns<NRData>(exclude: new[] { "NRDatas", "UploadList" }),
+                StringComparer.OrdinalIgnoreCase);
+
+            var nrColumns       = FilterColumns(nrDirectColumns.ToList());
             var envColumns      = FilterColumns(GetModelColumns<EnvelopeBreakingResult>());
             var envBreakageCols = FilterColumns(GetModelColumns<EnvelopeBreakage>());
             var boxColumns      = FilterColumns(GetModelColumns<BoxBreakingResult>());
@@ -187,7 +192,14 @@ namespace Tools.Controllers
             if (projectIds.Count > 0) nrQuery = nrQuery.Where(n => projectIds.Contains(n.ProjectId));
             foreach (var json in await nrQuery.Where(n => !string.IsNullOrWhiteSpace(n.NRDatas)).Select(n => n.NRDatas).ToListAsync())
             {
-                try { using var doc = JsonDocument.Parse(json); foreach (var p in doc.RootElement.EnumerateObject()) if (!string.IsNullOrWhiteSpace(p.Name)) nrJsonKeys.Add(p.Name); }
+                try
+                {
+                    using var doc = JsonDocument.Parse(json);
+                    foreach (var p in doc.RootElement.EnumerateObject())
+                        if (!string.IsNullOrWhiteSpace(p.Name)
+                            && !p.Name.StartsWith("json:", StringComparison.OrdinalIgnoreCase))
+                            nrJsonKeys.Add(p.Name);
+                }
                 catch { }
             }
 
@@ -225,6 +237,9 @@ namespace Tools.Controllers
                 }
             }
 
+            // Load all fields from the Fields table
+            var allFields = await _context.Fields.OrderBy(f => f.Name).ToListAsync();
+
             // Build single deduplicated flat list — priority: b → e → n → eb → x
             // Each column name appears exactly once, mapped to the highest-priority table prefix
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -251,13 +266,26 @@ namespace Tools.Controllers
             AddColumns(envBreakageCols,                               "eb.");
             AddColumns(envBreakageJsonKeys.Where(k => !excludeColumns.Contains(k)), "eb.");
 
-            // Calculated fields for quantity sheet (sourced directly from SP result)
-            result.Add(new Dictionary<string, string>
+            // Add Fields table entries — always use n. prefix.
+            // BuildSourceExpression handles the rest: direct column → n.`col`, otherwise → JSON_EXTRACT(n.NRDatas, ...)
+            foreach (var field in allFields)
             {
-                ["value"] = "c.TotalCenters",
-                ["label"] = "TotalCenters"
-            });
+                if (string.IsNullOrWhiteSpace(field.Name)) continue;
+                if (excludeColumns.Contains(field.Name)) continue;
+                if (seen.Contains(field.Name)) continue; // already present, skip duplicate
 
+                seen.Add(field.Name);
+                result.Add(new Dictionary<string, string>
+                {
+                    ["value"] = $"n.{field.Name}",
+                    ["label"] = field.Name
+                });
+            }
+
+            // Calculated fields for quantity sheet (sourced directly from SP result)
+            result.Add(new Dictionary<string, string> { ["value"] = "c.TotalCenters",  ["label"] = "TotalCenters" });
+            result.Add(new Dictionary<string, string> { ["value"] = "c.TotalNodal",    ["label"] = "TotalNodal" });
+            
             // Virtual computed fields — not real columns, resolved to SQL expressions at report generation
             result.Add(new Dictionary<string, string>
             {
