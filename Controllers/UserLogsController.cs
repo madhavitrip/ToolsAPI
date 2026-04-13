@@ -88,7 +88,7 @@ namespace ERPToolsAPI.Controllers
         [HttpPost("log-login")]
         public IActionResult LogLogin(UserLoginLog  userLoginLog)
         {
-            var userIdClaim = User.FindFirst(ClaimTypes.Name);
+            var userIdClaim = User.FindFirst("userid");
             if (userIdClaim == null) return Unauthorized();
 
             var userId = int.Parse(userIdClaim.Value);
