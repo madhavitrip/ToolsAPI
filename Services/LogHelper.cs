@@ -13,7 +13,7 @@ namespace Tools.Services
                 return 0;
             }
 
-            var value = user.FindFirst(ClaimTypes.Name)?.Value;
+            var value = user.FindFirst("userid")?.Value;
             return int.TryParse(value, out var id) ? id : 0;
         }
         

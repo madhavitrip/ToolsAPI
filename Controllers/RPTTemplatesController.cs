@@ -1229,7 +1229,7 @@ namespace Tools.Controllers
                 if (jwt == null) return null;
 
                 var claim = jwt.Claims.FirstOrDefault(c =>
-                    c.Type == ClaimTypes.Name ||
+                    c.Type == "userid" ||
                     c.Type == "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name" ||
                     c.Type == "sub");
 

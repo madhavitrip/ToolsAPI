@@ -777,6 +777,12 @@ namespace Tools.Controllers
                     .Where(p => p.ProjectId == ProjectId)
                     .ToDictionaryAsync(p => p.Id);
 
+                // ✅ NEW: Catch-wise NR mapping (for MSS rows)
+                var nrDataByCatch = await _context.NRDatas
+                    .Where(p => p.ProjectId == ProjectId)
+                    .GroupBy(p => p.CatchNo)
+                    .ToDictionaryAsync(g => g.Key, g => g.First());
+
                 var fields = await _context.Fields
                     .Where(f => projectconfig.EnvelopeMakingCriteria.Contains(f.FieldId))
                     .ToListAsync();
@@ -811,13 +817,22 @@ namespace Tools.Controllers
                     bool isMssRow = result.NrDataId == 0 && result.SerialNumber == 0;
                     rowDict["isMss"] = isMssRow;
 
+                    // ✅ FIXED NR MAPPING
                     NRData nr = null;
-                    if (!isMssRow && result.NrDataId != 0 && nrDataDict.TryGetValue(result.NrDataId, out var nrData))
+
+                    // Normal rows
+                    if (result.NrDataId != 0 && nrDataDict.TryGetValue(result.NrDataId, out var nrData))
                     {
                         nr = nrData;
                     }
+                    // MSS rows → fallback using CatchNo
+                    else if (isMssRow && !string.IsNullOrEmpty(result.CatchNo) &&
+                             nrDataByCatch.TryGetValue(result.CatchNo, out var catchNr))
+                    {
+                        nr = catchNr;
+                    }
 
-                    // NR fields
+                    // ✅ NR fields (now works for MSS too)
                     if (nr != null)
                     {
                         rowDict["SubjectName"] = nr.SubjectName;
@@ -827,7 +842,7 @@ namespace Tools.Controllers
                         rowDict["NRQuantity"] = nr.NRQuantity;
                     }
 
-                    // JSON fields
+                    // ✅ JSON dynamic fields
                     if (nr != null && !string.IsNullOrEmpty(nr.NRDatas))
                     {
                         try
@@ -971,11 +986,8 @@ namespace Tools.Controllers
                     .Distinct()
                     .ToList();
 
-                // SAFETY FIX
                 if (!finalSortedList.Any() || !allKeys.Any())
-                {
                     return BadRequest("No data available to generate Excel.");
-                }
 
                 // Excel
                 var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
@@ -989,14 +1001,12 @@ namespace Tools.Controllers
                 {
                     var ws = package.Workbook.Worksheets.Add("Envelope Report");
 
-                    // Headers
                     for (int i = 0; i < allKeys.Count; i++)
                     {
                         ws.Cells[1, i + 1].Value = allKeys[i];
                         ws.Cells[1, i + 1].Style.Font.Bold = true;
                     }
 
-                    // Data
                     int rowIdx = 2;
 
                     foreach (var item in finalSortedList)
@@ -1013,11 +1023,8 @@ namespace Tools.Controllers
                         rowIdx++;
                     }
 
-                    // ✅ CRITICAL FIX
                     if (ws.Dimension != null)
-                    {
                         ws.Cells[ws.Dimension.Address].AutoFitColumns();
-                    }
 
                     ws.View.FreezePanes(2, 1);
 
@@ -1036,7 +1043,7 @@ namespace Tools.Controllers
                 return StatusCode(500, new
                 {
                     error = ex.Message,
-                    stack = ex.StackTrace // helpful for debugging
+                    stack = ex.StackTrace
                 });
             }
         }
