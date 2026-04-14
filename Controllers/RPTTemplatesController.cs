@@ -44,7 +44,6 @@ namespace Tools.Controllers
         public async Task<ActionResult<IEnumerable<object>>> GetRPTTemplate()
         {
             var templates = await _context.RPTTemplates
-                .Where(t => !t.IsDeleted)
                 .ToListAsync();
 
             var templateIds = templates.Select(t => t.TemplateId).ToList();
@@ -108,8 +107,7 @@ namespace Tools.Controllers
                     .Where(t => t.GroupId == groupId
                                 && t.TypeId == typeId
                                 && t.ProjectId == null
-                                && t.IsActive
-                                && !t.IsDeleted)
+                                && t.IsActive)
                     .OrderBy(t => t.TemplateName)
                     .ToListAsync();
 
@@ -123,8 +121,7 @@ namespace Tools.Controllers
                 .Where(t => t.GroupId == null
                             && t.ProjectId == null
                             && t.TypeId == typeId
-                            && t.IsActive
-                            && !t.IsDeleted)
+                            && t.IsActive)
                 .OrderBy(t => t.TemplateName)
                 .ToListAsync();
 
@@ -493,13 +490,18 @@ namespace Tools.Controllers
                 .OrderByDescending(t => t.Version)
                 .FirstOrDefaultAsync();
 
+            // If the entire scope is soft-deleted, treat this upload as fresh — skip the identical-file check
+            var scopeIsDeleted = await scopeQuery.AllAsync(t => t.IsDeleted);
+
             var newHash = ComputeFileHash(absolutePath);
             var previousHash = TryGetPreviousHash(previousActive, webRoot);
 
-            var fileIdentical = previousHash != null
+            var fileIdentical = !scopeIsDeleted
+                && previousHash != null
                 && string.Equals(previousHash, newHash, StringComparison.OrdinalIgnoreCase);
 
-            var fieldsSame = previousActive != null
+            var fieldsSame = !scopeIsDeleted
+                && previousActive != null
                 && AreFieldsEqual(previousActive.ParsedFieldsJson, parsedFieldsJson);
 
             var likelyLayoutOnly = !fileIdentical && fieldsSame && previousActive != null;
@@ -531,6 +533,13 @@ namespace Tools.Controllers
             // Deactivate previous versions (never delete)
             var previous = await scopeQuery.Where(t => t.IsActive).ToListAsync();
             previous.ForEach(t => t.IsActive = false);
+
+            // If scope was soft-deleted, restore all versions (un-delete the scope)
+            if (scopeIsDeleted)
+            {
+                var allInScope = await scopeQuery.ToListAsync();
+                allInScope.ForEach(t => t.IsDeleted = false);
+            }
 
             var uploadedByUserId = LogHelper.GetTriggeredBy(User);
 
@@ -736,6 +745,8 @@ namespace Tools.Controllers
             {
                 item.IsActive = item.TemplateId == template.TemplateId;
                 item.UpdatedDate = now;
+                // Activating any version restores the whole scope from soft-delete
+                item.IsDeleted = false;
             }
 
             await _context.SaveChangesAsync();
@@ -1105,7 +1116,7 @@ namespace Tools.Controllers
         private async Task<List<RPTTemplate>> ResolveTemplatesForContext(int typeId, int groupId, int projectId)
         {
             var candidates = await _context.RPTTemplates
-                .Where(t => t.TypeId == typeId && t.IsActive && !t.IsDeleted &&
+                .Where(t => t.TypeId == typeId && t.IsActive &&
                             ((t.ProjectId == projectId && t.GroupId == groupId)
                              || (t.GroupId == groupId && t.ProjectId == null)
                              || (t.GroupId == null && t.ProjectId == null)))
