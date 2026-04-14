@@ -334,6 +334,11 @@ namespace Tools.Controllers
                 ["value"] = "calc:TOTAL_BOXES",
                 ["label"] = "Total Boxes"
             });
+            result.Add(new Dictionary<string, string>
+            {
+                ["value"] = "calc:BOX_NUMBERS",
+                ["label"] = "Box Numbers"
+            });
 
             // x.Inner � store as eb.<actualValue> so the mapping saves the real field reference
             // e.g. if Inner = "E10", value = "eb.E10", label = "E10"
