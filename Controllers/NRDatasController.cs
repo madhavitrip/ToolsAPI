@@ -1965,6 +1965,92 @@ namespace Tools.Controllers
             };
         }
 
+        // GET: api/NRDatas/unique-catch-data/{projectId}
+        [HttpGet("unique-catch-data/{projectId}")]
+        public async Task<ActionResult> GetUniqueCatchData(int projectId)
+        {
+            if (projectId <= 0)
+            {
+                return BadRequest("Valid projectId is required.");
+            }
+
+            try
+            {
+                var allRows = await _context.NRDatas
+                    .Where(x => x.ProjectId == projectId && x.Status == true && !string.IsNullOrEmpty(x.CatchNo))
+                    .ToListAsync();
+
+                if (!allRows.Any())
+                {
+                    return Ok(new List<object>());
+                }
+
+                // Group by CatchNo and take first occurrence
+                var uniqueCatchData = allRows
+                    .GroupBy(x => x.CatchNo, StringComparer.OrdinalIgnoreCase)
+                    .Select(group => group.First())
+                    .OrderBy(x => x.CatchNo)
+                    .Select(row => {
+                        var result = new Dictionary<string, object>
+                        {
+                            ["catchNo"] = row.CatchNo ?? ""
+                        };
+
+                        // Parse NRDatas JSON field to get all dynamic fields
+                        if (!string.IsNullOrWhiteSpace(row.NRDatas))
+                        {
+                            try
+                            {
+                                var nrDatasDict = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object>>(row.NRDatas);
+                                if (nrDatasDict != null)
+                                {
+                                    foreach (var kvp in nrDatasDict)
+                                    {
+                                        result[kvp.Key] = kvp.Value;
+                                    }
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                _loggerService.LogError(
+                                    $"Failed to parse NRDatas JSON for CatchNo {row.CatchNo}",
+                                    ex.Message,
+                                    nameof(NRDatasController));
+                            }
+                        }
+
+                        // Also include direct properties for backward compatibility
+                        int? pages = null;
+
+                        if (pages.HasValue)
+                        {
+                            var val = pages.Value;
+                        }
+                        if (!string.IsNullOrWhiteSpace(row.ExamDate))
+                        {
+                            result["ExamDate"] = row.ExamDate;
+                        }
+                        if (!string.IsNullOrWhiteSpace(row.ExamTime))
+                        {
+                            result["ExamTime"] = row.ExamTime;
+                        }
+
+                        return result;
+                    })
+                    .ToList();
+
+                return Ok(uniqueCatchData);
+            }
+            catch (Exception ex)
+            {
+                _loggerService.LogError(
+                    "Failed to retrieve unique catch data",
+                    ex.Message,
+                    nameof(NRDatasController));
+                return StatusCode(500, "An error occurred while retrieving unique catch data.");
+            }
+        }
+
         [HttpPost("missing-data")]
         public async Task<ActionResult> SaveMissingData([FromBody] MissingDataSaveRequest request)
         {
@@ -1981,9 +2067,7 @@ namespace Tools.Controllers
             var effectiveRows = request.Data
                 .Where(x =>
                     HasMeaningfulText(x.CatchNo) &&
-                    (HasMeaningfulNumber(x.Pages) ||
-                     HasMeaningfulText(x.ExamDate) ||
-                     HasMeaningfulText(x.ExamTime)))
+                    (x.AdditionalFields != null && x.AdditionalFields.Any()))
                 .ToList();
 
             if (effectiveRows.Count <= 0)
@@ -2026,19 +2110,72 @@ namespace Tools.Controllers
 
                     foreach (var row in matchingRows)
                     {
-                        if (HasMeaningfulNumber(item.Pages))
+                        // Handle additional dynamic fields - store ALL fields in NRDatas as JSON
+                        // (including Pages, ExamDate, ExamTime which are now also dynamic)
+                        if (item.AdditionalFields != null && item.AdditionalFields.Any())
                         {
-                            row.Pages = item.Pages!.Value;
-                        }
+                            try
+                            {
+                                // Parse existing NRDatas JSON if it exists
+                                Dictionary<string, object> nrDatasDict;
+                                if (!string.IsNullOrWhiteSpace(row.NRDatas))
+                                {
+                                    try
+                                    {
+                                        nrDatasDict = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object>>(row.NRDatas) 
+                                            ?? new Dictionary<string, object>();
+                                    }
+                                    catch
+                                    {
+                                        nrDatasDict = new Dictionary<string, object>();
+                                    }
+                                }
+                                else
+                                {
+                                    nrDatasDict = new Dictionary<string, object>();
+                                }
 
-                        if (HasMeaningfulText(item.ExamDate))
-                        {
-                            row.ExamDate = item.ExamDate.Trim();
-                        }
+                                // Add/update all fields from additionalFields
+                                foreach (var field in item.AdditionalFields)
+                                {
+                                    var valueStr = field.Value?.ToString()?.Trim();
+                                    if (!string.IsNullOrWhiteSpace(valueStr))
+                                    {
+                                        nrDatasDict[field.Key] = valueStr;
+                                        
+                                        // Also update direct properties if they exist (for backward compatibility)
+                                        var fieldLower = field.Key.ToLower();
+                                        if (fieldLower == "pages" && int.TryParse(valueStr, out int pages))
+                                        {
+                                            row.Pages = pages;
+                                        }
+                                        else if (fieldLower == "examdate")
+                                        {
+                                            row.ExamDate = valueStr;
+                                        }
+                                        else if (fieldLower == "examtime")
+                                        {
+                                            row.ExamTime = valueStr;
+                                        }
+                                    }
+                                }
 
-                        if (HasMeaningfulText(item.ExamTime))
-                        {
-                            row.ExamTime = item.ExamTime.Trim();
+                                // Serialize back to JSON
+                                row.NRDatas = System.Text.Json.JsonSerializer.Serialize(nrDatasDict);
+                                
+                                _loggerService.LogEvent(
+                                    $"Updated NRDatas JSON for CatchNo {trimmedCatchNo} with fields: {string.Join(", ", item.AdditionalFields.Keys)}",
+                                    "NRData",
+                                    User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
+                                    request.ProjectId);
+                            }
+                            catch (Exception ex)
+                            {
+                                _loggerService.LogError(
+                                    $"Failed to update NRDatas JSON for CatchNo {trimmedCatchNo}",
+                                    ex.Message,
+                                    nameof(NRDatasController));
+                            }
                         }
 
                         updatedRowCount++;
@@ -2221,6 +2358,7 @@ namespace Tools.Controllers
             public int? Pages { get; set; }
             public string? ExamDate { get; set; }
             public string? ExamTime { get; set; }
+            public Dictionary<string, object>? AdditionalFields { get; set; }
         }
 
         public class MergeCatchNoRequest
