@@ -94,7 +94,7 @@ namespace Tools.Controllers
             _loggerService.LogEvent(
                 $"Updated LotNo for {rows.Count} NRData rows (ProjectId {request.ProjectId})",
                 "NRDataLots",
-                User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
+                LogHelper.GetTriggeredBy(User),
                 request.ProjectId
             );
 
@@ -106,3 +106,4 @@ namespace Tools.Controllers
         }
     }
 }
+

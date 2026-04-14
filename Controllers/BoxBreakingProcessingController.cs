@@ -1,4 +1,4 @@
-﻿using ERPToolsAPI.Data;
+using ERPToolsAPI.Data;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -601,7 +601,7 @@ namespace Tools.Controllers
                 _loggerService.LogEvent(
                     $"Saved {boxResults.Count} box breaking results for ProjectId {ProjectId}, Batch {currentBatch}",
                     "BoxBreakingProcessing",
-                    User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
+                    LogHelper.GetTriggeredBy(User),
                     ProjectId);
                 using var client = new HttpClient();
                 var response = await client.GetAsync($"{_apiSettings.BoxBreaking}?ProjectId={ProjectId}");
@@ -655,11 +655,11 @@ namespace Tools.Controllers
 
                 bool resetOnSymbolChange = projectconfig?.ResetOnSymbolChange ?? false;
 
-                // 🔹 Optimize lookups
+                // ?? Optimize lookups
                 var envelopeDict = envelopeResults.ToDictionary(e => e.Id);
                 var nrDict = nrData.ToDictionary(n => n.Id);
 
-                // 🔹 Fixed Columns
+                // ?? Fixed Columns
                 var headers = new List<string>
         {
             "SerialNo","CatchNo","CenterCode","CenterSort","ExamTime","ExamDate","Quantity",
@@ -682,12 +682,12 @@ namespace Tools.Controllers
                 if (projectconfig.IsInnerBundlingDone)
                     headers.Add("InnerBundlingSerial");
 
-                // 🔹 Get ALL remaining NRData columns dynamically
+                // ?? Get ALL remaining NRData columns dynamically
                 var nrProperties = typeof(NRData).GetProperties()
                     .Select(p => p.Name)
                     .ToList();
 
-                // 🔹 Exclude already used + unwanted
+                // ?? Exclude already used + unwanted
                 var excludedColumns = new HashSet<string>(headers)
         {
             "Id","ProjectId","NRDatas" // handled separately
@@ -699,7 +699,7 @@ namespace Tools.Controllers
 
                 headers.AddRange(extraNRColumns);
 
-                // 🔹 Extract JSON keys
+                // ?? Extract JSON keys
 
                 var jsonKeys = new HashSet<string>();
 
@@ -718,7 +718,7 @@ namespace Tools.Controllers
 
                 headers.AddRange(jsonKeys);
 
-                // 🔹 Excel Generation
+                // ?? Excel Generation
                 var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
                 if (!Directory.Exists(reportPath))
                     Directory.CreateDirectory(reportPath);
@@ -755,7 +755,7 @@ namespace Tools.Controllers
 
                         int col = 1;
 
-                        // 🔹 Fixed values
+                        // ?? Fixed values
                         ws.Cells[row, col++].Value = serial++;
                         ws.Cells[row, col++].Value = env.CatchNo;
                         ws.Cells[row, col++].Value = env.CenterCode;
@@ -793,14 +793,14 @@ namespace Tools.Controllers
                         if (projectconfig.IsInnerBundlingDone)
                             ws.Cells[row, col++].Value = result.InnerBundlingSerial;
 
-                        // 🔹 Extra NRData columns
+                        // ?? Extra NRData columns
                         foreach (var prop in extraNRColumns)
                         {
                             var val = nrRow?.GetType().GetProperty(prop)?.GetValue(nrRow);
                             ws.Cells[row, col++].Value = val;
                         }
 
-                        // 🔹 JSON columns
+                        // ?? JSON columns
                         Dictionary<string, object> jsonDict = null;
 
                         if (!string.IsNullOrEmpty(nrRow?.NRDatas))
@@ -834,3 +834,4 @@ namespace Tools.Controllers
         }
     }
 }
+

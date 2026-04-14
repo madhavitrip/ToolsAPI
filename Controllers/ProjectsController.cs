@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -127,7 +127,7 @@ namespace Tools.Controllers
                       LatestLoggedAt = l.LatestLoggedAt,
                       p.Status,
                     })
-                 .OrderByDescending(x => x.LatestLoggedAt)   // ⭐ Order by latest access
+                 .OrderByDescending(x => x.LatestLoggedAt)   // ? Order by latest access
                   .Select(x => new
                   {
                    x.ProjectId,
@@ -168,14 +168,14 @@ namespace Tools.Controllers
 
                 if (string.IsNullOrEmpty(userId))
                 {
-                    _loggerService.LogEvent($"User with ID not found in token. ", "Projects", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,0);
+                    _loggerService.LogEvent($"User with ID not found in token. ", "Projects", LogHelper.GetTriggeredBy(User),0);
                     return Unauthorized("User ID not found in token.");
                 }
 
                 // Convert userId to integer (if necessary)
                 if (!int.TryParse(userId, out int userIntId))
                 {
-                    _loggerService.LogEvent($"Invalid User ID format. ", "Projects", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, 0);
+                    _loggerService.LogEvent($"Invalid User ID format. ", "Projects", LogHelper.GetTriggeredBy(User), 0);
 
                     return Unauthorized("Invalid User ID format.");
                 }
@@ -276,13 +276,13 @@ namespace Tools.Controllers
             try
             {
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Updated Project with ID {project.ProjectId}", "Projects", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,project.ProjectId);
+                _loggerService.LogEvent($"Updated Project with ID {project.ProjectId}", "Projects", LogHelper.GetTriggeredBy(User),project.ProjectId);
             }
             catch (Exception ex)
             {
                 if (!ProjectExists(id))
                 {
-                    _loggerService.LogEvent($"Project with ID {id} not found during updating", "Projects", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, project.ProjectId);
+                    _loggerService.LogEvent($"Project with ID {id} not found during updating", "Projects", LogHelper.GetTriggeredBy(User), project.ProjectId);
                     return NotFound();
                 }
                 else
@@ -315,7 +315,7 @@ namespace Tools.Controllers
                 _loggerService.LogEvent(
                     $"Created a new Project with ID {project.ProjectId}",
                     "Projects",
-                    User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
+                    LogHelper.GetTriggeredBy(User),
                     project.ProjectId
                 );
                 Console.WriteLine($"GroupId: {project.GroupId}, TypeId: {project.TypeId}");
@@ -337,13 +337,13 @@ namespace Tools.Controllers
                 var project = await _context.Projects.FindAsync(id);
                 if (project == null)
                 {
-                    _loggerService.LogEvent($"Project with ID {id} not found during delete", "Projects", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, project.ProjectId);
+                    _loggerService.LogEvent($"Project with ID {id} not found during delete", "Projects", LogHelper.GetTriggeredBy(User), project.ProjectId);
                     return NotFound();
                 }
 
                 _context.Projects.Remove(project);
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Deleted a Project with ID {project.ProjectId}", "Projects", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, project.ProjectId);
+                _loggerService.LogEvent($"Deleted a Project with ID {project.ProjectId}", "Projects", LogHelper.GetTriggeredBy(User), project.ProjectId);
                 return NoContent();
             }
             catch (Exception ex)
@@ -359,3 +359,4 @@ namespace Tools.Controllers
         }
     }
 }
+

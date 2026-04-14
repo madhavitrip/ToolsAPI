@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -50,7 +50,7 @@ namespace Tools.Controllers
 
             if (!NRData.Any() || !Envelope.Any())
                 return NotFound("No data available for this project.");
-            _loggerService.LogEvent($"No data available for this project", "EnvelopeBreakage", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, ProjectId);
+            _loggerService.LogEvent($"No data available for this project", "EnvelopeBreakage", LogHelper.GetTriggeredBy(User), ProjectId);
 
 
             var Consolidated = (from nr in NRData
@@ -78,7 +78,7 @@ namespace Tools.Controllers
             var filename = $"EnvelopeBreaking.xlsx";
             var filePath = Path.Combine(reportPath, filename);
 
-            // 📁 Skip generation if file already exists
+            // ?? Skip generation if file already exists
             if (System.IO.File.Exists(filePath))
             {
                 return Ok(Consolidated); // Still return data for UI
@@ -190,7 +190,7 @@ namespace Tools.Controllers
                     !string.IsNullOrEmpty(rowDict[header]?.ToString()));
             }).ToList();
 
-            // 🧾 Generate Excel report
+            // ?? Generate Excel report
             try
             {
                 using (var package = new ExcelPackage())
@@ -221,7 +221,7 @@ namespace Tools.Controllers
                     ws.View.FreezePanes(2, 1);
                     package.SaveAs(new FileInfo(filePath));
                 }
-                _loggerService.LogEvent($"EnvelopeBreakage report of ProjectId {ProjectId} has been created", "EnvelopeBreakage", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, ProjectId);
+                _loggerService.LogEvent($"EnvelopeBreakage report of ProjectId {ProjectId} has been created", "EnvelopeBreakage", LogHelper.GetTriggeredBy(User), ProjectId);
                 return Ok(Consolidated); // Return original data for UI (optional)
             }
             catch (Exception ex)
@@ -262,14 +262,14 @@ namespace Tools.Controllers
 
             try
             {
-                _loggerService.LogEvent($"Updated EnvelopeBreakage with ID {id}", "EnvelopeBreakage", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, envelopeBreakage.ProjectId);
+                _loggerService.LogEvent($"Updated EnvelopeBreakage with ID {id}", "EnvelopeBreakage", LogHelper.GetTriggeredBy(User), envelopeBreakage.ProjectId);
                 await _context.SaveChangesAsync();
             }
             catch (Exception ex)
             {
                 if (!EnvelopeBreakageExists(id))
                 {
-                    _loggerService.LogEvent($"EnvelopeBreakage with ID {id} not found during updating", "EnvelopeBreakage", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, envelopeBreakage.ProjectId);
+                    _loggerService.LogEvent($"EnvelopeBreakage with ID {id} not found during updating", "EnvelopeBreakage", LogHelper.GetTriggeredBy(User), envelopeBreakage.ProjectId);
                     return NotFound();
 
                 }
@@ -336,11 +336,11 @@ namespace Tools.Controllers
                         _context.EnvelopeBreakages.RemoveRange(chunk);  // Remove the chunk
                         await _context.SaveChangesAsync();  // Save changes after each chunk
                         _loggerService.LogEvent($"Deleted {chunk.Count} Envelope Breaking entries for ProjectID {ProjectId}", "EnvelopeBreakages",
-                            User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, ProjectId);
+                            LogHelper.GetTriggeredBy(User), ProjectId);
                     }
 
                     _loggerService.LogEvent($"Successfully deleted all Envelope Breaking entries for ProjectID {ProjectId}", "EnvelopeBreakages",
-                        User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, ProjectId);
+                        LogHelper.GetTriggeredBy(User), ProjectId);
                 }
                 else
                 {
@@ -411,7 +411,7 @@ namespace Tools.Controllers
                         TotalEnvelope = totalOuterCount
                     };
 
-                    // ✅ Add to database
+                    // ? Add to database
 
                     breakagesToAdd.Add(envelope);
 
@@ -421,13 +421,13 @@ namespace Tools.Controllers
                 {
                     _context.EnvelopeBreakages.AddRange(breakagesToAdd);
                     await _context.SaveChangesAsync();
-                    _loggerService.LogEvent($"Created Envelope Breaking of ProjectID {ProjectId}", "EnvelopeBreakages", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, ProjectId);
+                    _loggerService.LogEvent($"Created Envelope Breaking of ProjectID {ProjectId}", "EnvelopeBreakages", LogHelper.GetTriggeredBy(User), ProjectId);
                 }
 
 
                 using var client = new HttpClient();
                 var response = await client.PostAsync(
-     $"{_apiSettings.EnvelopeBreakageUrl}?ProjectId={ProjectId}",
+     $"{_apiSettings.EnvelopeBreakageUrl}?ProjectId={ProjectId}&triggeredBy={LogHelper.GetTriggeredBy(User)}",
      new StringContent("") // required
  );
                 if (!response.IsSuccessStatusCode)
@@ -744,7 +744,7 @@ namespace Tools.Controllers
             try
             {
                 // ==============================
-                // 1️⃣ Get NRData from Database
+                // 1?? Get NRData from Database
                 // ==============================
                 var nrDataList = await _context.NRDatas
                     .Where(x => x.ProjectId == ProjectId && x.Status == true)
@@ -761,14 +761,14 @@ namespace Tools.Controllers
     .Select(f => f.Name) // assuming FieldName matches NRData property
     .ToListAsync();
                 // ==============================
-                // 2️⃣ Get EnvelopeBreakages from Database
+                // 2?? Get EnvelopeBreakages from Database
                 // ==============================
                 var breakages = await _context.EnvelopeBreakages
                     .Where(x => x.ProjectId == ProjectId)
                     .ToListAsync();
 
                 // ==============================
-                // 3️⃣ Get ExtraEnvelopes and Configurations
+                // 3?? Get ExtraEnvelopes and Configurations
                 // ==============================
                 var extraEnvelopes = await _context.ExtrasEnvelope
                     .Where(x => x.ProjectId == ProjectId && x.Status == 1)
@@ -783,7 +783,7 @@ namespace Tools.Controllers
                 var qtyData = new Dictionary<string, int>();
 
                 // ==============================
-                // 4️⃣ Process EnvelopeBreakages
+                // 4?? Process EnvelopeBreakages
                 // ==============================
                 var allInnerKeys = new HashSet<string>();
                 var allOuterKeys = new HashSet<string>();
@@ -854,7 +854,7 @@ namespace Tools.Controllers
                 }
 
                 // ==============================
-                // 5️⃣ Process ExtraEnvelopes
+                // 5?? Process ExtraEnvelopes
                 // ==============================
                 foreach (var extra in extraEnvelopes)
                 {
@@ -914,7 +914,7 @@ namespace Tools.Controllers
                 }
 
                 // ==============================
-                // 6️⃣ Collect All Headers
+                // 6?? Collect All Headers
                 // ==============================
                 var allHeaders = new HashSet<string>();
                 foreach (var catchEntry in summaryData)
@@ -923,7 +923,7 @@ namespace Tools.Controllers
 
                 var orderedHeaders = new List<string>();
 
-                // ✅ Add ONLY unique NR fields
+                // ? Add ONLY unique NR fields
                 orderedHeaders.AddRange(uniqueFields);
 
                 orderedHeaders.Add("CatchNo");
@@ -934,7 +934,7 @@ namespace Tools.Controllers
                 orderedHeaders.Add("TotalEnvelope");
 
                 // ==============================
-                // 7️⃣ Create Excel Report
+                // 7?? Create Excel Report
                 // ==============================
                 using var packageCombined = new ExcelPackage();
                 var wsCombined = packageCombined.Workbook.Worksheets.Add("CatchSummary");
@@ -953,7 +953,7 @@ namespace Tools.Controllers
 
                     int colIndex = 1;
 
-                    // ✅ Fill ONLY unique fields
+                    // ? Fill ONLY unique fields
                     foreach (var field in uniqueFields)
                     {
                         var prop = typeof(NRData).GetProperty(field);
@@ -994,7 +994,7 @@ namespace Tools.Controllers
                 wsCombined.View.FreezePanes(2, 1);
 
                 // ==============================
-                // 8️⃣ Save File
+                // 8?? Save File
                 // ==============================
                 var folderPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
                 Directory.CreateDirectory(folderPath);
@@ -1006,7 +1006,7 @@ namespace Tools.Controllers
 
                 packageCombined.SaveAs(new FileInfo(combinedPath));
 
-                _loggerService.LogEvent($"CatchSummary report has been created", "CatchSummary", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, ProjectId);
+                _loggerService.LogEvent($"CatchSummary report has been created", "CatchSummary", LogHelper.GetTriggeredBy(User), ProjectId);
 
                 return Ok($"CatchSummary.xlsx generated at: {combinedPath}");
             }
@@ -1062,10 +1062,10 @@ namespace Tools.Controllers
             if (string.IsNullOrWhiteSpace(outerEnvValue))
                 throw new Exception("Outer envelope value is empty in ProjectConfig.Envelope.");
             int envelopeSize = 0;
-            // 🔹 Extract numeric part strictly
+            // ?? Extract numeric part strictly
             var outerParts = outerEnvValue.Split(',', StringSplitOptions.RemoveEmptyEntries);
 
-            // 🔹 Only parse if there’s a single non-empty value
+            // ?? Only parse if there�s a single non-empty value
             if (outerParts.Length == 1)
             {
                 string singleValue = outerParts[0].Trim();
@@ -1114,7 +1114,7 @@ namespace Tools.Controllers
                 .Select(f => f.Name)  // Get the field names
             .ToList();
 
-            _loggerService.LogEvent($"Fieldnames  {string.Join(", ", fieldNames)}", "EnvelopeBreakages", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, ProjectId);
+            _loggerService.LogEvent($"Fieldnames  {string.Join(", ", fieldNames)}", "EnvelopeBreakages", LogHelper.GetTriggeredBy(User), ProjectId);
             var dupNames = await _context.Fields
                 .Where(f => duplicatesFields.Contains(f.FieldId))
                 .Select(f => f.Name)
@@ -1135,7 +1135,7 @@ namespace Tools.Controllers
             var filename = "BoxBreaking.xlsx";
             var filePath = Path.Combine(reportPath, filename);
 
-            // 📁 Skip generation if file already exists
+            // ?? Skip generation if file already exists
             if (System.IO.File.Exists(filePath))
             {
                 System.IO.File.Delete(filePath);
@@ -1289,37 +1289,37 @@ namespace Tools.Controllers
                     // Special handling for NodalSort
                     if (prop.Name.Equals("NodalSort", StringComparison.OrdinalIgnoreCase))
                     {
-                        // If it’s numeric, fine — return it
+                        // If it�s numeric, fine � return it
                         if (double.TryParse(val.ToString(), out double nodalNum))
                             return nodalNum;
 
-                        // ❌ Otherwise, throw to make the problem visible
+                        // ? Otherwise, throw to make the problem visible
                         throw new InvalidOperationException(
-                            $"❌ NodalSort value is not numeric for record: {System.Text.Json.JsonSerializer.Serialize(x)} (actual value: '{val}')"
+                            $"? NodalSort value is not numeric for record: {System.Text.Json.JsonSerializer.Serialize(x)} (actual value: '{val}')"
                         );
                     }
 
                     if (prop.Name.Equals("CenterSort", StringComparison.OrdinalIgnoreCase))
                     {
-                        // If it’s numeric, fine — return it
+                        // If it�s numeric, fine � return it
                         if (int.TryParse(val.ToString(), out int centerNum))
                             return centerNum;
 
-                        // ❌ Otherwise, throw to make the problem visible
+                        // ? Otherwise, throw to make the problem visible
                         throw new InvalidOperationException(
-                            $"❌ CenterSort value is not numeric for record: {System.Text.Json.JsonSerializer.Serialize(x)} (actual value: '{val}')"
+                            $"? CenterSort value is not numeric for record: {System.Text.Json.JsonSerializer.Serialize(x)} (actual value: '{val}')"
                         );
                     }
 
                     if (prop.Name.Equals("RouteSort", StringComparison.OrdinalIgnoreCase))
                     {
-                        // If it’s numeric, fine — return it
+                        // If it�s numeric, fine � return it
                         if (int.TryParse(val.ToString(), out int routeNum))
                             return routeNum;
 
-                        // ❌ Otherwise, throw to make the problem visible
+                        // ? Otherwise, throw to make the problem visible
                         throw new InvalidOperationException(
-                            $"❌ RouteSort value is not numeric for record: {System.Text.Json.JsonSerializer.Serialize(x)} (actual value: '{val}')"
+                            $"? RouteSort value is not numeric for record: {System.Text.Json.JsonSerializer.Serialize(x)} (actual value: '{val}')"
                         );
                     }
                     if (prop.Name.Equals("ExamDate", StringComparison.OrdinalIgnoreCase))
@@ -1372,15 +1372,15 @@ namespace Tools.Controllers
 
                 string currentCourseName = item.CourseName?.ToString() ?? "";
 
-                // ✅ Reset boxNo when CourseName changes
+                // ? Reset boxNo when CourseName changes
                 if (resetOnSymbolChange && previousCourse != null && currentCourseName != previousCourse)
                 {
                     boxNo = startBox;
                     runningPages = 0;
                     _loggerService.LogEvent(
-                        $"🔁 CourseName changed from '{previousCourse}' to '{currentCourseName}' → BoxNo reset to {boxNo}",
+                        $"?? CourseName changed from '{previousCourse}' to '{currentCourseName}' ? BoxNo reset to {boxNo}",
                         "EnvelopeBreakages",
-                        User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
+                        LogHelper.GetTriggeredBy(User),
                         ProjectId);
                 }
 
@@ -1416,7 +1416,7 @@ namespace Tools.Controllers
                     }
                     currentInnerBundlingSerial = innerBundlingSerial;
                 }
-                // ✅ Helper: format BoxNo as concatenation of number + symbol
+                // ? Helper: format BoxNo as concatenation of number + symbol
                 string FormatBoxNo(int num, string symbol)
                     => resetOnSymbolChange && !string.IsNullOrEmpty(symbol)
                         ? $"{num}{symbol}"
@@ -1457,7 +1457,7 @@ namespace Tools.Controllers
                         return ""; // fallback if field name or property not found
                     }));
                 }
-                // ---- Rule 1: merge fields change → force new box
+                // ---- Rule 1: merge fields change ? force new box
                 bool mergeChanged = (prevMergeKey != null && mergeKey != prevMergeKey);
 
                 try
@@ -1466,16 +1466,16 @@ namespace Tools.Controllers
                     {
                         boxNo++; // start new box for new merge group
                         runningPages = 0;
-                        _loggerService.LogEvent($"🔁 MergeKey changed → new box {boxNo} for {mergeKey}",
+                        _loggerService.LogEvent($"?? MergeKey changed ? new box {boxNo} for {mergeKey}",
                             "EnvelopeBreakages",
-                            User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
+                            LogHelper.GetTriggeredBy(User),
                             ProjectId);
                     }
                     bool overflow = (runningPages + totalPages > capacity);
                     if (overflow)
                     {
                         _loggerService.LogEvent($"Overflow {string.Join(", ", mergeKey)} Running {runningPages} Total Pages {totalPages}, Capacity {capacity} boxNo {boxNo}" +
-                               $"", "EnvelopeBreakages", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, ProjectId);
+                               $"", "EnvelopeBreakages", LogHelper.GetTriggeredBy(User), ProjectId);
                         Console.WriteLine(envelopeSize);
                         if (envelopeSize < 50 && envelopeSize > 0)
                         {
@@ -1595,7 +1595,7 @@ namespace Tools.Controllers
                                     });
                                 }
 
-                                    runningPages += chunkPages; // ✅ naturally tracks current box pages
+                                    runningPages += chunkPages; // ? naturally tracks current box pages
                                 remainingQty -= chunkQty;
                             }
 
@@ -1683,10 +1683,10 @@ namespace Tools.Controllers
                 }
             }
 
-            // 🔹 Maintain ordering
+            // ?? Maintain ordering
             *//*  finalWithBoxes = resetOnSymbolChange
                   ? finalWithBoxes
-                      .OrderBy(x => x.CourseName?.ToString() ?? "")  // ✅ group by course first
+                      .OrderBy(x => x.CourseName?.ToString() ?? "")  // ? group by course first
                       .ThenBy(x =>
                       {
                           string boxNoStr = x.BoxNo?.ToString() ?? "";
@@ -1704,7 +1704,7 @@ namespace Tools.Controllers
                 {
                     var worksheet = package.Workbook.Worksheets.Add("BoxBreaking");
 
-                    // ✅ Detect OMR column
+                    // ? Detect OMR column
                     bool hasAnyOmr = finalWithBoxes.Any(x =>
                         !string.IsNullOrWhiteSpace(
                             x.GetType().GetProperty("OmrSerial")?.GetValue(x)?.ToString()));
@@ -1732,7 +1732,7 @@ namespace Tools.Controllers
     "Symbol",
     "InnerBundlingSerial"
 };
-                    // ✅ Dynamically get extra NR columns
+                    // ? Dynamically get extra NR columns
                     var extraNRColumns = typeof(NRData)
     .GetProperties()
     .Where(p => p.Name != "NRDatas" && p.Name != "Id" && p.Name != "ProjectId" && !fixedColumns.Contains(p.Name))
@@ -1740,7 +1740,7 @@ namespace Tools.Controllers
     .Select(p => p.Name)
     .ToList();
 
-                    // ✅ Extract JSON keys dynamically
+                    // ? Extract JSON keys dynamically
                     List<string> jsonKeys = new List<string>();
 
                     if (nrData.Any(n => !string.IsNullOrEmpty(n.NRDatas)))
@@ -1803,7 +1803,7 @@ namespace Tools.Controllers
                         innerBundlingCol = nextCol++;
                     }
 
-                    // ✅ Extra NR Headers
+                    // ? Extra NR Headers
                     int extraStartCol = nextCol;
 
                     foreach (var prop in extraNRColumns)
@@ -1812,7 +1812,7 @@ namespace Tools.Controllers
                         nextCol++;
                     }
 
-                    // ✅ JSON Headers
+                    // ? JSON Headers
                     foreach (var key in jsonKeys)
                     {
                         worksheet.Cells[1, nextCol].Value = key;
@@ -1858,7 +1858,7 @@ namespace Tools.Controllers
                         if (courseCol > 0)
                             worksheet.Cells[row, courseCol].Value = item.CourseName;
 
-                        // 🔹 Beejak logic
+                        // ?? Beejak logic
                         string currentCenter = item.CenterCode?.ToString();
                         string currentBox = item.BoxNo?.ToString();
 
@@ -1874,7 +1874,7 @@ namespace Tools.Controllers
                         if (innerBundlingCol > 0)
                             worksheet.Cells[row, innerBundlingCol].Value = item.InnerBundlingSerial;
 
-                        // ✅ Dynamic columns
+                        // ? Dynamic columns
                         int currentCol = extraStartCol;
 
                         foreach (var prop in extraNRColumns)
@@ -1905,7 +1905,7 @@ namespace Tools.Controllers
                     package.SaveAs(fi);
                 }
 
-                // ✅ API call
+                // ? API call
                 using var client = new HttpClient();
                 var response = await client.PostAsync(
                     $"{_apiSettings.BoxBreaking}?ProjectId={ProjectId}",
@@ -2002,7 +2002,7 @@ namespace Tools.Controllers
             var envelopeCapacities = envCaps.ToDictionary(x => x.EnvelopeName, x => x.Capacity);
             var envDict = envBreaking.ToDictionary(
                e => e.NrDataId,
-               e => (e.TotalEnvelope, e.OuterEnvelope) // 👈 this is a tuple
+               e => (e.TotalEnvelope, e.OuterEnvelope) // ?? this is a tuple
             );
 
             var mssTypes = projectconfig.MssTypes; // assuming List<int>
@@ -2033,9 +2033,9 @@ namespace Tools.Controllers
                     {
                         CatchNo = catchNo,
                         CenterCode = "",
-                        CourseName = courseName,   // ✅ added
-                        ExamTime = examTime,       // ✅ added
-                        ExamDate = examDate,       // ✅ added
+                        CourseName = courseName,   // ? added
+                        ExamTime = examTime,       // ? added
+                        ExamDate = examDate,       // ? added
                         Quantity = "",
                         EnvQuantity = mss.MssType,    // MSS Type Name
                         NodalCode = "",
@@ -2148,7 +2148,7 @@ namespace Tools.Controllers
                 if (catchNoChanged)
                 {
                     var prevNrData = nrData[i - 1];
-                    // ➕ Add final extras for previous CatchNo before resetting serial
+                    // ? Add final extras for previous CatchNo before resetting serial
                     if (!nodalExtrasAddedForNodalCatch.Contains((prevNrData.NodalCode, prevCatchNo)))
                     {
                         var extrasToAdd = extras.Where(e => e.ExtraId == 1 && e.CatchNo == prevCatchNo).ToList();
@@ -2178,7 +2178,7 @@ namespace Tools.Controllers
                     // NOW reset serial number after extras are added
                 }
 
-                // ➕ Nodal Extra when NodalCode changes (but not CatchNo)
+                // ? Nodal Extra when NodalCode changes (but not CatchNo)
                 if (!catchNoChanged && prevNodalCode != null && current.NodalCode != prevNodalCode)
                 {
                     Console.WriteLine($" Processing: {nrData[i].CatchNo}, CenterSort={nrData[i].CenterSort}, NodalSort={nrData[i].NodalSort}");
@@ -2195,7 +2195,7 @@ namespace Tools.Controllers
                     }
                 }
 
-                // ➕ Add current NRData row with TotalEnv replication
+                // ? Add current NRData row with TotalEnv replication
                 int totalEnv = envDict.TryGetValue(current.Id, out var envData) && envData.TotalEnvelope > 0
                 ? envData.TotalEnvelope
                : 1;
@@ -2306,7 +2306,7 @@ namespace Tools.Controllers
                 prevCatchNo = current.CatchNo;
             }
 
-            // 🔁 Final extras for the last CatchNo
+            // ?? Final extras for the last CatchNo
             if (prevCatchNo != null)
             {
                 var lastNrData = nrData.LastOrDefault();
@@ -2625,7 +2625,7 @@ namespace Tools.Controllers
                 }
 
                 _context.EnvelopeBreakages.Remove(envelopeBreakage);
-                _loggerService.LogEvent($"Deleted Envelope Breaking of Id {id}", "EnvelopeBreakages", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, envelopeBreakage.ProjectId);
+                _loggerService.LogEvent($"Deleted Envelope Breaking of Id {id}", "EnvelopeBreakages", LogHelper.GetTriggeredBy(User), envelopeBreakage.ProjectId);
                 await _context.SaveChangesAsync();
 
                 return NoContent();
@@ -2644,3 +2644,4 @@ namespace Tools.Controllers
         }
     }
 }
+

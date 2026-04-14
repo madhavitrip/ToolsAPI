@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -63,14 +63,14 @@ namespace Tools.Controllers
             try
             {
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Updated Field for Id {id}", "Field", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,0);
+                _loggerService.LogEvent($"Updated Field for Id {id}", "Field", LogHelper.GetTriggeredBy(User),0);
 
             }
             catch (Exception ex)
             {
                 if (!FieldExists(id))
                 {
-                    _loggerService.LogEvent($"Field with ID {id} not found during updating", "Field", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,0);
+                    _loggerService.LogEvent($"Field with ID {id} not found during updating", "Field", LogHelper.GetTriggeredBy(User),0);
 
                     return NotFound();
                 }
@@ -92,7 +92,7 @@ namespace Tools.Controllers
         {
             try
             {
-                // 🔹 Check if field name already exists
+                // ?? Check if field name already exists
                 bool fieldExists = await _context.Fields
                     .AnyAsync(f => f.Name.ToLower() == field.Name.ToLower());
 
@@ -107,7 +107,7 @@ namespace Tools.Controllers
                 _loggerService.LogEvent(
                     $"Created a new Field with ID {field.FieldId}",
                     "Field",
-                    User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
+                    LogHelper.GetTriggeredBy(User),
                     0
                 );
 
@@ -134,7 +134,7 @@ namespace Tools.Controllers
 
                 _context.Fields.Remove(@field);
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Deleted a Field with ID {id}", "Field", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,0);
+                _loggerService.LogEvent($"Deleted a Field with ID {id}", "Field", LogHelper.GetTriggeredBy(User),0);
 
                 return NoContent();
             }
@@ -151,3 +151,4 @@ namespace Tools.Controllers
         }
     }
 }
+
