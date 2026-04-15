@@ -91,9 +91,9 @@ namespace Tools.Controllers
                 var projects = await _context.Projects
                     .ToListAsync(); // Fetch all projects (client-side filtering will follow)
 
-                // Filter the projects where the userId is in the UserAssigned list
+                // Filter the projects where the userId is in the UserAssigned list AND Status is false (active)
                 var userProjects = projects
-                    .Where(p => p.UserAssigned.Contains(userIntId)) // Perform client-side filtering
+                    .Where(p => p.UserAssigned.Contains(userIntId) && p.Status == false) // Perform client-side filtering
                     .ToList();
 
                 if (userProjects == null || !userProjects.Any())
@@ -142,6 +142,99 @@ namespace Tools.Controllers
             catch (Exception ex)
             {
                 return BadRequest($"Error decoding token: {ex.Message}");
+            }
+        }
+
+        [Authorize]
+        [HttpGet("ArchivedProjects")]
+        public async Task<ActionResult<IEnumerable<Project>>> GetArchivedProjectsByUser()
+        {
+            // Extract token from the Authorization header
+            var token = Request.Headers["Authorization"].ToString()?.Replace("Bearer ", "");
+
+            if (string.IsNullOrEmpty(token))
+            {
+                return Unauthorized("Token is required.");
+            }
+
+            try
+            {
+                // Decode the JWT token and extract userId
+                var handler = new JwtSecurityTokenHandler();
+                var jsonToken = handler.ReadToken(token) as JwtSecurityToken;
+
+                // Extract the userId from the correct claim
+                var userIdClaim = jsonToken?.Claims.FirstOrDefault(c => c.Type == "userid");
+                var userId = userIdClaim?.Value;
+
+                if (string.IsNullOrEmpty(userId))
+                {
+                    return Unauthorized("User ID not found in token.");
+                }
+
+                // Convert userId to integer
+                if (!int.TryParse(userId, out int userIntId))
+                {
+                    return Unauthorized("Invalid User ID format.");
+                }
+
+                // Fetch all projects
+                var projects = await _context.Projects
+                    .ToListAsync();
+
+                // Filter the projects where the userId is in the UserAssigned list AND Status is true (archived)
+                var userArchivedProjects = projects
+                    .Where(p => p.UserAssigned.Contains(userIntId) && p.Status == true)
+                    .ToList();
+
+                if (userArchivedProjects == null || !userArchivedProjects.Any())
+                {
+                    return Ok(new List<object>()); // Return empty list instead of 404
+                }
+
+                var projectIds = userArchivedProjects.Select(p => p.ProjectId).ToList();
+
+                // Get last accessed time for archived projects
+                var projectWithLastLoggedAt = await _context.EventLogs
+                    .Where(e => projectIds.Contains(e.ProjectId))
+                    .GroupBy(e => e.ProjectId)
+                    .Select(g => new
+                    {
+                        ProjectId = g.Key,
+                        LatestLoggedAt = g.Max(e => e.LoggedAt),
+                    })
+                    .ToListAsync();
+
+                // Join and format result
+                var result = userArchivedProjects
+                 .Join(projectWithLastLoggedAt,
+                  p => p.ProjectId,
+                  l => l.ProjectId,
+                    (p, l) => new
+                    {
+                      p.ProjectId,
+                      p.GroupId,
+                      p.TypeId,
+                      LatestLoggedAt = l.LatestLoggedAt,
+                      IsActive = !p.Status, // Status true = archived, so IsActive is false
+                    })
+                 .OrderByDescending(x => x.LatestLoggedAt)
+                  .Select(x => new
+                  {
+                   x.ProjectId,
+                   x.GroupId,
+                   x.TypeId,
+                   TimeAgo = GetTimeAgo(x.LatestLoggedAt),
+                   x.IsActive,
+                  })
+               .ToList();
+                
+                return Ok(result);
+            }
+            catch (Exception ex)
+            {
+                _loggerService.LogError("Error fetching archived projects", ex.Message, nameof(ProjectsController));
+                return BadRequest($"Error fetching archived projects: {ex.Message}");
             }
         }
 
