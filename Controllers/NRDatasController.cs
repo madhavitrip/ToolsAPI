@@ -1,4 +1,4 @@
-using ERPToolsAPI.Data;
+﻿using ERPToolsAPI.Data;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.CodeAnalysis;
@@ -782,7 +782,7 @@ namespace Tools.Controllers
                         x.ProjectId == projectId &&
                         x.CatchNo == nRData.CatchNo &&
                         x.CenterCode == nRData.CenterCode &&
-                        x.ExamDate == nRData.ExamDate
+                        x.ExamDate == nRData.ExamDate && x.Status == true
                     );
 
                     if (existingRecord != null)
@@ -814,7 +814,19 @@ namespace Tools.Controllers
                         "Office Extra" => 3,
                         _ => null
                     };
+                    // 🔻 Deactivate existing extras for same combination
+                    var existingExtras = await _context.ExtrasEnvelope
+                        .Where(x =>
+                            x.ProjectId == projectId &&
+                            x.CatchNo == nRData.CatchNo &&
+                            x.ExtraId == extraTypeId.Value &&
+                            x.Status == 1)
+                        .ToListAsync();
 
+                    foreach (var extra in existingExtras)
+                    {
+                        extra.Status = 0;
+                    }
                     if (extraTypeId.HasValue)
                     {
                         var config = extraConfigs.FirstOrDefault(x => x.ExtraType == extraTypeId);
@@ -2373,7 +2385,7 @@ namespace Tools.Controllers
                 }
 
                 // ? REMOVE FILE DELETE if not needed
-                // (keeping it optional � you can remove this block if you want full soft behavior)
+                // (keeping it optional — you can remove this block if you want full soft behavior)
                 var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
                 if (Directory.Exists(reportPath))
                 {
