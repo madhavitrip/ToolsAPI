@@ -1976,9 +1976,7 @@ namespace Tools.Controllers
             var effectiveRows = request.Data
                 .Where(x =>
                     HasMeaningfulText(x.CatchNo) &&
-                    (HasMeaningfulNumber(x.Pages) ||
-                     HasMeaningfulText(x.ExamDate) ||
-                     HasMeaningfulText(x.ExamTime)))
+                    (x.AdditionalFields != null && x.AdditionalFields.Any()))
                 .ToList();
 
             if (effectiveRows.Count <= 0)
@@ -2021,19 +2019,122 @@ namespace Tools.Controllers
 
                     foreach (var row in matchingRows)
                     {
-                        if (HasMeaningfulNumber(item.Pages))
+                        if (item.AdditionalFields != null && item.AdditionalFields.Any())
                         {
-                            row.Pages = item.Pages!.Value;
-                        }
+                            try
+                            {
 
-                        if (HasMeaningfulText(item.ExamDate))
-                        {
-                            row.ExamDate = item.ExamDate.Trim();
-                        }
+                                var modelProperties = typeof(NRData)
+                                    .GetProperties()
+                                    .Where(p => p.Name != nameof(NRData.NRDatas))
+                                    .ToDictionary(p => p.Name.ToLower(), p => p);
 
-                        if (HasMeaningfulText(item.ExamTime))
-                        {
-                            row.ExamTime = item.ExamTime.Trim();
+
+                                var dynamicFields = new Dictionary<string, object>();
+
+
+                                foreach (var field in item.AdditionalFields)
+                                {
+                                    var key = field.Key;
+                                    var valueStr = field.Value?.ToString()?.Trim();
+
+                                    if (string.IsNullOrWhiteSpace(valueStr))
+                                        continue;
+
+                                    var keyLower = key.ToLower();
+
+                                    if (modelProperties.ContainsKey(keyLower))
+                                    {
+                                        var property = modelProperties[keyLower];
+
+                                        try
+                                        {
+                                            object? convertedValue = null;
+
+                                            if (property.PropertyType == typeof(int))
+                                            {
+                                                if (int.TryParse(valueStr, out int intVal))
+                                                    convertedValue = intVal;
+                                            }
+                                            else if (property.PropertyType == typeof(int?))
+                                            {
+                                                if (int.TryParse(valueStr, out int intVal))
+                                                    convertedValue = intVal;
+                                            }
+                                            else if (property.PropertyType == typeof(double))
+                                            {
+                                                if (double.TryParse(valueStr, out double dblVal))
+                                                    convertedValue = dblVal;
+                                            }
+                                            else if (property.PropertyType == typeof(bool))
+                                            {
+                                                if (bool.TryParse(valueStr, out bool boolVal))
+                                                    convertedValue = boolVal;
+                                            }
+                                            else
+                                            {
+                                                convertedValue = valueStr;
+                                            }
+
+                                            if (convertedValue != null)
+                                            {
+                                                property.SetValue(row, convertedValue);
+                                            }
+                                        }
+                                        catch
+                                        {
+                                            dynamicFields[key] = valueStr;
+                                        }
+                                    }
+                                    else
+                                    {
+                                        dynamicFields[key] = valueStr;
+                                    }
+                                }
+
+
+                                Dictionary<string, object> existingData;
+
+                                if (!string.IsNullOrWhiteSpace(row.NRDatas))
+                                {
+                                    try
+                                    {
+                                        existingData = System.Text.Json.JsonSerializer
+                                            .Deserialize<Dictionary<string, object>>(row.NRDatas)
+                                            ?? new Dictionary<string, object>();
+                                    }
+                                    catch
+                                    {
+                                        existingData = new Dictionary<string, object>();
+                                    }
+                                }
+                                else
+                                {
+                                    existingData = new Dictionary<string, object>();
+                                }
+
+
+                                foreach (var kv in dynamicFields)
+                                {
+                                    existingData[kv.Key] = kv.Value;
+                                }
+
+
+                                row.NRDatas = System.Text.Json.JsonSerializer.Serialize(existingData);
+
+                                _loggerService.LogEvent(
+                                    $"Updated CatchNo {trimmedCatchNo} with fields: {string.Join(", ", item.AdditionalFields.Keys)}",
+                                    "NRData",
+                                    User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
+                                    request.ProjectId);
+                            }
+                            catch (Exception ex)
+                            {
+                                _loggerService.LogError(
+                                    $"Failed to update CatchNo {trimmedCatchNo}",
+                                    ex.Message,
+                                    nameof(NRDatasController));
+                            }
                         }
 
                         updatedRowCount++;
@@ -2050,7 +2151,7 @@ namespace Tools.Controllers
                 _loggerService.LogEvent(
                     $"Saved missing data for ProjectId {request.ProjectId}. Catches updated: {updatedCatchCount}, rows updated: {updatedRowCount}",
                     "NRData",
-                    LogHelper.GetTriggeredBy(User),
+                    User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
                     request.ProjectId);
 
                 return Ok(new
@@ -2216,6 +2317,7 @@ namespace Tools.Controllers
             public int? Pages { get; set; }
             public string? ExamDate { get; set; }
             public string? ExamTime { get; set; }
+            public Dictionary<string, object>? AdditionalFields { get; set; }
         }
 
         public class MergeCatchNoRequest
