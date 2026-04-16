@@ -708,16 +708,17 @@ namespace Tools.Controllers
                     .Where(x => x.ProjectId == projectId)
                     .ToListAsync();
 
-                // =============================
-                // ? GET CURRENT BATCH NUMBER
-                // =============================
-                int currentBatch = (await _context.NRDatas
-         .Where(x => x.ProjectId == projectId && x.UploadList != null)
-         .Select(x => x.UploadList)
-         .ToListAsync())
-     .SelectMany(x => x)
-     .DefaultIfEmpty(0)
-     .Max() + 1;
+                // ✅ FIX 1: Load full entities first (avoid EF translation error)
+                var existingNRDataList = await _context.NRDatas
+                    .Where(x => x.ProjectId == projectId)
+                    .ToListAsync();
+
+                // ✅ FIX 2: Safe batch calculation
+                int currentBatch = existingNRDataList
+                    .Where(x => x.UploadList != null)
+                    .SelectMany(x => x.UploadList ?? new List<int>())
+                    .DefaultIfEmpty(0)
+                    .Max() + 1;
 
                 var nrDatasToAdd = new List<NRData>();
                 var extraEnvelopesToAdd = new List<ExtraEnvelopes>();
@@ -763,9 +764,7 @@ namespace Tools.Controllers
                         }
                     }
 
-                    // =============================
-                    // ? Day calculation
-                    // =============================
+                    // ✅ Day calculation
                     if (!string.IsNullOrWhiteSpace(nRData.ExamDate) &&
                         DateTime.TryParse(nRData.ExamDate, out DateTime examDate))
                     {
@@ -775,14 +774,13 @@ namespace Tools.Controllers
                     if (extraData.Any())
                         nRData.NRDatas = JsonSerializer.Serialize(extraData);
 
-                    // =============================
-                    // ? DUPLICATE CHECK
-                    // =============================
-                    var existingRecord = await _context.NRDatas.FirstOrDefaultAsync(x =>
+                    // ✅ FIX 3: Use in-memory duplicate check (no DB call inside loop)
+                    var existingRecord = existingNRDataList.FirstOrDefault(x =>
                         x.ProjectId == projectId &&
                         x.CatchNo == nRData.CatchNo &&
                         x.CenterCode == nRData.CenterCode &&
-                        x.ExamDate == nRData.ExamDate && x.Status == true
+                        x.ExamDate == nRData.ExamDate &&
+                        x.Status == true
                     );
 
                     if (existingRecord != null)
@@ -790,7 +788,6 @@ namespace Tools.Controllers
                         if (existingRecord.UploadList == null)
                             existingRecord.UploadList = new List<int>();
 
-                        // ? Add current batch only if not already present
                         if (!existingRecord.UploadList.Contains(currentBatch))
                         {
                             existingRecord.UploadList.Add(currentBatch);
@@ -800,13 +797,10 @@ namespace Tools.Controllers
                     }
                     else
                     {
-                        // ? New record gets current batch
                         nRData.UploadList = new List<int> { currentBatch };
                     }
 
-                    // =============================
-                    // EXTRA CENTER LOGIC
-                    // =============================
+                    // ✅ Extra center logic
                     int? extraTypeId = nRData.CenterCode switch
                     {
                         "Nodal Extra" => 1,
@@ -814,22 +808,11 @@ namespace Tools.Controllers
                         "Office Extra" => 3,
                         _ => null
                     };
-                    // 🔻 Deactivate existing extras for same combination
-                    var existingExtras = await _context.ExtrasEnvelope
-                        .Where(x =>
-                            x.ProjectId == projectId &&
-                            x.CatchNo == nRData.CatchNo &&
-                            x.ExtraId == extraTypeId.Value &&
-                            x.Status == 1)
-                        .ToListAsync();
 
-                    foreach (var extra in existingExtras)
-                    {
-                        extra.Status = 0;
-                    }
                     if (extraTypeId.HasValue)
                     {
                         var config = extraConfigs.FirstOrDefault(x => x.ExtraType == extraTypeId);
+
                         if (config != null)
                         {
                             EnvelopeType envelopeType = null;
