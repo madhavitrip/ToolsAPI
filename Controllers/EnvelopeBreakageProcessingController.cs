@@ -34,7 +34,7 @@ namespace Tools.Controllers
 
 
         [HttpPost("ProcessEnvelopeBreaking")]
-        public async Task<IActionResult> ProcessEnvelopeBreaking(int ProjectId)
+        public async Task<IActionResult> ProcessEnvelopeBreaking(int ProjectId, int triggeredBy = 0)
         {
             try
             {
@@ -662,7 +662,7 @@ namespace Tools.Controllers
                 _loggerService.LogEvent(
                     $"Saved {envelopeResults.Count} envelope breaking results for ProjectId {ProjectId}, Batch {currentBatch}",
                     "EnvelopeBreakageProcessing",
-                    User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
+                    triggeredBy,
                     ProjectId);
                 using var client = new HttpClient();
                 var response = await client.GetAsync($"{_apiSettings.EnvelopeBreaking}?ProjectId={ProjectId}");
@@ -1049,3 +1049,4 @@ namespace Tools.Controllers
         }
     }
     }
+

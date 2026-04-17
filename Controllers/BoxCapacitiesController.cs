@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -58,14 +58,14 @@ namespace Tools.Controllers
 
             try
             {
-                _loggerService.LogEvent($"Updated BoxCapacity with ID {id}", "BoxCapacity", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, 0);
+                _loggerService.LogEvent($"Updated BoxCapacity with ID {id}", "BoxCapacity", LogHelper.GetTriggeredBy(User), 0);
                 await _context.SaveChangesAsync();
             }
             catch (Exception ex)
             {
                 if (!BoxCapacityExists(id))
                 {
-                    _loggerService.LogEvent($"BoxCapacity with ID {id} not found during updating", "BoxCapacity", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, 0);
+                    _loggerService.LogEvent($"BoxCapacity with ID {id} not found during updating", "BoxCapacity", LogHelper.GetTriggeredBy(User), 0);
 
                     return NotFound();
                 }
@@ -88,7 +88,7 @@ namespace Tools.Controllers
             {
                 _context.BoxCapacity.Add(boxCapacity);
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"BoxCapacity with {boxCapacity} has been created", "BoxCapacity", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, 0);
+                _loggerService.LogEvent($"BoxCapacity with {boxCapacity} has been created", "BoxCapacity", LogHelper.GetTriggeredBy(User), 0);
                 return CreatedAtAction("GetBoxCapacity", new { id = boxCapacity.BoxCapacityId }, boxCapacity);
             }
             catch (Exception ex)
@@ -111,7 +111,7 @@ namespace Tools.Controllers
                     _loggerService.LogError($"BoxCapacity with ID {id} not found", "BoxCapacity",nameof(BoxCapacitiesController));
                     return NotFound();
                 }
-                _loggerService.LogEvent($"BoxCapacity with ID {id} has been deleted", "BoxCapacity", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, 0);
+                _loggerService.LogEvent($"BoxCapacity with ID {id} has been deleted", "BoxCapacity", LogHelper.GetTriggeredBy(User), 0);
 
                 _context.BoxCapacity.Remove(boxCapacity);
                 await _context.SaveChangesAsync();
@@ -133,3 +133,4 @@ namespace Tools.Controllers
         }
     }
 }
+

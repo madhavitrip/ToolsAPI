@@ -1,4 +1,4 @@
-﻿using ERPToolsAPI.Data;
+using ERPToolsAPI.Data;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -34,7 +34,7 @@ namespace Tools.Controllers
                     _loggerService.LogEvent(
                         $"MProjectConfig for TypeId {config.TypeId} and GroupId {config.GroupId} already exists",
                         "MProjectConfigs",
-                        User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
+                        LogHelper.GetTriggeredBy(User),
                         config.GroupId
                     );
 
@@ -59,7 +59,7 @@ namespace Tools.Controllers
                 _loggerService.LogEvent(
                     $"Created a new MProjectConfig with TypeId {projectConfig.TypeId} and GroupId {projectConfig.GroupId}",
                     "MProjectConfigs",
-                    User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
+                    LogHelper.GetTriggeredBy(User),
                     projectConfig.GroupId
                 );
 
@@ -69,6 +69,42 @@ namespace Tools.Controllers
             {
                 _loggerService.LogError("Error creating MProjectConfigs", ex.Message, nameof(MProjectConfigsController));
                 return StatusCode(500, "Internal server error");
+            }
+        }
+
+        [HttpGet]
+        public async Task<ActionResult<IEnumerable<int>>> GetAllGroups()
+        {
+            try
+            {
+                var groupIds = await _context.MProjectConfigs
+                    .Select(x => x.GroupId)
+                    .Distinct()
+                    .ToListAsync();
+
+                return Ok(groupIds);
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, ex.Message);
+            }
+        }
+
+        [HttpGet("SelectedGroup")]
+        public async Task<ActionResult<IEnumerable<int>>> GetAllTypeOfGroup(int GroupId)
+        {
+            try
+            {
+                var groupIds = await _context.MProjectConfigs.Where(s=>s.GroupId == GroupId)
+                    .Select(x => x.TypeId)
+                    .Distinct()
+                    .ToListAsync();
+
+                return Ok(groupIds);
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, ex.Message);
             }
         }
 
@@ -88,3 +124,4 @@ namespace Tools.Controllers
 
     }
 }
+

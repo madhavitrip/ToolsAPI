@@ -1,3 +1,4 @@
+
 using DocumentFormat.OpenXml.Bibliography;
 using ERPToolsAPI.Data;
 using Microsoft.AspNetCore.Mvc;
@@ -15,6 +16,7 @@ using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Tools.Models;
+using Tools.Services;
 
 namespace Tools.Controllers
 {
@@ -27,17 +29,20 @@ namespace Tools.Controllers
         private readonly IWebHostEnvironment _env;
         private readonly ApiSettings _apiSettings;
         private readonly IHttpClientFactory _httpClientFactory;
+        private readonly ILoggerService _loggerService;
 
         public RPTTemplatesController(
             ERPToolsDbContext context,
             IWebHostEnvironment env,
             IOptions<ApiSettings> apiSettings,
-            IHttpClientFactory httpClientFactory)
+            IHttpClientFactory httpClientFactory,
+            ILoggerService loggerService)
         {
             _context = context;
             _env = env;
             _apiSettings = apiSettings.Value;
             _httpClientFactory = httpClientFactory;
+            _loggerService = loggerService;
         }
 
         // GET: api/RPTTemplates
@@ -113,6 +118,7 @@ namespace Tools.Controllers
 
             return Ok(standardTemplates);
         }
+
         // GET: api/RPTTemplates/versions?typeId=2&templateName=ABC&groupId=1&projectId=10
         [HttpGet("versions")]
         public async Task<ActionResult> GetVersions(
@@ -169,13 +175,18 @@ namespace Tools.Controllers
             List<string> FilterColumns(List<string> columns) =>
                 columns.Where(c => !excludeColumns.Contains(c)).ToList();
 
-            var nrColumns       = FilterColumns(GetModelColumns<NRData>(exclude: new[] { "NRDatas" }));
-            var envColumns      = FilterColumns(GetModelColumns<EnvelopeBreakingResult>());
+            // Direct NRData model columns (excluding the JSON blob column itself)
+            var nrDirectColumns = new HashSet<string>(
+                GetModelColumns<NRData>(exclude: new[] { "NRDatas", "UploadList" }),
+                StringComparer.OrdinalIgnoreCase);
+
+            var nrColumns = FilterColumns(nrDirectColumns.ToList());
+            var envColumns = FilterColumns(GetModelColumns<EnvelopeBreakingResult>());
             var envBreakageCols = FilterColumns(GetModelColumns<EnvelopeBreakage>());
-            var boxColumns      = FilterColumns(GetModelColumns<BoxBreakingResult>());
+            var boxColumns = FilterColumns(GetModelColumns<BoxBreakingResult>());
             var extraConfigCols = FilterColumns(GetModelColumns<ExtrasConfiguration>());
 
-            var nrJsonKeys         = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var nrJsonKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var envBreakageJsonKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             List<int> projectIds = new();
@@ -192,7 +203,14 @@ namespace Tools.Controllers
             if (projectIds.Count > 0) nrQuery = nrQuery.Where(n => projectIds.Contains(n.ProjectId));
             foreach (var json in await nrQuery.Where(n => !string.IsNullOrWhiteSpace(n.NRDatas)).Select(n => n.NRDatas).ToListAsync())
             {
-                try { using var doc = JsonDocument.Parse(json); foreach (var p in doc.RootElement.EnumerateObject()) if (!string.IsNullOrWhiteSpace(p.Name)) nrJsonKeys.Add(p.Name); }
+                try
+                {
+                    using var doc = JsonDocument.Parse(json);
+                    foreach (var p in doc.RootElement.EnumerateObject())
+                        if (!string.IsNullOrWhiteSpace(p.Name)
+                            && !p.Name.StartsWith("json:", StringComparison.OrdinalIgnoreCase))
+                            nrJsonKeys.Add(p.Name);
+                }
                 catch { }
             }
 
@@ -205,7 +223,7 @@ namespace Tools.Controllers
                 catch { }
             }
 
-            // ExtraConfig — only expose Inner from EnvelopeType JSON, label = actual value (e.g. "E10")
+            // ExtraConfig � only expose Inner from EnvelopeType JSON, label = actual value (e.g. "E10")
             // Use projectId directly if provided, otherwise fall back to projectIds from group+type
             string innerEnvelopeValue = null;
             var extraProjectIds = projectId.HasValue && projectId.Value > 0
@@ -230,7 +248,10 @@ namespace Tools.Controllers
                 }
             }
 
-            // Build single deduplicated flat list — priority: b → e → n → eb → x
+            // Load all fields from the Fields table
+            var allFields = await _context.Fields.OrderBy(f => f.Name).ToListAsync();
+
+            // Build single deduplicated flat list � priority: b ? e ? n ? eb ? x
             // Each column name appears exactly once, mapped to the highest-priority table prefix
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var result = new List<Dictionary<string, string>>();
@@ -249,21 +270,34 @@ namespace Tools.Controllers
                 }
             }
 
-            AddColumns(boxColumns,                                    "b.");
-            AddColumns(envColumns,                                    "e.");
-            AddColumns(nrColumns,                                     "n.");
-            AddColumns(nrJsonKeys,                                    "n.");
-            AddColumns(envBreakageCols,                               "eb.");
+            AddColumns(boxColumns, "b.");
+            AddColumns(envColumns, "e.");
+            AddColumns(nrColumns, "n.");
+            AddColumns(nrJsonKeys, "n.");
+            AddColumns(envBreakageCols, "eb.");
             AddColumns(envBreakageJsonKeys.Where(k => !excludeColumns.Contains(k)), "eb.");
 
-            // Calculated fields for quantity sheet (sourced directly from SP result)
-            result.Add(new Dictionary<string, string>
+            // Add Fields table entries � always use n. prefix.
+            // BuildSourceExpression handles the rest: direct column ? n.`col`, otherwise ? JSON_EXTRACT(n.NRDatas, ...)
+            foreach (var field in allFields)
             {
-                ["value"] = "c.TotalCenters",
-                ["label"] = "TotalCenters"
-            });
+                if (string.IsNullOrWhiteSpace(field.Name)) continue;
+                if (excludeColumns.Contains(field.Name)) continue;
+                if (seen.Contains(field.Name)) continue; // already present, skip duplicate
 
-            // Virtual computed fields — not real columns, resolved to SQL expressions at report generation
+                seen.Add(field.Name);
+                result.Add(new Dictionary<string, string>
+                {
+                    ["value"] = $"n.{field.Name}",
+                    ["label"] = field.Name
+                });
+            }
+
+            // Calculated fields for quantity sheet (sourced directly from SP result)
+            result.Add(new Dictionary<string, string> { ["value"] = "c.TotalCenters", ["label"] = "TotalCenters" });
+            result.Add(new Dictionary<string, string> { ["value"] = "c.TotalNodal", ["label"] = "TotalNodal" });
+
+            // Virtual computed fields � not real columns, resolved to SQL expressions at report generation
             result.Add(new Dictionary<string, string>
             {
                 ["value"] = "calc:BOX_RANGE",
@@ -275,7 +309,7 @@ namespace Tools.Controllers
                 ["label"] = "Total Boxes"
             });
 
-            // x.Inner — store as eb.<actualValue> so the mapping saves the real field reference
+            // x.Inner � store as eb.<actualValue> so the mapping saves the real field reference
             // e.g. if Inner = "E10", value = "eb.E10", label = "E10"
             if (!string.IsNullOrWhiteSpace(innerEnvelopeValue)
                 && seen.Add(innerEnvelopeValue)
@@ -342,244 +376,43 @@ namespace Tools.Controllers
             }
 
             await _context.SaveChangesAsync();
+            _loggerService.LogEvent($"Updated template {id} (applyToAll={updateAll})", "RPTTemplate", LogHelper.GetTriggeredBy(User), 0);
             return Ok(new { templateId = template.TemplateId, message = "Template updated." });
         }
 
-       
-        ///form-data: file (.rpt), typeId, templateName, optional groupId, optional projectId
-        //[HttpPost("upload")]
-        //public async Task<ActionResult> Upload([FromForm] int typeId, [FromForm] string templateName, IFormFile file,
-        //    [FromForm] int? groupId, [FromForm] int? projectId, [FromForm] List<int>? moduleIds, [FromForm] bool forceUpload = false)
-        //{
-        //    if (file == null || file.Length == 0)
-        //        return BadRequest("No file uploaded.");
+        // POST: api/RPTTemplates/{id}/activate
+        // Marks a specific version as active for its scope (standard/group/project)
+        [HttpPost("{id}/activate")]
+        public async Task<ActionResult> ActivateTemplate(int id)
+        {
+            var template = await _context.RPTTemplates.FindAsync(id);
+            if (template == null) return NotFound("Template not found.");
 
-        //    var ext = Path.GetExtension(file.FileName).ToLowerInvariant();
-        //    if (ext != ".rpt")
-        //        return BadRequest("Only .rpt files are accepted.");
+            var scopeQuery = _context.RPTTemplates
+                .Where(t => t.TypeId == template.TypeId
+                            && t.TemplateName == template.TemplateName
+                            && t.GroupId == template.GroupId
+                            && t.ProjectId == template.ProjectId);
 
-        //    if (string.IsNullOrWhiteSpace(templateName))
-        //        return BadRequest("templateName is required.");
+            var items = await scopeQuery.ToListAsync();
+            if (items.Count == 0)
+                return NotFound("Template scope not found.");
 
-        //    groupId = NormalizeNullableId(groupId);
-        //    projectId = NormalizeNullableId(projectId);
-        //    if (projectId.HasValue && !groupId.HasValue)
-        //        return BadRequest("groupId is required when projectId is provided.");
+            var now = DateTime.Now;
+            foreach (var item in items)
+            {
+                item.IsActive = item.TemplateId == template.TemplateId;
+                item.UpdatedDate = now;
+            }
 
-        //    // Determine next version for this scope+type+name combo
-        //    var scopeQuery = _context.RPTTemplates
-        //        .Where(t => t.TypeId == typeId && t.TemplateName == templateName);
-        //    if (projectId.HasValue)
-        //        scopeQuery = scopeQuery.Where(t => t.ProjectId == projectId && t.GroupId == groupId);
-        //    else if (groupId.HasValue)
-        //        scopeQuery = scopeQuery.Where(t => t.GroupId == groupId && t.ProjectId == null);
-        //    else
-        //        scopeQuery = scopeQuery.Where(t => t.GroupId == null && t.ProjectId == null);
+            await _context.SaveChangesAsync();
+            _loggerService.LogEvent($"Activated template {id}", "RPTTemplate", LogHelper.GetTriggeredBy(User), 0);
+            return Ok(new { templateId = template.TemplateId, message = "Template activated." });
+        }
 
-        //    var lastVersion = await scopeQuery.MaxAsync(t => (int?)t.Version) ?? 0;
-
-        //    // Save file to wwwroot/rpt-templates/{scope}/
-        //    var webRoot = _env.WebRootPath ?? Path.Combine(Directory.GetCurrentDirectory(), "wwwroot");
-        //    var folderParts = new List<string> { webRoot, "rpt-templates" };
-        //    string scopeSlug;
-        //    if (projectId.HasValue)
-        //    {
-        //        folderParts.Add(groupId.Value.ToString());
-        //        folderParts.Add(typeId.ToString());
-        //        folderParts.Add("projects");
-        //        folderParts.Add(projectId.Value.ToString());
-        //        scopeSlug = $"g{groupId}_t{typeId}_p{projectId}";
-        //    }
-        //    else if (groupId.HasValue)
-        //    {
-        //        folderParts.Add(groupId.Value.ToString());
-        //        folderParts.Add(typeId.ToString());
-        //        scopeSlug = $"g{groupId}_t{typeId}";
-        //    }
-        //    else
-        //    {
-        //        folderParts.Add("standard");
-        //        folderParts.Add(typeId.ToString());
-        //        scopeSlug = $"std_t{typeId}";
-        //    }
-
-        //    var folder = Path.Combine(folderParts.ToArray());
-        //    Directory.CreateDirectory(folder);
-        //    var fileName = $"{templateName}_{scopeSlug}_v{lastVersion + 1}{ext}";
-        //    var absolutePath = Path.Combine(folder, fileName);
-        //    var relativePath = Path.Combine(folderParts.Skip(1).ToArray());
-        //    relativePath = Path.Combine(relativePath, fileName);
-
-        //    using (var stream = new FileStream(absolutePath, FileMode.Create))
-        //        await file.CopyToAsync(stream);
-
-        //    var (parsedFields, parseError) = await ParseFieldsAsync(absolutePath, file.FileName);
-        //    if (!string.IsNullOrWhiteSpace(parseError))
-        //    {
-        //        Console.WriteLine($"[RPTTemplates] Parse warning: {parseError}");
-        //    }
-        //    var parsedFieldsJson = parsedFields.Count > 0
-        //        ? System.Text.Json.JsonSerializer.Serialize(parsedFields)
-        //        : null;
-
-        //    var previousActive = await scopeQuery
-        //        .Where(t => t.IsActive)
-        //        .OrderByDescending(t => t.Version)
-        //        .FirstOrDefaultAsync();
-
-        //    var newHash = ComputeFileHash(absolutePath);
-        //    var previousHash = TryGetPreviousHash(previousActive, webRoot);
-
-        //    var fileIdentical = previousHash != null
-        //        && string.Equals(previousHash, newHash, StringComparison.OrdinalIgnoreCase);
-
-        //    var fieldsSame = previousActive != null
-        //        && AreFieldsEqual(previousActive.ParsedFieldsJson, parsedFieldsJson);
-
-        //    var likelyLayoutOnly = !fileIdentical && fieldsSame && previousActive != null;
-
-        //    if (fileIdentical && !forceUpload)
-        //    {
-        //        try
-        //        {
-        //            if (System.IO.File.Exists(absolutePath))
-        //                System.IO.File.Delete(absolutePath);
-        //        }
-        //        catch
-        //        {
-        //            // ignore cleanup errors
-        //        }
-        //        return Conflict(new
-        //        {
-        //            message = "No changes detected between this file and the latest version.",
-        //            allowForceUpload = true,
-        //            changeSummary = new
-        //            {
-        //                fileIdentical,
-        //                fieldsSame,
-        //                likelyLayoutOnly
-        //            }
-        //        });
-        //    }
-
-        //    // Deactivate previous versions (never delete)
-        //    var previous = await scopeQuery.Where(t => t.IsActive).ToListAsync();
-        //    previous.ForEach(t => t.IsActive = false);
-
-        //    var uploadedByUserId = GetUserIdFromToken();
-
-        //    var template = new RPTTemplate
-        //    {
-        //        GroupId = groupId,
-        //        TypeId = typeId,
-        //        ProjectId = projectId,
-        //        UploadedByUserId = uploadedByUserId,
-        //        ModuleIds = moduleIds != null && moduleIds.Count > 0 ? moduleIds : null,
-        //        TemplateName = templateName,
-        //        RPTFilePath = relativePath,   // store relative path only
-        //        ParsedFieldsJson = parsedFieldsJson,
-        //        Version = lastVersion + 1,
-        //        IsActive = true,
-        //        CreatedDate = DateTime.Now,
-        //        UpdatedDate = DateTime.Now
-        //    };
-
-        //    _context.RPTTemplates.Add(template);
-        //    await _context.SaveChangesAsync();
-
-        //    // If user skips mapping for new version, reuse mapping from previous version if available
-        //    if (previous.Count > 0)
-        //    {
-        //        var previousTemplateId = previous
-        //            .OrderByDescending(t => t.Version)
-        //            .Select(t => (int?)t.TemplateId)
-        //            .FirstOrDefault();
-
-        //        if (previousTemplateId.HasValue)
-        //        {
-        //            var prevMapping = await _context.RPTMappings
-        //                .FirstOrDefaultAsync(m => m.TemplateId == previousTemplateId.Value);
-        //            if (prevMapping != null)
-        //            {
-        //                var exists = await _context.RPTMappings
-        //                    .AnyAsync(m => m.TemplateId == template.TemplateId);
-        //                if (!exists)
-        //                {
-        //                    _context.RPTMappings.Add(new RPTMapping
-        //                    {
-        //                        TemplateId = template.TemplateId,
-        //                        MappingJson = prevMapping.MappingJson
-        //                    });
-        //                    await _context.SaveChangesAsync();
-        //                }
-        //            }
-        //        }
-        //    }
-        //    else if (projectId.HasValue && groupId.HasValue)
-        //    {
-        //        // For first-time project overrides, reuse mapping from group/standard template if available
-        //        var fallbackTemplate = await _context.RPTTemplates
-        //            .Where(t => t.TypeId == typeId
-        //                        && t.TemplateName == templateName
-        //                        && t.GroupId == groupId
-        //                        && t.ProjectId == null
-        //                        && t.IsActive)
-        //            .OrderByDescending(t => t.Version)
-        //            .FirstOrDefaultAsync();
-
-        //        if (fallbackTemplate == null)
-        //        {
-        //            fallbackTemplate = await _context.RPTTemplates
-        //                .Where(t => t.TypeId == typeId
-        //                            && t.TemplateName == templateName
-        //                            && t.GroupId == null
-        //                            && t.ProjectId == null
-        //                            && t.IsActive)
-        //                .OrderByDescending(t => t.Version)
-        //                .FirstOrDefaultAsync();
-        //        }
-
-        //        if (fallbackTemplate != null)
-        //        {
-        //            var fallbackMapping = await _context.RPTMappings
-        //                .FirstOrDefaultAsync(m => m.TemplateId == fallbackTemplate.TemplateId);
-        //            if (fallbackMapping != null)
-        //            {
-        //                var exists = await _context.RPTMappings
-        //                    .AnyAsync(m => m.TemplateId == template.TemplateId);
-        //                if (!exists)
-        //                {
-        //                    _context.RPTMappings.Add(new RPTMapping
-        //                    {
-        //                        TemplateId = template.TemplateId,
-        //                        MappingJson = fallbackMapping.MappingJson
-        //                    });
-        //                    await _context.SaveChangesAsync();
-        //                }
-        //            }
-        //        }
-        //    }
-
-        //    return Ok(new
-        //    {
-        //        template.TemplateId,
-        //        template.TemplateName,
-        //        template.Version,
-        //        template.RPTFilePath,
-        //        parsedFields = parsedFields,
-        //        parseError = parseError,
-        //        changeSummary = new
-        //        {
-        //            fileIdentical,
-        //            fieldsSame,
-        //            likelyLayoutOnly
-        //        }
-        //    });
-        //}
-
-        //POST: api/RPTTemplates/import-from-group
-        //Copy all active templates from a source group+type to a new group+type
-       [HttpPost("import-from-group")]
+        // POST: api/RPTTemplates/import-from-group
+        // Copy all active templates from a source group+type to a new group+type
+        [HttpPost("import-from-group")]
         public async Task<ActionResult> ImportFromGroup([FromBody] ImportGroupRequest req)
         {
             var sourceScope = (req.SourceScope ?? "group").Trim().ToLowerInvariant();
@@ -587,7 +420,7 @@ namespace Tools.Controllers
             var targetProjectId = NormalizeNullableId(req.TargetProjectId);
             var targetGroupId = NormalizeNullableId(req.TargetGroupId);
             var targetTypeId = NormalizeNullableId(req.TargetTypeId);
-            var uploadedByUserId = GetUserIdFromToken();
+            var uploadedByUserId = LogHelper.GetTriggeredBy(User);
 
             if (targetProjectId.HasValue)
             {
@@ -695,18 +528,18 @@ namespace Tools.Controllers
 
                 var newTemplate = new RPTTemplate
                 {
-                    GroupId      = targetGroupId,
-                    TypeId       = targetTypeId.Value,
-                    ProjectId    = targetProjectId,
+                    GroupId = targetGroupId,
+                    TypeId = targetTypeId.Value,
+                    ProjectId = targetProjectId,
                     UploadedByUserId = uploadedByUserId,
-                    ModuleIds    = src.ModuleIds,
+                    ModuleIds = src.ModuleIds,
                     TemplateName = src.TemplateName,
-                    RPTFilePath  = src.RPTFilePath,   // reuse same file
+                    RPTFilePath = src.RPTFilePath,   // reuse same file
                     ParsedFieldsJson = src.ParsedFieldsJson,
-                    Version      = lastVersion + 1,
-                    IsActive     = true,
-                    CreatedDate  = DateTime.Now,
-                    UpdatedDate  = DateTime.Now
+                    Version = lastVersion + 1,
+                    IsActive = true,
+                    CreatedDate = DateTime.Now,
+                    UpdatedDate = DateTime.Now
                 };
                 _context.RPTTemplates.Add(newTemplate);
                 await _context.SaveChangesAsync();
@@ -720,7 +553,7 @@ namespace Tools.Controllers
                     {
                         _context.RPTMappings.Add(new RPTMapping
                         {
-                            TemplateId  = newTemplate.TemplateId,
+                            TemplateId = newTemplate.TemplateId,
                             MappingJson = srcMapping.MappingJson
                         });
                         await _context.SaveChangesAsync();
@@ -730,6 +563,7 @@ namespace Tools.Controllers
                 imported.Add(new { newTemplate.TemplateId, newTemplate.TemplateName, newTemplate.Version });
             }
 
+            _loggerService.LogEvent($"Imported {imported.Count} template(s) from group {req.SourceGroupId} to group {targetGroupId}", "RPTTemplate", LogHelper.GetTriggeredBy(User), 0);
             return Ok(new { imported });
         }
 
@@ -766,6 +600,7 @@ namespace Tools.Controllers
             }
 
             await _context.SaveChangesAsync();
+            _loggerService.LogEvent($"Saved mapping for templateId {id}", "RPTMapping", LogHelper.GetTriggeredBy(User), 0);
             return Ok(new { templateId = id, message = "Mapping saved." });
         }
 
@@ -806,7 +641,7 @@ namespace Tools.Controllers
 
             t.UpdatedDate = DateTime.Now;
             await _context.SaveChangesAsync();
-
+            _loggerService.LogEvent($"Parsed fields for templateId {id}", "RPTTemplate", LogHelper.GetTriggeredBy(User), 0);
             return Ok(new { templateId = id, parsedFields });
         }
 
@@ -918,6 +753,8 @@ namespace Tools.Controllers
                 var finalPath = Path.Combine(uploadFolder, fileName);
 
                 System.IO.File.Copy(tempPath, finalPath, true);
+
+                int nextVersion = 1;
 
                 // ✅ VERSIONING
                 var scopeQuery = _context.RPTTemplates
@@ -1251,7 +1088,7 @@ namespace Tools.Controllers
                 return NotFound();
 
             // Resolve relative path against wwwroot
-            var webRoot      = _env.WebRootPath ?? Path.Combine(Directory.GetCurrentDirectory(), "wwwroot");
+            var webRoot = _env.WebRootPath ?? Path.Combine(Directory.GetCurrentDirectory(), "wwwroot");
             var absolutePath = Path.Combine(webRoot, t.RPTFilePath);
             if (!System.IO.File.Exists(absolutePath))
                 return NotFound("File not found on disk.");
@@ -1516,14 +1353,14 @@ namespace Tools.Controllers
 
     public class ImportGroupRequest
     {
-        public int SourceGroupId  { get; set; }
-        public int? SourceTypeId   { get; set; }
-        public int TargetGroupId  { get; set; }
-        public int TargetTypeId   { get; set; }
+        public int SourceGroupId { get; set; }
+        public int? SourceTypeId { get; set; }
+        public int TargetGroupId { get; set; }
+        public int TargetTypeId { get; set; }
         public int? TargetProjectId { get; set; }
         public int? SourceProjectId { get; set; }
         public string? SourceScope { get; set; }
-        public bool CopyMappings  { get; set; } = true;
+        public bool CopyMappings { get; set; } = true;
         public bool IncludeStandard { get; set; } = true;
     }
 
@@ -1557,4 +1394,6 @@ namespace Tools.Controllers
         public string? message { get; set; }
         public List<string>? changes { get; set; }
     }
+
 }
+

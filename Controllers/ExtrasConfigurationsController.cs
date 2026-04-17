@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -79,14 +79,14 @@ namespace Tools.Controllers
             try
             {
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Updated ExtrasConfiguration with ID {id}", "ExtrasConfiguration", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, extrasConfiguration.ProjectId);
+                _loggerService.LogEvent($"Updated ExtrasConfiguration with ID {id}", "ExtrasConfiguration", LogHelper.GetTriggeredBy(User), extrasConfiguration.ProjectId);
 
             }
             catch (Exception ex)
             {
                 if (!ExtrasConfigurationExists(id))
                 {
-                    _loggerService.LogEvent($"ExtrasConfiguration with ID {id} not found during updating", "ExtrasConfiguration", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, extrasConfiguration.ProjectId);
+                    _loggerService.LogEvent($"ExtrasConfiguration with ID {id} not found during updating", "ExtrasConfiguration", LogHelper.GetTriggeredBy(User), extrasConfiguration.ProjectId);
 
                     return NotFound();
                 }
@@ -118,13 +118,13 @@ namespace Tools.Controllers
                     _context.ExtraConfigurations.RemoveRange(extra);
                     await _context.SaveChangesAsync();
                     _loggerService.LogEvent($"Deleted {projectId} old ExtrasConfiguration record(s)",
-                  "ExtrasConfiguration", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, extrasConfiguration.ProjectId);
+                  "ExtrasConfiguration", LogHelper.GetTriggeredBy(User), extrasConfiguration.ProjectId);
                 }
 
 
                 _context.ExtraConfigurations.Add(extrasConfiguration);
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Created new ExtrasConfiguration with ProjectID {extrasConfiguration.ProjectId}", "ExtrasConfiguration", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, extrasConfiguration.ProjectId);
+                _loggerService.LogEvent($"Created new ExtrasConfiguration with ProjectID {extrasConfiguration.ProjectId}", "ExtrasConfiguration", LogHelper.GetTriggeredBy(User), extrasConfiguration.ProjectId);
 
                 return CreatedAtAction("GetExtrasConfiguration", new { id = extrasConfiguration.Id }, extrasConfiguration);
             }
@@ -154,7 +154,7 @@ namespace Tools.Controllers
 
                 _context.ExtraConfigurations.Remove(extrasConfiguration);
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Deleted a ExtrasConfiguration with ID {id}", "ExtrasConfiguration", User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0, extrasConfiguration.ProjectId);
+                _loggerService.LogEvent($"Deleted a ExtrasConfiguration with ID {id}", "ExtrasConfiguration", LogHelper.GetTriggeredBy(User), extrasConfiguration.ProjectId);
 
                 return NoContent();
             }
@@ -172,3 +172,4 @@ namespace Tools.Controllers
         }
     }
 }
+
