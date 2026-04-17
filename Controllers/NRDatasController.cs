@@ -2110,61 +2110,111 @@ namespace Tools.Controllers
 
                     foreach (var row in matchingRows)
                     {
-                        // Handle additional dynamic fields - store ALL fields in NRDatas as JSON
-                        // (including Pages, ExamDate, ExamTime which are now also dynamic)
                         if (item.AdditionalFields != null && item.AdditionalFields.Any())
                         {
                             try
                             {
-                                // Parse existing NRDatas JSON if it exists
-                                Dictionary<string, object> nrDatasDict;
+                               
+                                var modelProperties = typeof(NRData)
+                                    .GetProperties()
+                                    .Where(p => p.Name != nameof(NRData.NRDatas))
+                                    .ToDictionary(p => p.Name.ToLower(), p => p);
+
+                                
+                                var dynamicFields = new Dictionary<string, object>();
+
+                               
+                                foreach (var field in item.AdditionalFields)
+                                {
+                                    var key = field.Key;
+                                    var valueStr = field.Value?.ToString()?.Trim();
+
+                                    if (string.IsNullOrWhiteSpace(valueStr))
+                                        continue;
+
+                                    var keyLower = key.ToLower();
+
+                                    if (modelProperties.ContainsKey(keyLower))
+                                    {
+                                        var property = modelProperties[keyLower];
+
+                                        try
+                                        {
+                                            object? convertedValue = null;
+
+                                            if (property.PropertyType == typeof(int))
+                                            {
+                                                if (int.TryParse(valueStr, out int intVal))
+                                                    convertedValue = intVal;
+                                            }
+                                            else if (property.PropertyType == typeof(int?))
+                                            {
+                                                if (int.TryParse(valueStr, out int intVal))
+                                                    convertedValue = intVal;
+                                            }
+                                            else if (property.PropertyType == typeof(double))
+                                            {
+                                                if (double.TryParse(valueStr, out double dblVal))
+                                                    convertedValue = dblVal;
+                                            }
+                                            else if (property.PropertyType == typeof(bool))
+                                            {
+                                                if (bool.TryParse(valueStr, out bool boolVal))
+                                                    convertedValue = boolVal;
+                                            }
+                                            else
+                                            {
+                                                convertedValue = valueStr;
+                                            }
+
+                                            if (convertedValue != null)
+                                            {
+                                                property.SetValue(row, convertedValue);
+                                            }
+                                        }
+                                        catch
+                                        {
+                                            dynamicFields[key] = valueStr;
+                                        }
+                                    }
+                                    else
+                                    {
+                                        dynamicFields[key] = valueStr;
+                                    }
+                                }
+
+                               
+                                Dictionary<string, object> existingData;
+
                                 if (!string.IsNullOrWhiteSpace(row.NRDatas))
                                 {
                                     try
                                     {
-                                        nrDatasDict = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object>>(row.NRDatas) 
+                                        existingData = System.Text.Json.JsonSerializer
+                                            .Deserialize<Dictionary<string, object>>(row.NRDatas)
                                             ?? new Dictionary<string, object>();
                                     }
                                     catch
                                     {
-                                        nrDatasDict = new Dictionary<string, object>();
+                                        existingData = new Dictionary<string, object>();
                                     }
                                 }
                                 else
                                 {
-                                    nrDatasDict = new Dictionary<string, object>();
+                                    existingData = new Dictionary<string, object>();
                                 }
 
-                                // Add/update all fields from additionalFields
-                                foreach (var field in item.AdditionalFields)
+                              
+                                foreach (var kv in dynamicFields)
                                 {
-                                    var valueStr = field.Value?.ToString()?.Trim();
-                                    if (!string.IsNullOrWhiteSpace(valueStr))
-                                    {
-                                        nrDatasDict[field.Key] = valueStr;
-                                        
-                                        // Also update direct properties if they exist (for backward compatibility)
-                                        var fieldLower = field.Key.ToLower();
-                                        if (fieldLower == "pages" && int.TryParse(valueStr, out int pages))
-                                        {
-                                            row.Pages = pages;
-                                        }
-                                        else if (fieldLower == "examdate")
-                                        {
-                                            row.ExamDate = valueStr;
-                                        }
-                                        else if (fieldLower == "examtime")
-                                        {
-                                            row.ExamTime = valueStr;
-                                        }
-                                    }
+                                    existingData[kv.Key] = kv.Value;
                                 }
 
-                                // Serialize back to JSON
-                                row.NRDatas = System.Text.Json.JsonSerializer.Serialize(nrDatasDict);
                                 
+                                row.NRDatas = System.Text.Json.JsonSerializer.Serialize(existingData);
+
                                 _loggerService.LogEvent(
-                                    $"Updated NRDatas JSON for CatchNo {trimmedCatchNo} with fields: {string.Join(", ", item.AdditionalFields.Keys)}",
+                                    $"Updated CatchNo {trimmedCatchNo} with fields: {string.Join(", ", item.AdditionalFields.Keys)}",
                                     "NRData",
                                     User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
                                     request.ProjectId);
@@ -2172,7 +2222,7 @@ namespace Tools.Controllers
                             catch (Exception ex)
                             {
                                 _loggerService.LogError(
-                                    $"Failed to update NRDatas JSON for CatchNo {trimmedCatchNo}",
+                                    $"Failed to update CatchNo {trimmedCatchNo}",
                                     ex.Message,
                                     nameof(NRDatasController));
                             }

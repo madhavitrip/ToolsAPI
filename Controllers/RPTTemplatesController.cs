@@ -737,9 +737,14 @@ namespace Tools.Controllers
         [HttpGet("{id}/mapping")]
         public async Task<ActionResult> GetMapping(int id)
         {
-            var mapping = await _context.RPTMappings.FirstOrDefaultAsync(m => m.TemplateId == id);
-            if (mapping == null) return NotFound();
-            return Ok(mapping);
+            var mapping = await _context.RPTMappings
+                .FirstOrDefaultAsync(m => m.TemplateId == id);
+
+            return Ok(new
+            {
+                templateId = id,
+                mapping = mapping?.MappingJson ?? null
+            });
         }
 
         // POST: api/RPTTemplates/{id}/mapping
@@ -780,29 +785,44 @@ namespace Tools.Controllers
 
             var (parsedFields, parseError) = await ParseFieldsAsync(absolutePath, Path.GetFileName(absolutePath));
             if (!string.IsNullOrWhiteSpace(parseError))
-                return StatusCode(502, parseError);
+            {
+                Console.WriteLine("PARSE ERROR: " + parseError);
+
+                return Ok(new
+                {
+                    templateId = id,
+                    parsedFields = (object)null,
+                    warning = parseError
+                });
+            }
             t.ParsedFieldsJson = parsedFields.Count > 0
-                ? System.Text.Json.JsonSerializer.Serialize(parsedFields)
+                ? System.Text.Json.JsonSerializer.Serialize(parsedFields, new System.Text.Json.JsonSerializerOptions { PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase })
                 : null;
+
+            var requiredFields = parsedFields.Where(f => f.IsRequired).Select(f => f.Name).ToList();
+            t.RequiredFieldsJson = requiredFields.Count > 0
+                ? System.Text.Json.JsonSerializer.Serialize(requiredFields)
+                : null;
+
             t.UpdatedDate = DateTime.Now;
             await _context.SaveChangesAsync();
 
             return Ok(new { templateId = id, parsedFields });
         }
 
-
         [HttpPost("upload")]
         public async Task<ActionResult> Upload(
-            [FromForm] int? templateId,
-            [FromForm] int? projectId,
-            [FromForm] string? templateName,
-            [FromForm] int? groupId,
-            [FromForm] int? typeId,
-            [FromForm] IFormFile file,
-            [FromForm] bool forceUpload = false)
+    [FromForm] int? templateId,
+    [FromForm] int? projectId,
+    [FromForm] string templateName,
+    [FromForm] int? groupId,
+    [FromForm] int typeId,
+    [FromForm] IFormFile file,
+    [FromForm] bool forceUpload = false)
         {
             try
             {
+                // ✅ BASIC VALIDATIONS
                 if (file == null || file.Length == 0)
                     return BadRequest("No file uploaded.");
 
@@ -813,20 +833,25 @@ namespace Tools.Controllers
                 if (string.IsNullOrWhiteSpace(templateName))
                     return BadRequest("templateName is required.");
 
-                // STEP 1: Save TEMP file
-                var tempPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".rpt");
+                groupId = NormalizeNullableId(groupId);
+                projectId = NormalizeNullableId(projectId);
 
+                if (projectId.HasValue && !groupId.HasValue)
+                    return BadRequest("groupId is required when projectId is provided.");
+
+                // ✅ TEMP FILE SAVE
+                var tempPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".rpt");
                 using (var stream = new FileStream(tempPath, FileMode.Create))
                 {
                     await file.CopyToAsync(stream);
                 }
 
-                // STEP 2: Resolve templateId
+                // ✅ RESOLVE TEMPLATE ID (for design check)
                 if (!templateId.HasValue)
                 {
                     var baseQuery = _context.RPTTemplates
                         .Where(x => x.TypeId == typeId && x.TemplateName == templateName && x.IsActive);
-                    
+
                     if (projectId.HasValue)
                         baseQuery = baseQuery.Where(x => x.ProjectId == projectId && x.GroupId == groupId);
                     else if (groupId.HasValue)
@@ -840,64 +865,52 @@ namespace Tools.Controllers
                         .FirstOrDefaultAsync();
                 }
 
-                // STEP 3: CALL DESIGN MICROSERVICE
+                // ✅ DESIGN CHECK CALL
                 DesignCheckResponse designCheck = null;
 
-                if (templateId.HasValue && templateId > 0)
+                if (templateId.HasValue && templateId.Value > 0)
                 {
-                    using (var client = new HttpClient())
-                    using (var content = new MultipartFormDataContent())
-                    using (var fileStream = new FileStream(tempPath, FileMode.Open, FileAccess.Read))
+                    using var client = new HttpClient();
+                    using var content = new MultipartFormDataContent();
+                    using var fs = new FileStream(tempPath, FileMode.Open, FileAccess.Read);
+
+                    content.Add(new StreamContent(fs), "file", file.FileName);
+                    content.Add(new StringContent(templateId.Value.ToString()), "templateId");
+
+                    var response = await client.PostAsync(
+                        $"{_apiSettings.RptServiceUrl}/check-design?templateId={templateId.Value}",
+                        content
+                    );
+
+                    if (!response.IsSuccessStatusCode)
                     {
-                        var fileContent = new StreamContent(fileStream);
+                        var error = await response.Content.ReadAsStringAsync();
+                        return StatusCode(500, "Design check failed: " + error);
+                    }
 
-                        content.Add(fileContent, "file", file.FileName);
-                        content.Add(new StringContent(templateId.Value.ToString()), "templateId");
+                    var json = await response.Content.ReadAsStringAsync();
+                    var token = JsonConvert.DeserializeObject<JToken>(json);
 
-                        var response = await client.PostAsync(
-                            $"{_apiSettings.RptServiceUrl}/check-design?templateId={templateId.Value}",
-                            content
-                        );
+                    if (token is JObject obj)
+                        designCheck = obj["designCheck"]?.ToObject<DesignCheckResponse>() ?? obj.ToObject<DesignCheckResponse>();
+                    else if (token is JArray arr)
+                        designCheck = arr.FirstOrDefault()?.ToObject<DesignCheckResponse>();
 
-                        if (!response.IsSuccessStatusCode)
+                    
+                    if ((designCheck?.changed ?? false) && !forceUpload)
+                    {
+                        return Ok(new
                         {
-                            var error = await response.Content.ReadAsStringAsync();
-                            return StatusCode(500, "Design check failed: " + error);
-                        }
-
-                        var json = await response.Content.ReadAsStringAsync();
-                        var token = JsonConvert.DeserializeObject<JToken>(json);
-
-                        if (token is JArray arr)
-                        {
-                            var first = arr.FirstOrDefault();
-                            if (first != null)
-                                designCheck = first.ToObject<DesignCheckResponse>();
-                        }
-                        else if (token is JObject obj)
-                        {
-                            if (obj["designCheck"] != null)
-                                designCheck = obj["designCheck"].ToObject<DesignCheckResponse>();
-                            else
-                                designCheck = obj.ToObject<DesignCheckResponse>();
-                        }
-
-                        if (designCheck != null && !forceUpload)
-                        {
-                            return Ok(new
-                            {
-                                success = true,
-                                requireConfirmation = true,
-                                message = designCheck.message,
-                                designCheck
-                            });
-                        }
+                            success = true,
+                            requireConfirmation = true,
+                            message = designCheck.message,
+                            designCheck
+                        });
                     }
                 }
 
-                // STEP 5: SAVE FINAL FILE
+               
                 var uploadFolder = Path.Combine(_env.WebRootPath, "uploads");
-
                 if (!Directory.Exists(uploadFolder))
                     Directory.CreateDirectory(uploadFolder);
 
@@ -905,84 +918,56 @@ namespace Tools.Controllers
                 var finalPath = Path.Combine(uploadFolder, fileName);
 
                 System.IO.File.Copy(tempPath, finalPath, true);
-                
-                int nextVersion = 1;
 
-                var baseScopeQuery = _context.RPTTemplates
+                // ✅ VERSIONING
+                var scopeQuery = _context.RPTTemplates
                     .Where(x => x.TypeId == typeId && x.TemplateName == templateName);
-                
+
                 if (projectId.HasValue)
-                    baseScopeQuery = baseScopeQuery.Where(x => x.ProjectId == projectId && x.GroupId == groupId);
+                    scopeQuery = scopeQuery.Where(x => x.ProjectId == projectId && x.GroupId == groupId);
                 else if (groupId.HasValue)
-                    baseScopeQuery = baseScopeQuery.Where(x => x.GroupId == groupId && x.ProjectId == null);
+                    scopeQuery = scopeQuery.Where(x => x.GroupId == groupId && x.ProjectId == null);
                 else
-                    baseScopeQuery = baseScopeQuery.Where(x => x.GroupId == null && x.ProjectId == null);
+                    scopeQuery = scopeQuery.Where(x => x.GroupId == null && x.ProjectId == null);
 
-                var lastVersion = await baseScopeQuery
-                    .OrderByDescending(x => x.Version)
-                    .Select(x => x.Version)
-                    .FirstOrDefaultAsync();
+                var lastVersion = await scopeQuery.MaxAsync(x => (int?)x.Version) ?? 0;
+                var nextVersion = lastVersion + 1;
 
-                if (lastVersion > 0)
-                {
-                    nextVersion = lastVersion + 1;
-                }
-
-                // Call /fields endpoint for ParsedFieldsJson
+                // ✅ PARSED FIELDS
                 string parsedFieldsJson = null;
-                try
+                var (fields, parseError) = await ParseFieldsAsync(finalPath, file.FileName);
+                if (fields != null && fields.Count > 0)
                 {
-                    using var client = new HttpClient();
-                    using var content = new MultipartFormDataContent();
-                    using var stream = System.IO.File.OpenRead(finalPath);
-                    var fileContent = new StreamContent(stream);
-                    content.Add(fileContent, "file", file.FileName);
-                    var response = await client.PostAsync($"{_apiSettings.RptServiceUrl}/fields", content);
-                    if (response.IsSuccessStatusCode)
-                    {
-                        var fieldsJson = await response.Content.ReadAsStringAsync();
-                        var fieldsToken = JToken.Parse(fieldsJson);
-                        if (fieldsToken is JObject fieldsObj && fieldsObj["data"] is JArray dataArr) 
-                        {
-                            var fieldsList = dataArr.Select(x => x.ToString()).ToList();
-                            parsedFieldsJson = JsonConvert.SerializeObject(fieldsList);
-                        }
-                        else if (fieldsToken is JArray)
-                        {
-                            parsedFieldsJson = fieldsJson;
-                        }
-                    }
-                }
-                catch (Exception e)
-                {
-                    Console.WriteLine("Warning: Failed to fetch fields from python microservice: " + e.Message);
+                    parsedFieldsJson = System.Text.Json.JsonSerializer.Serialize(fields, new System.Text.Json.JsonSerializerOptions { PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase });
                 }
 
-                // Fetch full snapshot from python microservice
+                // ✅ SNAPSHOT
                 string snapshotJson = null;
                 try
                 {
                     snapshotJson = await GetDesignSnapshotJson(finalPath, file.FileName);
                 }
-                catch (Exception e)
-                {
-                    Console.WriteLine("Warning: Failed to fetch design snapshot from python microservice: " + e.Message);
-                }
+                catch { }
 
-                var existingTemplates = await baseScopeQuery.Where(x => x.IsActive).ToListAsync();
-                foreach (var item in existingTemplates)
-                {
-                    item.IsActive = false;
-                }
+                // ✅ DEACTIVATE OLD
+                var oldTemplates = await scopeQuery.Where(x => x.IsActive).ToListAsync();
+                oldTemplates.ForEach(x => x.IsActive = false);
+
+                // ✅ SAVE DB
+                var requiredOnly = fields?.Where(f => f.IsRequired).Select(f => f.Name).ToList() ?? new List<string>();
+                var requiredFieldsJson = requiredOnly.Count > 0 
+                    ? System.Text.Json.JsonSerializer.Serialize(requiredOnly) 
+                    : null;
 
                 var template = new RPTTemplate
                 {
                     TemplateName = templateName,
                     GroupId = groupId,
-                    TypeId = typeId ?? 0,
+                    TypeId = typeId,
                     ProjectId = projectId,
                     RPTFilePath = Path.Combine("uploads", fileName),
                     ParsedFieldsJson = parsedFieldsJson,
+                    RequiredFieldsJson = requiredFieldsJson,
                     DesignSnapshotJson = snapshotJson,
                     Version = nextVersion,
                     IsActive = true,
@@ -993,19 +978,20 @@ namespace Tools.Controllers
                 _context.RPTTemplates.Add(template);
                 await _context.SaveChangesAsync();
 
+                // ✅ FINAL MICROCALL
                 using (var client = new HttpClient())
                 using (var content = new MultipartFormDataContent())
                 using (var fs = new FileStream(finalPath, FileMode.Open, FileAccess.Read))
                 {
-                    var fileContent = new StreamContent(fs);
-                    content.Add(fileContent, "file", file.FileName);
+                    content.Add(new StreamContent(fs), "file", file.FileName);
 
                     await client.PostAsync(
-                        $"{_apiSettings.RptServiceUrl}/upload-final?templateId={template.TemplateId}",
+                        $"{_apiSettings.RptServiceUrl}/final-upload",
                         content
                     );
                 }
 
+                // ✅ CLEANUP
                 if (System.IO.File.Exists(tempPath))
                     System.IO.File.Delete(tempPath);
 
@@ -1013,7 +999,9 @@ namespace Tools.Controllers
                 {
                     success = true,
                     templateId = template.TemplateId,
+                    version = template.Version,
                     filePath = template.RPTFilePath,
+                    parsedFields = parsedFieldsJson,
                     designCheck
                 });
             }
@@ -1022,6 +1010,238 @@ namespace Tools.Controllers
                 return StatusCode(500, ex.Message);
             }
         }
+
+        //[HttpPost("uploadbyshivangi")]
+        //public async Task<ActionResult> Upload(
+        //    [FromForm] int? templateId,
+        //    [FromForm] int? projectId,
+        //    [FromForm] string? templateName,
+        //    [FromForm] int? groupId,
+        //    [FromForm] int? typeId,
+        //    [FromForm] IFormFile file,
+        //    [FromForm] bool forceUpload = false)
+        //{
+        //    try
+        //    {
+        //        if (file == null || file.Length == 0)
+        //            return BadRequest("No file uploaded.");
+
+        //        var ext = Path.GetExtension(file.FileName).ToLowerInvariant();
+        //        if (ext != ".rpt")
+        //            return BadRequest("Only .rpt files allowed.");
+
+        //        if (string.IsNullOrWhiteSpace(templateName))
+        //            return BadRequest("templateName is required.");
+
+        //        // STEP 1: Save TEMP file
+        //        var tempPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".rpt");
+
+        //        using (var stream = new FileStream(tempPath, FileMode.Create))
+        //        {
+        //            await file.CopyToAsync(stream);
+        //        }
+
+        //        // STEP 2: Resolve templateId
+        //        if (!templateId.HasValue)
+        //        {
+        //            var baseQuery = _context.RPTTemplates
+        //                .Where(x => x.TypeId == typeId && x.TemplateName == templateName && x.IsActive);
+
+        //            if (projectId.HasValue)
+        //                baseQuery = baseQuery.Where(x => x.ProjectId == projectId && x.GroupId == groupId);
+        //            else if (groupId.HasValue)
+        //                baseQuery = baseQuery.Where(x => x.GroupId == groupId && x.ProjectId == null);
+        //            else
+        //                baseQuery = baseQuery.Where(x => x.GroupId == null && x.ProjectId == null);
+
+        //            templateId = await baseQuery
+        //                .OrderByDescending(x => x.Version)
+        //                .Select(x => (int?)x.TemplateId)
+        //                .FirstOrDefaultAsync();
+        //        }
+
+        //        // STEP 3: CALL DESIGN MICROSERVICE
+        //        DesignCheckResponse designCheck = null;
+
+        //        if (templateId.HasValue && templateId > 0)
+        //        {
+        //            using (var client = new HttpClient())
+        //            using (var content = new MultipartFormDataContent())
+        //            using (var fileStream = new FileStream(tempPath, FileMode.Open, FileAccess.Read))
+        //            {
+        //                var fileContent = new StreamContent(fileStream);
+
+        //                content.Add(fileContent, "file", file.FileName);
+        //                content.Add(new StringContent(templateId.Value.ToString()), "templateId");
+
+        //                var response = await client.PostAsync(
+        //                    $"{_apiSettings.RptServiceUrl}/check-design?templateId={templateId.Value}",
+        //                    content
+        //                );
+
+        //                if (!response.IsSuccessStatusCode)
+        //                {
+        //                    var error = await response.Content.ReadAsStringAsync();
+        //                    return StatusCode(500, "Design check failed: " + error);
+        //                }
+
+        //                var json = await response.Content.ReadAsStringAsync();
+        //                var token = JsonConvert.DeserializeObject<JToken>(json);
+
+        //                if (token is JArray arr)
+        //                {
+        //                    var first = arr.FirstOrDefault();
+        //                    if (first != null)
+        //                        designCheck = first.ToObject<DesignCheckResponse>();
+        //                }
+        //                else if (token is JObject obj)
+        //                {
+        //                    if (obj["designCheck"] != null)
+        //                        designCheck = obj["designCheck"].ToObject<DesignCheckResponse>();
+        //                    else
+        //                        designCheck = obj.ToObject<DesignCheckResponse>();
+        //                }
+
+        //                if (designCheck != null && !forceUpload)
+        //                {
+        //                    return Ok(new
+        //                    {
+        //                        success = true,
+        //                        requireConfirmation = true,
+        //                        message = designCheck.message,
+        //                        designCheck
+        //                    });
+        //                }
+        //            }
+        //        }
+
+        //        // STEP 5: SAVE FINAL FILE
+        //        var uploadFolder = Path.Combine(_env.WebRootPath, "uploads");
+
+        //        if (!Directory.Exists(uploadFolder))
+        //            Directory.CreateDirectory(uploadFolder);
+
+        //        var fileName = $"{Guid.NewGuid()}_{file.FileName}";
+        //        var finalPath = Path.Combine(uploadFolder, fileName);
+
+        //        System.IO.File.Copy(tempPath, finalPath, true);
+
+        //        int nextVersion = 1;
+
+        //        var baseScopeQuery = _context.RPTTemplates
+        //            .Where(x => x.TypeId == typeId && x.TemplateName == templateName);
+
+        //        if (projectId.HasValue)
+        //            baseScopeQuery = baseScopeQuery.Where(x => x.ProjectId == projectId && x.GroupId == groupId);
+        //        else if (groupId.HasValue)
+        //            baseScopeQuery = baseScopeQuery.Where(x => x.GroupId == groupId && x.ProjectId == null);
+        //        else
+        //            baseScopeQuery = baseScopeQuery.Where(x => x.GroupId == null && x.ProjectId == null);
+
+        //        var lastVersion = await baseScopeQuery
+        //            .OrderByDescending(x => x.Version)
+        //            .Select(x => x.Version)
+        //            .FirstOrDefaultAsync();
+
+        //        if (lastVersion > 0)
+        //        {
+        //            nextVersion = lastVersion + 1;
+        //        }
+
+        //        // Call /fields endpoint for ParsedFieldsJson
+        //        string parsedFieldsJson = null;
+        //        try
+        //        {
+        //            using var client = new HttpClient();
+        //            using var content = new MultipartFormDataContent();
+        //            using var stream = System.IO.File.OpenRead(finalPath);
+        //            var fileContent = new StreamContent(stream);
+        //            content.Add(fileContent, "file", file.FileName);
+        //            var response = await client.PostAsync($"{_apiSettings.RptServiceUrl}/fields", content);
+        //            if (response.IsSuccessStatusCode)
+        //            {
+        //                var fieldsJson = await response.Content.ReadAsStringAsync();
+        //                var fieldsToken = JToken.Parse(fieldsJson);
+        //                if (fieldsToken is JObject fieldsObj && fieldsObj["data"] is JArray dataArr) 
+        //                {
+        //                    var fieldsList = dataArr.Select(x => x.ToString()).ToList();
+        //                    parsedFieldsJson = JsonConvert.SerializeObject(fieldsList);
+        //                }
+        //                else if (fieldsToken is JArray)
+        //                {
+        //                    parsedFieldsJson = fieldsJson;
+        //                }
+        //            }
+        //        }
+        //        catch (Exception e)
+        //        {
+        //            Console.WriteLine("Warning: Failed to fetch fields from python microservice: " + e.Message);
+        //        }
+
+        //        // Fetch full snapshot from python microservice
+        //        string snapshotJson = null;
+        //        try
+        //        {
+        //            snapshotJson = await GetDesignSnapshotJson(finalPath, file.FileName);
+        //        }
+        //        catch (Exception e)
+        //        {
+        //            Console.WriteLine("Warning: Failed to fetch design snapshot from python microservice: " + e.Message);
+        //        }
+
+        //        var existingTemplates = await baseScopeQuery.Where(x => x.IsActive).ToListAsync();
+        //        foreach (var item in existingTemplates)
+        //        {
+        //            item.IsActive = false;
+        //        }
+
+        //        var template = new RPTTemplate
+        //        {
+        //            TemplateName = templateName,
+        //            GroupId = groupId,
+        //            TypeId = typeId ?? 0,
+        //            ProjectId = projectId,
+        //            RPTFilePath = Path.Combine("uploads", fileName),
+        //            ParsedFieldsJson = parsedFieldsJson,
+        //            DesignSnapshotJson = snapshotJson,
+        //            Version = nextVersion,
+        //            IsActive = true,
+        //            CreatedDate = DateTime.Now,
+        //            UpdatedDate = DateTime.Now
+        //        };
+
+        //        _context.RPTTemplates.Add(template);
+        //        await _context.SaveChangesAsync();
+
+        //        using (var client = new HttpClient())
+        //        using (var content = new MultipartFormDataContent())
+        //        using (var fs = new FileStream(finalPath, FileMode.Open, FileAccess.Read))
+        //        {
+        //            var fileContent = new StreamContent(fs);
+        //            content.Add(fileContent, "file", file.FileName);
+
+        //            await client.PostAsync(
+        //                $"{_apiSettings.RptServiceUrl}/upload-final?templateId={template.TemplateId}",
+        //                content
+        //            );
+        //        }
+
+        //        if (System.IO.File.Exists(tempPath))
+        //            System.IO.File.Delete(tempPath);
+
+        //        return Ok(new
+        //        {
+        //            success = true,
+        //            templateId = template.TemplateId,
+        //            filePath = template.RPTFilePath,
+        //            designCheck
+        //        });
+        //    }
+        //    catch (Exception ex)
+        //    {
+        //        return StatusCode(500, ex.Message);
+        //    }
+        //}
         //GET: api/RPTTemplates/5/download
         [HttpGet("{id}/download")]
         public async Task<ActionResult> Download(int id)
@@ -1050,10 +1270,10 @@ namespace Tools.Controllers
                 .ToList();
         }
 
-        private async Task<(List<string> fields, string error)> ParseFieldsAsync(string absolutePath, string originalFileName)
+        private async Task<(List<FieldDto> fields, string error)> ParseFieldsAsync(string absolutePath, string originalFileName)
         {
             if (string.IsNullOrWhiteSpace(_apiSettings?.RptParserUrl))
-                return (new List<string>(), "RptParserUrl is not configured.");
+                return (new List<FieldDto>(), "RptParserUrl is not configured.");
 
             try
             {
@@ -1086,28 +1306,41 @@ namespace Tools.Controllers
                 var response = await client.PostAsync(_apiSettings.RptParserUrl, content);
                 var json = await response.Content.ReadAsStringAsync();
                 if (!response.IsSuccessStatusCode)
-                    return (new List<string>(), $"Parser error {(int)response.StatusCode}: {json}");
+                    return (new List<FieldDto>(), $"Parser error {(int)response.StatusCode}: {json}");
 
                 using var doc = JsonDocument.Parse(json);
                 if (!doc.RootElement.TryGetProperty("data", out var dataElement))
-                    return (new List<string>(), "Parser response missing data.");
+                    return (new List<FieldDto>(), "Parser response missing data.");
 
                 if (dataElement.ValueKind == JsonValueKind.Array)
                 {
-                    var fields = new List<string>();
+                    var fields = new List<FieldDto>();
                     foreach (var item in dataElement.EnumerateArray())
                     {
                         if (item.ValueKind == JsonValueKind.String)
-                            fields.Add(item.GetString());
+                        {
+                            fields.Add(new FieldDto { Name = item.GetString() });
+                        }
+                        else if (item.ValueKind == JsonValueKind.Object)
+                        {
+                            var f = new FieldDto();
+                            if (item.TryGetProperty("name", out var n1)) f.Name = n1.GetString();
+                            else if (item.TryGetProperty("Name", out var n2)) f.Name = n2.GetString();
+
+                            if (item.TryGetProperty("isRequired", out var r1)) f.IsRequired = r1.GetBoolean();
+                            else if (item.TryGetProperty("IsRequired", out var r2)) f.IsRequired = r2.GetBoolean();
+
+                            if (!string.IsNullOrWhiteSpace(f.Name)) fields.Add(f);
+                        }
                     }
                     return (fields, "");
                 }
 
-                return (new List<string>(), "Parser data was not an array.");
+                return (new List<FieldDto>(), "Parser data was not an array.");
             }
             catch (Exception ex)
             {
-                return (new List<string>(), $"Parser exception: {ex.Message}");
+                return (new List<FieldDto>(), $"Parser exception: {ex.Message}");
             }
         }
 
@@ -1311,6 +1544,12 @@ namespace Tools.Controllers
         public string FieldName { get; set; }
         public string DataType { get; set; }
     }
+    public class FieldDto
+    {
+        public string Name { get; set; }
+        public bool IsRequired { get; set; }
+    }
+
     public class DesignCheckResponse
     {
         public bool? changed { get; set; }
