@@ -768,7 +768,6 @@ namespace Tools.Controllers
                     scopeQuery = scopeQuery.Where(x => x.GroupId == null && x.ProjectId == null);
 
                 var lastVersion = await scopeQuery.MaxAsync(x => (int?)x.Version) ?? 0;
-                var nextVersion = lastVersion + 1;
 
                 // ✅ PARSED FIELDS
                 string parsedFieldsJson = null;
