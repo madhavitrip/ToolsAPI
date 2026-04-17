@@ -43,7 +43,7 @@ namespace Tools.Controllers
                     .ToListAsync();
 
                 var nrData = await _context.NRDatas
-                    .Where(p => p.ProjectId == ProjectId && p.Status == true )
+                    .Where(p => p.ProjectId == ProjectId && p.Status == true && p.Steps==4)
                     .ToListAsync();
 
                 var projectconfig = await _context.ProjectConfigs
@@ -593,9 +593,8 @@ namespace Tools.Controllers
                 _context.BoxBreakingResults.AddRange(boxResults);
                 foreach (var nr in nrData)
                 {
-                    nr.Steps = 4; // Assuming NRData has a Step property
+                    nr.Steps = 5; // Assuming NRData has a Step property
                 }
-                await _context.SaveChangesAsync();
                 await _context.SaveChangesAsync();
 
                 _loggerService.LogEvent(

@@ -43,7 +43,7 @@ namespace Tools.Controllers
                     .ToListAsync();
 
                 var nrData = await _context.NRDatas
-                    .Where(p => p.ProjectId == ProjectId && p.Status == true)
+                    .Where(p => p.ProjectId == ProjectId && p.Status == true && p.Steps==3)
                     .OrderBy(p => p.CatchNo)
                     .ThenBy(p => p.RouteSort)
                     .ThenBy(p => p.NodalSort)
@@ -655,7 +655,7 @@ namespace Tools.Controllers
                 _context.EnvelopeBreakingResults.AddRange(envelopeResults);
                 foreach (var nr in nrData)
                 {
-                    nr.Steps = 3; // Assuming NRData has a Step property
+                    nr.Steps = 4; // Assuming NRData has a Step property
                 }
                 await _context.SaveChangesAsync();
 
@@ -774,12 +774,12 @@ namespace Tools.Controllers
                     return NotFound("Project config not found");
 
                 var nrDataDict = await _context.NRDatas
-                    .Where(p => p.ProjectId == ProjectId)
+                    .Where(p => p.ProjectId == ProjectId && p.Steps==3 && p.Status == true)
                     .ToDictionaryAsync(p => p.Id);
 
                 // ✅ NEW: Catch-wise NR mapping (for MSS rows)
                 var nrDataByCatch = await _context.NRDatas
-                    .Where(p => p.ProjectId == ProjectId)
+                    .Where(p => p.ProjectId == ProjectId && p.Steps == 3 && p.Status == true)
                     .GroupBy(p => p.CatchNo)
                     .ToDictionaryAsync(g => g.Key, g => g.First());
 

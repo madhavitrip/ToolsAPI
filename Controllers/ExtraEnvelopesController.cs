@@ -160,7 +160,7 @@ namespace Tools.Controllers
             try
             {
                 var nrDataList = await _context.NRDatas
-                    .Where(d => d.ProjectId == ProjectId && d.Status == true && d.Steps==1)
+                    .Where(d => d.ProjectId == ProjectId && d.Status == true && d.Steps==2)
                     .ToListAsync();
                 // ? Get GroupId
                 var project = await _context.Projects
@@ -171,7 +171,7 @@ namespace Tools.Controllers
                 if (project == null)
                     return BadRequest("Project not found");
 
-                bool isOnlyReport = project.GroupId == 19;
+                bool isOnlyReport = project.GroupId == 28;
 
                 List<ExtraEnvelopes> envelopesToUse = new();
 
@@ -296,7 +296,7 @@ namespace Tools.Controllers
                     await _context.ExtrasEnvelope.AddRangeAsync(envelopesToAdd);
                     foreach (var nrData in nrDataList)
                     {
-                        nrData.Steps = 2; // Assuming NRData has a Step property
+                        nrData.Steps = 3; // Assuming NRData has a Step property
                     }
                     await _context.SaveChangesAsync();
 
