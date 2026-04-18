@@ -26,7 +26,7 @@ namespace Tools.Controllers
         }
 
         [HttpPost("ProcessBoxBreaking")]
-        public async Task<IActionResult> ProcessBoxBreaking(int ProjectId)
+        public async Task<IActionResult> ProcessBoxBreaking(int ProjectId, List<int> LotNo)
         {
             try
             {
@@ -43,7 +43,7 @@ namespace Tools.Controllers
                     .ToListAsync();
 
                 var nrData = await _context.NRDatas
-                    .Where(p => p.ProjectId == ProjectId && p.Status == true )
+                    .Where(p => p.ProjectId == ProjectId && p.Status == true && LotNo.Contains(p.LotNo))
                     .ToListAsync();
 
                 var projectconfig = await _context.ProjectConfigs
@@ -596,7 +596,6 @@ namespace Tools.Controllers
                     nr.Steps = 4; // Assuming NRData has a Step property
                 }
                 await _context.SaveChangesAsync();
-                await _context.SaveChangesAsync();
 
                 _loggerService.LogEvent(
                     $"Saved {boxResults.Count} box breaking results for ProjectId {ProjectId}, Batch {currentBatch}",
@@ -604,7 +603,12 @@ namespace Tools.Controllers
                     LogHelper.GetTriggeredBy(User),
                     ProjectId);
                 using var client = new HttpClient();
-                var response = await client.GetAsync($"{_apiSettings.BoxBreaking}?ProjectId={ProjectId}");
+
+                var query = string.Join("&", LotNo.Select(l => $"LotNo={Uri.EscapeDataString(l.ToString())}"));
+                var url = $"{_apiSettings.BoxBreaking}?ProjectId={ProjectId}&{query}";
+
+                var response = await client.GetAsync(url);
+                _loggerService.LogError("Calling URL", url, nameof(BoxBreakingProcessingController));
                 if (!response.IsSuccessStatusCode)
                 {
                     // Handle failure from GET call as needed
@@ -630,10 +634,14 @@ namespace Tools.Controllers
         /// </summary>
 
         [HttpGet("GetBoxBreakingReport")]
-        public async Task<IActionResult> GetBoxBreakingReport(int ProjectId)
+        public async Task<IActionResult> GetBoxBreakingReport(int ProjectId, [FromQuery] List<int> LotNo)
         {
             try
             {
+                if (LotNo == null || !LotNo.Any())
+                {
+                    return BadRequest("LotNo is empty");
+                }
                 var maxBatch = await _context.BoxBreakingResults
                    .Where(r => r.ProjectId == ProjectId)
                    .MaxAsync(r => (int?)r.UploadBatch);
@@ -647,7 +655,7 @@ namespace Tools.Controllers
 
                 var envelopeResults = await _context.EnvelopeBreakingResults.ToListAsync();
                 var nrData = await _context.NRDatas
-                    .Where(p => p.ProjectId == ProjectId && p.Status == true && p.Steps==3)
+                    .Where(p => p.ProjectId == ProjectId && p.Status == true && LotNo.Contains(p.LotNo))
                     .ToListAsync();
 
                 var projectconfig = await _context.ProjectConfigs
@@ -722,8 +730,9 @@ namespace Tools.Controllers
                 var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
                 if (!Directory.Exists(reportPath))
                     Directory.CreateDirectory(reportPath);
-
-                var filePath = Path.Combine(reportPath, "BoxBreaking.xlsx");
+                var lotNoPart = string.Join("_", LotNo);
+                var fileName = $"BoxBreaking_{lotNoPart}.xlsx";
+                var filePath = Path.Combine(reportPath, fileName);
                 if (System.IO.File.Exists(filePath))
                     System.IO.File.Delete(filePath);
 
