@@ -6,6 +6,7 @@ using System;
 using System.Reflection;
 using System.Net.Http.Headers;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Security.Cryptography;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
@@ -186,7 +187,7 @@ namespace Tools.Controllers
 
         // GET: api/RPTTemplates/mapping-options?groupId=1&typeId=2
         [HttpGet("mapping-options")]
-        public async Task<ActionResult> GetMappingOptions(int groupId, int typeId, int? projectId = null)
+        public async Task<ActionResult> GetMappingOptions(int groupId, int typeId, int? projectId = null, int? templateId = null)
         {
             var excludeColumns = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
@@ -274,6 +275,13 @@ namespace Tools.Controllers
             // Load all fields from the Fields table
             var allFields = await _context.Fields.OrderBy(f => f.Name).ToListAsync();
 
+            // Template-aware priority: when the template uses Envelope Breaking (but not Box Breaking),
+            // prefer e.* over b.* for overlapping columns like OmrSerial/BookletSerial.
+            var preferredSerialPrefix = templateId.HasValue && templateId.Value > 0
+                ? await ResolvePreferredSerialPrefixForTemplate(templateId.Value)
+                : null;
+            var preferEnvelopeOverBox = string.Equals(preferredSerialPrefix, "e", StringComparison.OrdinalIgnoreCase);
+
             // Build single deduplicated flat list � priority: b ? e ? n ? eb ? x
             // Each column name appears exactly once, mapped to the highest-priority table prefix
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -293,8 +301,16 @@ namespace Tools.Controllers
                 }
             }
 
-            AddColumns(boxColumns,                                    "b.");
-            AddColumns(envColumns,                                    "e.");
+            if (preferEnvelopeOverBox)
+            {
+                AddColumns(envColumns, "e.");
+                AddColumns(boxColumns, "b.");
+            }
+            else
+            {
+                AddColumns(boxColumns, "b.");
+                AddColumns(envColumns, "e.");
+            }
             AddColumns(nrColumns,                                     "n.");
             AddColumns(nrJsonKeys,                                    "n.");
             AddColumns(envBreakageCols,                               "eb.");
@@ -943,19 +959,120 @@ namespace Tools.Controllers
             if (!await _context.RPTTemplates.AnyAsync(t => t.TemplateId == id))
                 return NotFound("Template not found.");
 
+            if (req == null)
+                return BadRequest("Request body is required.");
+
+            var mappingJson = req.MappingJson;
+            var preferredSerialPrefix = await ResolvePreferredSerialPrefixForTemplate(id);
+            if (!string.IsNullOrWhiteSpace(preferredSerialPrefix) && !string.IsNullOrWhiteSpace(mappingJson))
+                mappingJson = NormalizeSerialSourcesInMappingJson(mappingJson, preferredSerialPrefix);
+
             var existing = await _context.RPTMappings.FirstOrDefaultAsync(m => m.TemplateId == id);
             if (existing != null)
             {
-                existing.MappingJson = req.MappingJson;
+                existing.MappingJson = mappingJson;
             }
             else
             {
-                _context.RPTMappings.Add(new RPTMapping { TemplateId = id, MappingJson = req.MappingJson });
+                _context.RPTMappings.Add(new RPTMapping { TemplateId = id, MappingJson = mappingJson });
             }
 
             await _context.SaveChangesAsync();
             _loggerService.LogEvent($"Saved mapping for templateId {id}", "RPTMapping", LogHelper.GetTriggeredBy(User), 0);
             return Ok(new { templateId = id, message = "Mapping saved." });
+        }
+
+        private async Task<string?> ResolvePreferredSerialPrefixForTemplate(int templateId)
+        {
+            var template = await _context.RPTTemplates.AsNoTracking().FirstOrDefaultAsync(t => t.TemplateId == templateId);
+            var moduleIds = template?.ModuleIds?.Where(x => x > 0).Distinct().ToList();
+            if (moduleIds == null || moduleIds.Count == 0) return null;
+
+            var moduleNames = await _context.Modules.AsNoTracking()
+                .Where(m => moduleIds.Contains(m.Id))
+                .Select(m => m.Name)
+                .ToListAsync();
+
+            var hasBoxBreaking = moduleNames.Any(IsBoxBreakingModuleName);
+            var hasEnvelopeBreaking = moduleNames.Any(IsEnvelopeBreakingModuleName);
+
+            if (hasBoxBreaking) return "b";
+            if (hasEnvelopeBreaking) return "e";
+            return null;
+        }
+
+        private static bool IsBoxBreakingModuleName(string? name)
+        {
+            if (string.IsNullOrWhiteSpace(name)) return false;
+            var n = name.Trim();
+            return n.IndexOf("box", StringComparison.OrdinalIgnoreCase) >= 0
+                   && n.IndexOf("break", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private static bool IsEnvelopeBreakingModuleName(string? name)
+        {
+            if (string.IsNullOrWhiteSpace(name)) return false;
+            var n = name.Trim();
+            return n.IndexOf("envelop", StringComparison.OrdinalIgnoreCase) >= 0
+                   && n.IndexOf("break", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private static string NormalizeSerialSourcesInMappingJson(string mappingJson, string prefix)
+        {
+            if (string.IsNullOrWhiteSpace(mappingJson)) return mappingJson;
+            if (string.IsNullOrWhiteSpace(prefix)) return mappingJson;
+
+            var p = prefix.Trim().ToLowerInvariant();
+            if (p != "e" && p != "b") return mappingJson;
+
+            try
+            {
+                var node = JsonNode.Parse(mappingJson);
+                if (node is not JsonObject root) return mappingJson;
+                if (root["mappings"] is not JsonArray mappings) return mappingJson;
+
+                foreach (var item in mappings)
+                {
+                    if (item is not JsonObject obj) continue;
+                    var src = obj["source"]?.GetValue<string>();
+                    if (string.IsNullOrWhiteSpace(src)) continue;
+
+                    if (TryGetSerialFieldName(src, out var fieldName))
+                        obj["source"] = $"{p}.{fieldName}";
+                }
+
+                return root.ToJsonString(new JsonSerializerOptions { WriteIndented = false });
+            }
+            catch
+            {
+                return mappingJson;
+            }
+        }
+
+        private static bool TryGetSerialFieldName(string source, out string fieldName)
+        {
+            fieldName = null;
+            if (string.IsNullOrWhiteSpace(source)) return false;
+
+            var s = source.Trim();
+            if (s.StartsWith("calc:", StringComparison.OrdinalIgnoreCase)) return false;
+
+            var dot = s.IndexOf('.');
+            var field = dot >= 0 ? s.Substring(dot + 1).Trim() : s;
+
+            if (field.Equals("OmrSerial", StringComparison.OrdinalIgnoreCase))
+            {
+                fieldName = "OmrSerial";
+                return true;
+            }
+
+            if (field.Equals("BookletSerial", StringComparison.OrdinalIgnoreCase))
+            {
+                fieldName = "BookletSerial";
+                return true;
+            }
+
+            return false;
         }
 
         // POST: api/RPTTemplates/{id}/parse-fields
