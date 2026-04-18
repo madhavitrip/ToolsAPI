@@ -754,8 +754,6 @@ namespace Tools.Controllers
 
                 System.IO.File.Copy(tempPath, finalPath, true);
 
-                int nextVersion = 1;
-
                 // ✅ VERSIONING
                 var scopeQuery = _context.RPTTemplates
                     .Where(x => x.TypeId == typeId && x.TemplateName == templateName);
@@ -768,6 +766,7 @@ namespace Tools.Controllers
                     scopeQuery = scopeQuery.Where(x => x.GroupId == null && x.ProjectId == null);
 
                 var lastVersion = await scopeQuery.MaxAsync(x => (int?)x.Version) ?? 0;
+                int nextVersion = lastVersion + 1;
 
                 // ✅ PARSED FIELDS
                 string parsedFieldsJson = null;
@@ -790,9 +789,8 @@ namespace Tools.Controllers
                 oldTemplates.ForEach(x => x.IsActive = false);
 
                 // ✅ SAVE DB
-                var requiredOnly = fields?.Where(f => f.IsRequired).Select(f => f.Name).ToList() ?? new List<string>();
-                var requiredFieldsJson = requiredOnly.Count > 0 
-                    ? System.Text.Json.JsonSerializer.Serialize(requiredOnly) 
+                var requiredFieldsJson = fields != null && fields.Count > 0
+                    ? System.Text.Json.JsonSerializer.Serialize(fields.Select(f => new { f.Name, f.IsRequired }))
                     : null;
 
                 var template = new RPTTemplate
