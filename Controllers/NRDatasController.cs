@@ -832,9 +832,24 @@ namespace Tools.Controllers
                             {
                                 var targetType = Nullable.GetUnderlyingType(propInfo.PropertyType) ?? propInfo.PropertyType;
 
-                                object convertedValue = string.IsNullOrWhiteSpace(value)
-                                    ? null
-                                    : Convert.ChangeType(value, targetType);
+                                object convertedValue;
+
+                                // ✅ Custom handling for IsNep
+                                if (propInfo.Name.Equals("IsNep", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    if (value.Equals("nep", StringComparison.OrdinalIgnoreCase))
+                                        convertedValue = true;
+                                    else if (value.Equals("non-nep", StringComparison.OrdinalIgnoreCase))
+                                        convertedValue = false;
+                                    else
+                                        convertedValue = null; // or false depending on your requirement
+                                }
+                                else
+                                {
+                                    convertedValue = string.IsNullOrWhiteSpace(value)
+                                        ? null
+                                        : Convert.ChangeType(value, targetType);
+                                }
 
                                 propInfo.SetValue(nRData, convertedValue);
                             }
@@ -842,10 +857,6 @@ namespace Tools.Controllers
                             {
                                 throw new Exception($"Error converting '{prop.Name}' value '{value}'", e);
                             }
-                        }
-                        else
-                        {
-                            extraData[prop.Name] = value;
                         }
                     }
 
