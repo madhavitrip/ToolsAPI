@@ -72,6 +72,42 @@ namespace Tools.Controllers
             }
         }
 
+        [HttpGet]
+        public async Task<ActionResult<IEnumerable<int>>> GetAllGroups()
+        {
+            try
+            {
+                var groupIds = await _context.MProjectConfigs
+                    .Select(x => x.GroupId)
+                    .Distinct()
+                    .ToListAsync();
+
+                return Ok(groupIds);
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, ex.Message);
+            }
+        }
+
+        [HttpGet("SelectedGroup")]
+        public async Task<ActionResult<IEnumerable<int>>> GetAllTypeOfGroup(int GroupId)
+        {
+            try
+            {
+                var groupIds = await _context.MProjectConfigs.Where(s=>s.GroupId == GroupId)
+                    .Select(x => x.TypeId)
+                    .Distinct()
+                    .ToListAsync();
+
+                return Ok(groupIds);
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, ex.Message);
+            }
+        }
+
         [HttpGet("ByTypeGroup/{typeId}/{groupId}")]
         public async Task<ActionResult<MProjectConfigs>> GetMProjectConfigByTypeGroup(int typeId, int groupId)
         {

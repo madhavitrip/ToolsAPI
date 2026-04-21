@@ -19,6 +19,7 @@ namespace Tools.Models
         public string? TemplateName { get; set; }
         public string? RPTFilePath { get; set; }
         public string? ParsedFieldsJson { get; set; }
+        public string? DesignSnapshotJson { get; set; }
         public int Version { get; set; }
         public DateTime CreatedDate { get; set; } = DateTime.Now;
         public DateTime UpdatedDate { get; set;} = DateTime.Now;
