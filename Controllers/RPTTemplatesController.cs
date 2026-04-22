@@ -372,6 +372,11 @@ namespace Tools.Controllers
                 ["value"] = "calc:PACKING_DENOMINATION",
                 ["label"] = "Packing Denomination"
             });
+            result.Add(new Dictionary<string, string>
+            {
+                ["value"] = "calc:PAGE_CONFIG",
+                ["label"] = "Page Config"
+            });
 
             // x.Inner � store as eb.<actualValue> so the mapping saves the real field reference
             // e.g. if Inner = "E10", value = "eb.E10", label = "E10"

@@ -24,7 +24,6 @@ namespace Tools.Controllers
             _loggerService = loggerService;
             _apiSettings = apiSettings.Value;
         }
-
         [HttpPost("ProcessBoxBreaking")]
         public async Task<IActionResult> ProcessBoxBreaking(int ProjectId, List<int> LotNo)
         {
@@ -37,6 +36,14 @@ namespace Tools.Controllers
                 if (!maxBatch.HasValue)
                     return NotFound("No envelope breaking results found. Run ProcessEnvelopeBreaking first.");
 
+                var envelopeResults = await _context.EnvelopeBreakingResults
+                    .Where(r => r.ProjectId == ProjectId && r.UploadBatch == maxBatch.Value && r.SerialNumber != 0)
+                    .ToListAsync();
+
+                var nrData = await _context.NRDatas
+                    .Where(p => p.ProjectId == ProjectId && p.Status == true && LotNo.Contains(p.LotNo))
+                    .ToListAsync();
+
                 var projectconfig = await _context.ProjectConfigs
                     .Where(p => p.ProjectId == ProjectId)
                     .FirstOrDefaultAsync();
@@ -44,257 +51,340 @@ namespace Tools.Controllers
                 if (projectconfig == null)
                     return NotFound("Project config not found");
 
-                // Load config once - shared across all lots
                 var boxIds = projectconfig.BoxBreakingCriteria;
                 var sortingId = projectconfig.SortingBoxReport;
                 var duplicatesFields = projectconfig.DuplicateRemoveFields;
                 bool InnerBundling = projectconfig.IsInnerBundlingDone;
-
                 var innerBundlingFieldNames = new List<string>();
+
                 if (InnerBundling && projectconfig.InnerBundlingCriteria != null)
                 {
+                    var InnerBCriteria = projectconfig.InnerBundlingCriteria;
                     innerBundlingFieldNames = await _context.Fields
-                        .Where(f => projectconfig.InnerBundlingCriteria.Contains(f.FieldId))
+                        .Where(f => InnerBCriteria.Contains(f.FieldId))
                         .Select(f => f.Name)
                         .ToListAsync();
                 }
 
-                var fields = await _context.Fields.Where(f => boxIds.Contains(f.FieldId)).ToListAsync();
-                var fieldsFromDb = await _context.Fields.Where(f => sortingId.Contains(f.FieldId)).ToListAsync();
-                var fieldNames = fieldsFromDb.OrderBy(f => sortingId.IndexOf(f.FieldId)).Select(f => f.Name).ToList();
-                var dupNames = await _context.Fields.Where(f => duplicatesFields.Contains(f.FieldId)).Select(f => f.Name).ToListAsync();
+                var fields = await _context.Fields
+                    .Where(f => boxIds.Contains(f.FieldId))
+                    .ToListAsync();
+
+                var fieldsFromDb = await _context.Fields
+                    .Where(f => sortingId.Contains(f.FieldId))
+                    .ToListAsync();
+
+                var fieldNames = fieldsFromDb
+                    .OrderBy(f => sortingId.IndexOf(f.FieldId))
+                    .Select(f => f.Name)
+                    .ToList();
+
+                var dupNames = await _context.Fields
+                    .Where(f => duplicatesFields.Contains(f.FieldId))
+                    .Select(f => f.Name)
+                    .ToListAsync();
 
                 var startBox = projectconfig.BoxNumber;
                 bool resetOnSymbolChange = projectconfig.ResetOnSymbolChange;
+
                 var capacity = await _context.BoxCapacity
                     .Where(c => c.BoxCapacityId == projectconfig.BoxCapacity)
                     .Select(c => c.Capacity)
                     .FirstOrDefaultAsync();
 
+                // ==============================
+                // Read from EnvelopeBreakingResults and build data rows
+                // ==============================
+                var breakingReportData = new List<dynamic>();
+
+                // ✅ HELPER FUNCTION — placed here so fieldNames, dupNames, fields are all in scope
+                // Deserializes the NRDatas JSON column once per row and returns a lookup function
+                Dictionary<string, JsonElement> ParseNrDatas(string nrDatasJson)
+                {
+                    if (string.IsNullOrWhiteSpace(nrDatasJson)) return null;
+                    try
+                    {
+                        return JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(nrDatasJson);
+                    }
+                    catch
+                    {
+                        return null;
+                    }
+                }
+
+                // ✅ Given a parsed NRDatas dictionary, get a field value by name (case-insensitive)
+                string GetNrField(Dictionary<string, JsonElement> nrDynamic, string fieldName)
+                {
+                    if (nrDynamic == null) return "";
+                    var match = nrDynamic.FirstOrDefault(k =>
+                        k.Key.Equals(fieldName, StringComparison.OrdinalIgnoreCase));
+                    return match.Key != null ? (match.Value.GetString() ?? "") : "";
+                }
+
+                // ✅ All field names that might live in NRDatas JSON (union of sorting + dup + box criteria)
+                var boxFieldNames = fields.Select(f => f.Name).ToList();
+                var allDynamicFieldNames = fieldNames
+                    .Union(dupNames)
+                    .Union(boxFieldNames)
+                    .Union(innerBundlingFieldNames)
+                    .Distinct()
+                    .ToList();
+
+                foreach (var result in envelopeResults)
+                {
+                    dynamic row = new System.Dynamic.ExpandoObject();
+                    var rowDict = (IDictionary<string, object>)row;
+
+                    rowDict["CatchNo"] = result.CatchNo ?? "";
+                    rowDict["CenterCode"] = result.CenterCode ?? "";
+                    rowDict["CenterSort"] = result.CenterSort;
+                    rowDict["ExamTime"] = result.ExamTime ?? "";
+                    rowDict["ExamDate"] = result.ExamDate;
+                    rowDict["Quantity"] = result.Quantity;
+                    rowDict["TotalEnv"] = result.TotalEnv;
+                    rowDict["NodalCode"] = result.NodalCode ?? "";
+                    rowDict["NodalSort"] = result.NodalSort;
+                    rowDict["Route"] = result.Route ?? "";
+                    rowDict["RouteSort"] = result.RouteSort;
+                    rowDict["CourseName"] = result.CourseName ?? "";
+                    rowDict["BookletSerial"] = result.BookletSerial ?? "";
+                    rowDict["OmrSerial"] = result.OmrSerial;
+                    rowDict["EnvelopeBreakingResultId"] = result.Id;
+                    rowDict["NrDataId"] = result.NrDataId;
+
+                    var nrRow = nrData.FirstOrDefault(n => n.CatchNo == result.CatchNo);
+
+                    // ✅ Parse NRDatas JSON ONCE here for this row
+                    var nrDynamic = nrRow != null ? ParseNrDatas(nrRow.NRDatas) : null;
+
+                    if (nrRow != null)
+                    {
+                        rowDict["Symbol"] = nrRow.Symbol ?? "";
+                        rowDict["Pages"] = nrRow.Pages;
+                        rowDict["NRQuantity"] = nrRow.NRQuantity;
+                    }
+                    else
+                    {
+                        rowDict["Symbol"] = "";
+                        rowDict["Pages"] = 0;
+                        rowDict["NRQuantity"] = 0;
+                    }
+
+                    // ✅ Fill in any missing fields (Remark, PaperCode, etc.) from NRDatas JSON
+                    // This covers sorting fields, duplicate fields, box criteria fields, inner bundling fields
+                    foreach (var fieldName in allDynamicFieldNames)
+                    {
+                        if (!rowDict.ContainsKey(fieldName))
+                        {
+                            rowDict[fieldName] = GetNrField(nrDynamic, fieldName);
+                        }
+                    }
+
+                    breakingReportData.Add(row);
+                }
+
+                if (!breakingReportData.Any())
+                    return NotFound("No data found in envelope breaking results");
+
+                // Step 1: Remove duplicates
+                var uniqueRows = breakingReportData
+                    .GroupBy(x =>
+                    {
+                        var keyParts = dupNames.Select(fieldName =>
+                        {
+                            var dict = (IDictionary<string, object>)x;
+                            return dict.ContainsKey(fieldName) ? dict[fieldName]?.ToString()?.Trim() ?? "" : "";
+                        });
+                        return string.Join("_", keyParts);
+                    })
+                    .Select(g => g.First())
+                    .ToList();
+
+                // Step 2: Calculate Start, End, Serial (BEFORE sorting)
+                var enrichedList = new List<dynamic>();
+                string previousCatchNo = null;
+                int previousEnd = 0;
+
+                foreach (var row in uniqueRows)
+                {
+                    var rowDict = (IDictionary<string, object>)row;
+                    string catchNo = rowDict["CatchNo"]?.ToString();
+
+                    int start = catchNo != previousCatchNo ? 1 : previousEnd + 1;
+                    int end = start + (int)rowDict["TotalEnv"] - 1;
+                    string serial = $"{start} to {end}";
+
+                    rowDict["Start"] = start;
+                    rowDict["End"] = end;
+                    rowDict["Serial"] = serial;
+
+                    enrichedList.Add(row);
+
+                    previousCatchNo = catchNo;
+                    previousEnd = end;
+                }
+
+                // Step 3: Apply sorting
+                IOrderedEnumerable<dynamic> ordered = null;
+
+                foreach (var fieldName in fieldNames)
+                {
+                    Func<dynamic, object> keySelector = x =>
+                    {
+                        var dict = (IDictionary<string, object>)x;
+                        if (!dict.ContainsKey(fieldName)) return null;
+
+                        var val = dict[fieldName];
+                        if (val == null) return null;
+
+                        if (fieldName.Equals("NodalSort", StringComparison.OrdinalIgnoreCase))
+                        {
+                            if (double.TryParse(val.ToString(), out double nodalNum)) return nodalNum;
+                            return 0.0;
+                        }
+                        if (fieldName.Equals("CenterSort", StringComparison.OrdinalIgnoreCase))
+                        {
+                            if (int.TryParse(val.ToString(), out int centerNum)) return centerNum;
+                            return 0;
+                        }
+                        if (fieldName.Equals("RouteSort", StringComparison.OrdinalIgnoreCase))
+                        {
+                            if (int.TryParse(val.ToString(), out int routeNum)) return routeNum;
+                            return 0;
+                        }
+                        if (fieldName.Equals("ExamDate", StringComparison.OrdinalIgnoreCase))
+                        {
+                            if (DateTime.TryParseExact(val.ToString(), "dd-MM-yyyy",
+                                System.Globalization.CultureInfo.InvariantCulture,
+                                System.Globalization.DateTimeStyles.None, out DateTime parsedDate))
+                                return parsedDate;
+                        }
+
+                        return val.ToString().Trim().ToLowerInvariant();
+                    };
+
+                    if (ordered == null)
+                        ordered = enrichedList.OrderBy(keySelector);
+                    else
+                        ordered = ordered.ThenBy(keySelector);
+                }
+
+                var sortedList = ordered?.ToList() ?? enrichedList;
+
+                // Get envelope size from config
                 var envelopeObj = JsonSerializer.Deserialize<Dictionary<string, string>>(projectconfig.Envelope);
                 int envelopeSize = 0;
                 if (envelopeObj != null && envelopeObj.ContainsKey("Outer"))
                 {
-                    var outerParts = envelopeObj["Outer"].Split(',', StringSplitOptions.RemoveEmptyEntries);
+                    string outerEnvValue = envelopeObj["Outer"];
+                    var outerParts = outerEnvValue.Split(',', StringSplitOptions.RemoveEmptyEntries);
                     if (outerParts.Length == 1)
                     {
-                        string digits = new string(outerParts[0].Trim().Where(char.IsDigit).ToArray());
+                        string singleValue = outerParts[0].Trim();
+                        string digits = new string(singleValue.Where(char.IsDigit).ToArray());
                         if (int.TryParse(digits, out int parsedValue) && parsedValue > 0)
                             envelopeSize = parsedValue;
                     }
                 }
 
-                var allResults = new List<object>();
-                int totalSaved = 0;
+                // Box breaking logic
+                var finalWithBoxes = new List<dynamic>();
+                int boxNo = startBox;
+                int runningPages = 0;
+                string prevMergeKey = null;
+                long runningOmrPointer = 0;
+                long runningBooklet = 0;
+                string previousCatchForOmr = null;
+                string previousCourse = null;
+                int innerBundlingSerial = 0;
+                string prevInnerBundlingKey = null;
 
-                // ✅ Process each lot independently
-                foreach (var lot in LotNo)
+                foreach (var item in sortedList)
                 {
-                    // Load NRData only for this lot
-                    var nrData = await _context.NRDatas
-                        .Where(p => p.ProjectId == ProjectId && p.Status == true && p.LotNo == lot)
-                        .ToListAsync();
+                    var itemDict = (IDictionary<string, object>)item;
 
-                    if (!nrData.Any())
+                    string catchNo = itemDict["CatchNo"]?.ToString();
+                    var nrRow = nrData.FirstOrDefault(n => n.CatchNo == catchNo);
+                    int pages = nrRow?.Pages ?? 0;
+                    int totalPages = ((int)itemDict["Quantity"]) * pages;
+                    string currentSymbol = resetOnSymbolChange ? (nrRow?.Symbol ?? "") : "";
+                    string currentCourseName = itemDict["CourseName"]?.ToString() ?? "";
+
+                    string bookletSerial = itemDict["BookletSerial"]?.ToString() ?? "";
+                    string omrSerial = itemDict["OmrSerial"]?.ToString();
+                    bool hasOmr = !string.IsNullOrWhiteSpace(omrSerial) && omrSerial != "0";
+                    bool hasBooklet = !string.IsNullOrWhiteSpace(bookletSerial) && bookletSerial != "0";
+
+                    bool courseChanged = resetOnSymbolChange
+                        && previousCourse != null
+                        && currentCourseName != previousCourse;
+
+                    if (courseChanged)
                     {
-                        allResults.Add(new { lot, skipped = true, reason = "No NRData found" });
-                        continue;
+                        boxNo = startBox;
+                        runningPages = 0;
+                        innerBundlingSerial = 0;
+                        prevInnerBundlingKey = null;
+                        prevMergeKey = null;
                     }
 
-                    var nrCatchNos = nrData.Select(n => n.CatchNo).ToList();
-
-                    var envelopeResults = await _context.EnvelopeBreakingResults
-                        .Where(r => r.ProjectId == ProjectId && r.UploadBatch == maxBatch.Value
-                                 && r.SerialNumber != 0 && nrCatchNos.Contains(r.CatchNo))
-                        .ToListAsync();
-
-                    if (!envelopeResults.Any())
+                    if (previousCatchForOmr != itemDict["CatchNo"]?.ToString())
                     {
-                        allResults.Add(new { lot, skipped = true, reason = "No envelope results found" });
-                        continue;
-                    }
+                        runningOmrPointer = 0;
+                        previousCatchForOmr = itemDict["CatchNo"]?.ToString();
 
-                    // Build data rows for this lot
-                    var breakingReportData = new List<dynamic>();
-                    foreach (var result in envelopeResults)
-                    {
-                        dynamic row = new System.Dynamic.ExpandoObject();
-                        var rowDict = (IDictionary<string, object>)row;
-
-                        rowDict["CatchNo"] = result.CatchNo ?? "";
-                        rowDict["CenterCode"] = result.CenterCode ?? "";
-                        rowDict["CenterSort"] = result.CenterSort;
-                        rowDict["ExamTime"] = result.ExamTime ?? "";
-                        rowDict["ExamDate"] = result.ExamDate;
-                        rowDict["Quantity"] = result.Quantity;
-                        rowDict["TotalEnv"] = result.TotalEnv;
-                        rowDict["NodalCode"] = result.NodalCode ?? "";
-                        rowDict["NodalSort"] = result.NodalSort;
-                        rowDict["Route"] = result.Route ?? "";
-                        rowDict["RouteSort"] = result.RouteSort;
-                        rowDict["CourseName"] = result.CourseName ?? "";
-                        rowDict["BookletSerial"] = result.BookletSerial ?? "";
-                        rowDict["OmrSerial"] = result.OmrSerial;
-                        rowDict["EnvelopeBreakingResultId"] = result.Id;
-                        rowDict["NrDataId"] = result.NrDataId;
-
-                        var nrRow = nrData.FirstOrDefault(n => n.CatchNo == result.CatchNo);
-                        rowDict["Symbol"] = nrRow?.Symbol ?? "";
-                        rowDict["Pages"] = nrRow?.Pages ?? 0;
-                        rowDict["NRQuantity"] = nrRow?.NRQuantity ?? 0;
-
-                        breakingReportData.Add(row);
-                    }
-
-                    if (!breakingReportData.Any()) continue;
-
-                    // Deduplicate
-                    var uniqueRows = breakingReportData
-                        .GroupBy(x =>
+                        if (hasOmr && omrSerial.Contains("-"))
                         {
-                            var keyParts = dupNames.Select(fieldName =>
-                            {
-                                var dict = (IDictionary<string, object>)x;
-                                return dict.ContainsKey(fieldName) ? dict[fieldName]?.ToString()?.Trim() ?? "" : "";
-                            });
-                            return string.Join("_", keyParts);
-                        })
-                        .Select(g => g.First())
-                        .ToList();
-
-                    // Start/End/Serial
-                    var enrichedList = new List<dynamic>();
-                    string previousCatchNo = null;
-                    int previousEnd = 0;
-
-                    foreach (var row in uniqueRows)
-                    {
-                        var rowDict = (IDictionary<string, object>)row;
-                        string catchNo = rowDict["CatchNo"]?.ToString();
-                        int start = catchNo != previousCatchNo ? 1 : previousEnd + 1;
-                        int end = start + (int)rowDict["TotalEnv"] - 1;
-                        rowDict["Start"] = start;
-                        rowDict["End"] = end;
-                        rowDict["Serial"] = $"{start} to {end}";
-                        enrichedList.Add(row);
-                        previousCatchNo = catchNo;
-                        previousEnd = end;
+                            var parts = omrSerial.Split('-');
+                            if (long.TryParse(parts[0], out long omrStart))
+                                runningOmrPointer = omrStart;
+                        }
+                        if (hasBooklet && bookletSerial.Contains("-"))
+                        {
+                            var parts = bookletSerial.Split('-');
+                            if (long.TryParse(parts[0], out long bookletStart))
+                                runningBooklet = bookletStart;
+                        }
                     }
 
-                    // Sorting
-                    IOrderedEnumerable<dynamic> ordered = null;
-                    foreach (var fieldName in fieldNames)
+                    string innerBundlingKey = null;
+                    int currentInnerBundlingSerial = 0;
+                    if (InnerBundling && innerBundlingFieldNames.Any())
                     {
-                        Func<dynamic, object> keySelector = x =>
+                        innerBundlingKey = string.Join("_", innerBundlingFieldNames.Select(fieldName =>
+                            itemDict.ContainsKey(fieldName) ? itemDict[fieldName]?.ToString()?.Trim() ?? "" : ""));
+
+                        if (innerBundlingKey != prevInnerBundlingKey)
                         {
-                            var dict = (IDictionary<string, object>)x;
-                            if (!dict.ContainsKey(fieldName)) return null;
-                            var val = dict[fieldName];
-                            if (val == null) return null;
-
-                            if (fieldName.Equals("NodalSort", StringComparison.OrdinalIgnoreCase))
-                                return double.TryParse(val.ToString(), out double n) ? (object)n : 0.0;
-                            if (fieldName.Equals("CenterSort", StringComparison.OrdinalIgnoreCase))
-                                return int.TryParse(val.ToString(), out int c) ? (object)c : 0;
-                            if (fieldName.Equals("RouteSort", StringComparison.OrdinalIgnoreCase))
-                                return int.TryParse(val.ToString(), out int r) ? (object)r : 0;
-                            if (fieldName.Equals("ExamDate", StringComparison.OrdinalIgnoreCase))
-                            {
-                                string[] formats = { "dd-MM-yyyy", "d-M-yyyy", "dd/MM/yyyy", "yyyy-MM-dd" };
-                                return DateTime.TryParseExact(val.ToString().Trim(), formats,
-                                    System.Globalization.CultureInfo.InvariantCulture,
-                                    System.Globalization.DateTimeStyles.None, out DateTime d)
-                                    ? (object)d : DateTime.MinValue;
-                            }
-                            return val.ToString().Trim().ToLowerInvariant();
-                        };
-
-                        ordered = ordered == null ? enrichedList.OrderBy(keySelector) : ordered.ThenBy(keySelector);
+                            innerBundlingSerial++;
+                            prevInnerBundlingKey = innerBundlingKey;
+                        }
+                        currentInnerBundlingSerial = innerBundlingSerial;
                     }
 
-                    var sortedList = ordered?.ToList() ?? enrichedList;
-
-                    // ✅ Fresh counters per lot
-                    var finalWithBoxes = new List<dynamic>();
-                    int boxNo = startBox;
-                    int runningPages = 0;
-                    string prevMergeKey = null;
-                    long runningOmrPointer = 0;
-                    long runningBooklet = 0;
-                    string previousCatchForOmr = null;
-                    string previousCourse = null;
-                    int innerBundlingSerial = 0;
-                    string prevInnerBundlingKey = null;
-
-                    foreach (var item in sortedList)
+                    string mergeKey = "";
+                    if (boxIds.Any())
                     {
-                        var itemDict = (IDictionary<string, object>)item;
-                        string catchNo = itemDict["CatchNo"]?.ToString();
-                        var nrRow = nrData.FirstOrDefault(n => n.CatchNo == catchNo);
-                        int pages = nrRow?.Pages ?? 0;
-                        int totalPages = ((int)itemDict["Quantity"]) * pages;
-                        string currentSymbol = resetOnSymbolChange ? (nrRow?.Symbol ?? "") : "";
-                        string currentCourseName = itemDict["CourseName"]?.ToString() ?? "";
-                        string bookletSerial = itemDict["BookletSerial"]?.ToString() ?? "";
-                        string omrSerial = itemDict["OmrSerial"]?.ToString();
-                        bool hasOmr = !string.IsNullOrWhiteSpace(omrSerial) && omrSerial != "0";
-                        bool hasBooklet = !string.IsNullOrWhiteSpace(bookletSerial) && bookletSerial != "0";
-
-                        bool courseChanged = resetOnSymbolChange && previousCourse != null && currentCourseName != previousCourse;
-                        if (courseChanged)
+                        mergeKey = string.Join("_", boxIds.Select(fieldId =>
                         {
-                            boxNo = startBox;
+                            var fieldName = fields.FirstOrDefault(f => f.FieldId == fieldId)?.Name;
+                            if (fieldName != null && itemDict.ContainsKey(fieldName))
+                                return itemDict[fieldName]?.ToString() ?? "";
+                            return "";
+                        }));
+                    }
+
+                    bool mergeChanged = !courseChanged && (prevMergeKey != null && mergeKey != prevMergeKey);
+
+                    try
+                    {
+                        if (mergeChanged)
+                        {
+                            boxNo++;
                             runningPages = 0;
-                            innerBundlingSerial = 0;
-                            prevInnerBundlingKey = null;
-                            prevMergeKey = null;
                         }
 
-                        if (previousCatchForOmr != catchNo)
-                        {
-                            runningOmrPointer = 0;
-                            previousCatchForOmr = catchNo;
-                            if (hasOmr && omrSerial.Contains("-"))
-                            {
-                                var parts = omrSerial.Split('-');
-                                if (long.TryParse(parts[0], out long omrStart)) runningOmrPointer = omrStart;
-                            }
-                            if (hasBooklet && bookletSerial.Contains("-"))
-                            {
-                                var parts = bookletSerial.Split('-');
-                                if (long.TryParse(parts[0], out long bStart)) runningBooklet = bStart;
-                            }
-                        }
-
-                        string innerBundlingKey = null;
-                        int currentInnerBundlingSerial = 0;
-                        if (InnerBundling && innerBundlingFieldNames.Any())
-                        {
-                            innerBundlingKey = string.Join("_", innerBundlingFieldNames.Select(fn =>
-                                itemDict.ContainsKey(fn) ? itemDict[fn]?.ToString()?.Trim() ?? "" : ""));
-                            if (innerBundlingKey != prevInnerBundlingKey)
-                            {
-                                innerBundlingSerial++;
-                                prevInnerBundlingKey = innerBundlingKey;
-                            }
-                            currentInnerBundlingSerial = innerBundlingSerial;
-                        }
-
-                        string mergeKey = "";
-                        if (boxIds.Any())
-                        {
-                            mergeKey = string.Join("_", boxIds.Select(fieldId =>
-                            {
-                                var fieldName = fields.FirstOrDefault(f => f.FieldId == fieldId)?.Name;
-                                return fieldName != null && itemDict.ContainsKey(fieldName)
-                                    ? itemDict[fieldName]?.ToString() ?? "" : "";
-                            }));
-                        }
-
-                        bool mergeChanged = !courseChanged && prevMergeKey != null && mergeKey != prevMergeKey;
-                        if (mergeChanged) { boxNo++; runningPages = 0; }
-
-                        bool overflow = runningPages + totalPages > capacity;
+                        bool overflow = (runningPages + totalPages > capacity);
 
                         if (overflow)
                         {
@@ -302,9 +392,18 @@ namespace Tools.Controllers
                             {
                                 int pagesPerUnit = pages;
                                 int remainingQty = (int)itemDict["Quantity"];
+
                                 var lastBoxForCatch = finalWithBoxes
-                                    .Where(b => { var d = (IDictionary<string, object>)b; return d["CatchNo"]?.ToString() == catchNo; })
-                                    .OrderBy(b => { var d = (IDictionary<string, object>)b; return (int)d["End"]; })
+                                    .Where(b =>
+                                    {
+                                        var dict = (IDictionary<string, object>)b;
+                                        return dict["CatchNo"]?.ToString() == itemDict["CatchNo"]?.ToString();
+                                    })
+                                    .OrderBy(b =>
+                                    {
+                                        var dict = (IDictionary<string, object>)b;
+                                        return (int)dict["End"];
+                                    })
                                     .LastOrDefault();
 
                                 int currentStart = lastBoxForCatch != null
@@ -316,40 +415,80 @@ namespace Tools.Controllers
                                     int remainingCapacity = capacity - runningPages;
                                     int maxFittingQty = (int)Math.Floor((double)remainingCapacity / pagesPerUnit);
                                     maxFittingQty = (maxFittingQty / envelopeSize) * envelopeSize;
-                                    if (maxFittingQty <= 0) { boxNo++; runningPages = 0; if (InnerBundling) { innerBundlingSerial++; currentInnerBundlingSerial = innerBundlingSerial; } continue; }
+
+                                    if (maxFittingQty <= 0)
+                                    {
+                                        boxNo++;
+                                        runningPages = 0;
+                                        if (InnerBundling) { innerBundlingSerial++; currentInnerBundlingSerial = innerBundlingSerial; }
+                                        continue;
+                                    }
 
                                     int chunkQty = Math.Min(maxFittingQty, remainingQty);
                                     chunkQty = (chunkQty / envelopeSize) * envelopeSize;
-                                    if (chunkQty <= 0) { boxNo++; runningPages = 0; if (InnerBundling) { innerBundlingSerial++; currentInnerBundlingSerial = innerBundlingSerial; } continue; }
+
+                                    if (chunkQty <= 0)
+                                    {
+                                        boxNo++;
+                                        runningPages = 0;
+                                        if (InnerBundling) { innerBundlingSerial++; currentInnerBundlingSerial = innerBundlingSerial; }
+                                        continue;
+                                    }
 
                                     int chunkPages = chunkQty * pagesPerUnit;
                                     int envelopesInBox = chunkQty / envelopeSize;
                                     int start = currentStart;
                                     int end = start + envelopesInBox - 1;
                                     currentStart = end + 1;
+                                    string serial = $"{start} to {end}";
+                                    string omrRange = "";
+                                    string bookletRange = "";
 
-                                    string omrRange = "", bookletRange = "";
-                                    if (hasOmr) { long os = runningOmrPointer; long oe = os + chunkQty - 1; omrRange = $"{os}-{oe}"; runningOmrPointer = oe + 1; }
-                                    if (hasBooklet) { long bs = runningBooklet; long be = bs + chunkQty - 1; bookletRange = $"{bs}-{be}"; runningBooklet = be + 1; }
+                                    if (hasOmr)
+                                    {
+                                        long omrStart = runningOmrPointer;
+                                        long omrEnd = omrStart + chunkQty - 1;
+                                        omrRange = $"{omrStart}-{omrEnd}";
+                                        runningOmrPointer = omrEnd + 1;
+                                    }
+                                    if (hasBooklet)
+                                    {
+                                        long bookletStart = runningBooklet;
+                                        long bookletEnd = bookletStart + chunkQty - 1;
+                                        bookletRange = $"{bookletStart}-{bookletEnd}";
+                                        runningBooklet = bookletEnd + 1;
+                                    }
 
-                                    object boxNoValue = resetOnSymbolChange && !string.IsNullOrEmpty(currentSymbol)
+                                    object boxNoValue = (resetOnSymbolChange && !string.IsNullOrEmpty(currentSymbol))
                                         ? (object)$"{currentSymbol}-{boxNo}" : boxNo;
 
                                     var boxItem = new System.Dynamic.ExpandoObject();
-                                    var d2 = (IDictionary<string, object>)boxItem;
-                                    d2["CatchNo"] = itemDict["CatchNo"]; d2["CenterCode"] = itemDict["CenterCode"];
-                                    d2["CenterSort"] = itemDict["CenterSort"]; d2["ExamTime"] = itemDict["ExamTime"];
-                                    d2["ExamDate"] = itemDict["ExamDate"]; d2["Quantity"] = chunkQty;
-                                    d2["NodalCode"] = itemDict["NodalCode"]; d2["NodalSort"] = itemDict["NodalSort"];
-                                    d2["Route"] = itemDict["Route"]; d2["RouteSort"] = itemDict["RouteSort"];
-                                    d2["TotalEnv"] = itemDict["TotalEnv"]; d2["Start"] = start; d2["End"] = end;
-                                    d2["Serial"] = $"{start} to {end}"; d2["TotalPages"] = chunkPages;
-                                    d2["BoxNo"] = boxNoValue; d2["OmrSerial"] = omrRange; d2["BookletSerial"] = bookletRange;
-                                    d2["InnerBundlingSerial"] = currentInnerBundlingSerial;
-                                    d2["CourseName"] = currentCourseName;
-                                    d2["EnvelopeBreakingResultId"] = itemDict["EnvelopeBreakingResultId"];
+                                    var boxItemDict = (IDictionary<string, object>)boxItem;
+
+                                    boxItemDict["CatchNo"] = itemDict["CatchNo"];
+                                    boxItemDict["CenterCode"] = itemDict["CenterCode"];
+                                    boxItemDict["CenterSort"] = itemDict["CenterSort"];
+                                    boxItemDict["ExamTime"] = itemDict["ExamTime"];
+                                    boxItemDict["ExamDate"] = itemDict["ExamDate"];
+                                    boxItemDict["Quantity"] = chunkQty;
+                                    boxItemDict["NodalCode"] = itemDict["NodalCode"];
+                                    boxItemDict["NodalSort"] = itemDict["NodalSort"];
+                                    boxItemDict["Route"] = itemDict["Route"];
+                                    boxItemDict["RouteSort"] = itemDict["RouteSort"];
+                                    boxItemDict["TotalEnv"] = itemDict["TotalEnv"];
+                                    boxItemDict["Start"] = start;
+                                    boxItemDict["End"] = end;
+                                    boxItemDict["Serial"] = serial;
+                                    boxItemDict["TotalPages"] = chunkPages;
+                                    boxItemDict["BoxNo"] = boxNoValue;
+                                    boxItemDict["OmrSerial"] = omrRange;
+                                    boxItemDict["BookletSerial"] = bookletRange;
+                                    boxItemDict["InnerBundlingSerial"] = currentInnerBundlingSerial;
+                                    boxItemDict["CourseName"] = currentCourseName;
+                                    boxItemDict["EnvelopeBreakingResultId"] = itemDict["EnvelopeBreakingResultId"];
 
                                     finalWithBoxes.Add(boxItem);
+
                                     runningPages += chunkPages;
                                     remainingQty -= chunkQty;
                                 }
@@ -363,91 +502,126 @@ namespace Tools.Controllers
                             runningPages = 0;
                         }
 
+                        // Normal case
                         runningPages += totalPages;
-                        string normalOmrRange = "", normalBookletRange = "";
-                        if (hasOmr) { long ns = runningOmrPointer; long ne = ns + (int)itemDict["Quantity"] - 1; normalOmrRange = $"{ns}-{ne}"; runningOmrPointer = ne + 1; }
-                        if (hasBooklet) { long nbs = runningBooklet; long nbe = nbs + (int)itemDict["Quantity"] - 1; normalBookletRange = $"{nbs}-{nbe}"; runningBooklet = nbe + 1; }
+                        string normalOmrRange = "";
+                        string normalBookletRange = "";
 
-                        object normalBoxNoValue = resetOnSymbolChange ? (object)$"{currentSymbol}-{boxNo}" : boxNo;
+                        if (hasOmr)
+                        {
+                            long normalOmrStart = runningOmrPointer;
+                            long normalOmrEnd = normalOmrStart + (int)itemDict["Quantity"] - 1;
+                            normalOmrRange = $"{normalOmrStart}-{normalOmrEnd}";
+                            runningOmrPointer = normalOmrEnd + 1;
+                        }
+                        if (hasBooklet)
+                        {
+                            long normalBookletStart = runningBooklet;
+                            long normalBookletEnd = normalBookletStart + (int)itemDict["Quantity"] - 1;
+                            normalBookletRange = $"{normalBookletStart}-{normalBookletEnd}";
+                            runningBooklet = normalBookletEnd + 1;
+                        }
+
+                        object normalBoxNoValue = resetOnSymbolChange
+                            ? (object)$"{currentSymbol}-{boxNo}" : boxNo;
 
                         var normalBoxItem = new System.Dynamic.ExpandoObject();
-                        var nd = (IDictionary<string, object>)normalBoxItem;
-                        nd["CatchNo"] = itemDict["CatchNo"]; nd["CenterCode"] = itemDict["CenterCode"];
-                        nd["CenterSort"] = itemDict["CenterSort"]; nd["ExamTime"] = itemDict["ExamTime"];
-                        nd["ExamDate"] = itemDict["ExamDate"]; nd["Quantity"] = itemDict["Quantity"];
-                        nd["NodalCode"] = itemDict["NodalCode"]; nd["NodalSort"] = itemDict["NodalSort"];
-                        nd["Route"] = itemDict["Route"]; nd["RouteSort"] = itemDict["RouteSort"];
-                        nd["TotalEnv"] = itemDict["TotalEnv"]; nd["Start"] = itemDict["Start"];
-                        nd["End"] = itemDict["End"]; nd["Serial"] = itemDict["Serial"];
-                        nd["TotalPages"] = totalPages; nd["BoxNo"] = normalBoxNoValue;
-                        nd["OmrSerial"] = normalOmrRange; nd["BookletSerial"] = normalBookletRange;
-                        nd["InnerBundlingSerial"] = currentInnerBundlingSerial;
-                        nd["CourseName"] = currentCourseName;
-                        nd["EnvelopeBreakingResultId"] = itemDict["EnvelopeBreakingResultId"];
+                        var normalBoxItemDict = (IDictionary<string, object>)normalBoxItem;
+
+                        normalBoxItemDict["CatchNo"] = itemDict["CatchNo"];
+                        normalBoxItemDict["CenterCode"] = itemDict["CenterCode"];
+                        normalBoxItemDict["CenterSort"] = itemDict["CenterSort"];
+                        normalBoxItemDict["ExamTime"] = itemDict["ExamTime"];
+                        normalBoxItemDict["ExamDate"] = itemDict["ExamDate"];
+                        normalBoxItemDict["Quantity"] = itemDict["Quantity"];
+                        normalBoxItemDict["NodalCode"] = itemDict["NodalCode"];
+                        normalBoxItemDict["NodalSort"] = itemDict["NodalSort"];
+                        normalBoxItemDict["Route"] = itemDict["Route"];
+                        normalBoxItemDict["RouteSort"] = itemDict["RouteSort"];
+                        normalBoxItemDict["TotalEnv"] = itemDict["TotalEnv"];
+                        normalBoxItemDict["Start"] = itemDict["Start"];
+                        normalBoxItemDict["End"] = itemDict["End"];
+                        normalBoxItemDict["Serial"] = itemDict["Serial"];
+                        normalBoxItemDict["TotalPages"] = totalPages;
+                        normalBoxItemDict["BoxNo"] = normalBoxNoValue;
+                        normalBoxItemDict["OmrSerial"] = normalOmrRange;
+                        normalBoxItemDict["BookletSerial"] = normalBookletRange;
+                        normalBoxItemDict["InnerBundlingSerial"] = currentInnerBundlingSerial;
+                        normalBoxItemDict["CourseName"] = currentCourseName;
+                        normalBoxItemDict["EnvelopeBreakingResultId"] = itemDict["EnvelopeBreakingResultId"];
 
                         finalWithBoxes.Add(normalBoxItem);
+
                         prevMergeKey = mergeKey;
                         previousCourse = currentCourseName;
                     }
-
-                    // ✅ Each lot gets its own batch number
-                    var maxBoxBatch = await _context.BoxBreakingResults
-                        .Where(r => r.ProjectId == ProjectId)
-                        .MaxAsync(r => (int?)r.UploadBatch) ?? 0;
-                    int currentBatch = maxBoxBatch + 1;
-
-                    var boxResults = new List<BoxBreakingResult>();
-                    foreach (var item in finalWithBoxes)
+                    catch (Exception ex)
                     {
-                        var itemDict = (IDictionary<string, object>)item;
-                        boxResults.Add(new BoxBreakingResult
-                        {
-                            ProjectId = ProjectId,
-                            EnvelopeBreakingResultId = itemDict.ContainsKey("EnvelopeBreakingResultId") && itemDict["EnvelopeBreakingResultId"] != null
-                                ? (int?)itemDict["EnvelopeBreakingResultId"] : null,
-                            Start = (int)itemDict["Start"],
-                            End = (int)itemDict["End"],
-                            Serial = itemDict["Serial"]?.ToString(),
-                            TotalPages = (int)itemDict["TotalPages"],
-                            BoxNo = itemDict["BoxNo"]?.ToString(),
-                            OmrSerial = itemDict["OmrSerial"]?.ToString(),
-                            BookletSerial = itemDict["BookletSerial"]?.ToString(),
-                            InnerBundlingSerial = itemDict["InnerBundlingSerial"] as int?,
-                            Quantity = (int)itemDict["Quantity"],
-                            UploadBatch = currentBatch,
-                        });
+                        _loggerService.LogError("Error in box breaking logic", ex.Message, nameof(BoxBreakingProcessingController));
+                        throw;
                     }
+                }
 
-                    _context.BoxBreakingResults.AddRange(boxResults);
-                    foreach (var nr in nrData)
-                        nr.Steps = 4;
+                var maxBoxBatch = await _context.BoxBreakingResults
+                    .Where(r => r.ProjectId == ProjectId)
+                    .MaxAsync(r => (int?)r.UploadBatch) ?? 0;
+                int currentBatch = maxBoxBatch + 1;
 
-                    await _context.SaveChangesAsync();
-                    totalSaved += boxResults.Count;
+                var boxResults = new List<BoxBreakingResult>();
+                int serialNumber = 1;
 
-                    _loggerService.LogEvent(
-                        $"Lot {lot}: Saved {boxResults.Count} records, Batch {currentBatch}",
-                        "BoxBreakingProcessing", LogHelper.GetTriggeredBy(User), ProjectId);
+                foreach (var item in finalWithBoxes)
+                {
+                    var itemDict = (IDictionary<string, object>)item;
+                    string boxNoValue = itemDict["BoxNo"]?.ToString() ?? "";
 
-                    // ✅ Call report for this specific lot only
-                    using var client = new HttpClient();
-                    var url = $"{_apiSettings.BoxBreaking}?ProjectId={ProjectId}&LotNo={lot}";
-                    var response = await client.GetAsync(url);
-
-                    if (!response.IsSuccessStatusCode)
+                    boxResults.Add(new BoxBreakingResult
                     {
-                        _loggerService.LogError($"Failed to generate report for Lot {lot}", "", nameof(BoxBreakingProcessingController));
-                        return StatusCode((int)response.StatusCode, $"Failed to generate report for Lot {lot}");
-                    }
+                        ProjectId = ProjectId,
+                        EnvelopeBreakingResultId = itemDict.ContainsKey("EnvelopeBreakingResultId") && itemDict["EnvelopeBreakingResultId"] != null
+                            ? (int?)itemDict["EnvelopeBreakingResultId"] : null,
+                        Start = (int)itemDict["Start"],
+                        End = (int)itemDict["End"],
+                        Serial = itemDict["Serial"]?.ToString(),
+                        TotalPages = (int)itemDict["TotalPages"],
+                        BoxNo = boxNoValue,
+                        OmrSerial = itemDict["OmrSerial"]?.ToString(),
+                        BookletSerial = itemDict["BookletSerial"]?.ToString(),
+                        InnerBundlingSerial = itemDict["InnerBundlingSerial"] as int?,
+                        Quantity = (int)itemDict["Quantity"],
+                        UploadBatch = currentBatch
+                    });
+                }
 
-                    allResults.Add(new { lot, records = boxResults.Count, batch = currentBatch });
+                _context.BoxBreakingResults.AddRange(boxResults);
+                foreach (var nr in nrData)
+                    nr.Steps = 4;
+
+                await _context.SaveChangesAsync();
+
+                _loggerService.LogEvent(
+                    $"Saved {boxResults.Count} box breaking results for ProjectId {ProjectId}, Batch {currentBatch}",
+                    "BoxBreakingProcessing",
+                    LogHelper.GetTriggeredBy(User),
+                    ProjectId);
+
+                using var client = new HttpClient();
+                var query = string.Join("&", LotNo.Select(l => $"LotNo={Uri.EscapeDataString(l.ToString())}"));
+                var url = $"{_apiSettings.BoxBreaking}?ProjectId={ProjectId}&{query}";
+                var response = await client.GetAsync(url);
+
+                _loggerService.LogError("Calling URL", url, nameof(BoxBreakingProcessingController));
+                if (!response.IsSuccessStatusCode)
+                {
+                    _loggerService.LogError("Failed to generate report", "", nameof(BoxBreakingProcessingController));
+                    return StatusCode((int)response.StatusCode, "Failed to get envelope breakages after configuration.");
                 }
 
                 return Ok(new
                 {
-                    message = "Box breaking processed lot-wise successfully",
-                    totalRecords = totalSaved,
-                    lots = allResults
+                    message = "Box breaking data saved to database",
+                    recordsCount = boxResults.Count,
+                    uploadBatch = currentBatch
                 });
             }
             catch (Exception ex)
