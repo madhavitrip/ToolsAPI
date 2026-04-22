@@ -1106,7 +1106,7 @@ namespace Tools.Controllers
             return Ok(new { templateId = id, parsedFields });
         }
 
-
+/*
         [HttpPost("upload")]
         public async Task<ActionResult> Upload(
             [FromForm] int? templateId,
@@ -1337,7 +1337,7 @@ namespace Tools.Controllers
             {
                 return StatusCode(500, ex.Message);
             }
-        }
+        }*/
         //GET: api/RPTTemplates/5/download
         [HttpGet("{id}/download")]
         public async Task<ActionResult> Download(int id)
