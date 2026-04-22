@@ -1,4 +1,4 @@
-using ERPToolsAPI.Data;
+﻿using ERPToolsAPI.Data;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -130,13 +130,52 @@ namespace Tools.Controllers
                         rowDict["Symbol"] = nrRow.Symbol ?? "";
                         rowDict["Pages"] = nrRow.Pages;
                         rowDict["NRQuantity"] = nrRow.NRQuantity;
+
+                        // ✅ Deserialize NRDatas JSON and extract any sorting fields missing from rowDict
+                        if (!string.IsNullOrWhiteSpace(nrRow.NRDatas))
+                        {
+                            try
+                            {
+                                var nrDynamic = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(nrRow.NRDatas);
+                                if (nrDynamic != null)
+                                {
+                                    foreach (var fieldName in fieldNames) // sorting fields
+                                    {
+                                        if (!rowDict.ContainsKey(fieldName))
+                                        {
+                                            // Try case-insensitive match in JSON
+                                            var match = nrDynamic
+                                                .FirstOrDefault(k => k.Key.Equals(fieldName,
+                                                    StringComparison.OrdinalIgnoreCase));
+
+                                            if (match.Key != null)
+                                            {
+                                                rowDict[fieldName] = match.Value.GetString() ?? "";
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                _loggerService.LogError("Failed to parse NRDatas JSON", ex.Message,
+                                    nameof(BoxBreakingProcessingController));
+                            }
+                        }
                     }
                     else
                     {
                         rowDict["Symbol"] = "";
                         rowDict["Pages"] = 0;
+
+                        // ✅ Set defaults for all sorting fields that might come from NRDatas
+                        foreach (var fieldName in fieldNames)
+                        {
+                            if (!rowDict.ContainsKey(fieldName))
+                                rowDict[fieldName] = "";
+                        }
                     }
-                  
+
                     breakingReportData.Add(row);
                 }
 
