@@ -1,4 +1,4 @@
-using ERPToolsAPI.Data;
+﻿using ERPToolsAPI.Data;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -26,11 +26,10 @@ namespace Tools.Controllers
         }
 
         [HttpPost("ProcessBoxBreaking")]
-        public async Task<IActionResult> ProcessBoxBreaking(int ProjectId)
+        public async Task<IActionResult> ProcessBoxBreaking(int ProjectId, List<int> LotNo)
         {
             try
             {
-                // Read EnvelopeBreakingResults from DB (latest batch)
                 var maxBatch = await _context.EnvelopeBreakingResults
                     .Where(r => r.ProjectId == ProjectId)
                     .MaxAsync(r => (int?)r.UploadBatch);
@@ -43,7 +42,8 @@ namespace Tools.Controllers
                     .ToListAsync();
 
                 var nrData = await _context.NRDatas
-                    .Where(p => p.ProjectId == ProjectId && p.Status == true && p.Steps==4)
+
+                    .Where(p => p.ProjectId == ProjectId && p.Status == true && LotNo.Contains(p.LotNo))
                     .ToListAsync();
 
                 var projectconfig = await _context.ProjectConfigs
@@ -99,12 +99,44 @@ namespace Tools.Controllers
                 // ==============================
                 var breakingReportData = new List<dynamic>();
 
+                // ✅ HELPER FUNCTION — placed here so fieldNames, dupNames, fields are all in scope
+                // Deserializes the NRDatas JSON column once per row and returns a lookup function
+                Dictionary<string, JsonElement> ParseNrDatas(string nrDatasJson)
+                {
+                    if (string.IsNullOrWhiteSpace(nrDatasJson)) return null;
+                    try
+                    {
+                        return JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(nrDatasJson);
+                    }
+                    catch
+                    {
+                        return null;
+                    }
+                }
+
+                // ✅ Given a parsed NRDatas dictionary, get a field value by name (case-insensitive)
+                string GetNrField(Dictionary<string, JsonElement> nrDynamic, string fieldName)
+                {
+                    if (nrDynamic == null) return "";
+                    var match = nrDynamic.FirstOrDefault(k =>
+                        k.Key.Equals(fieldName, StringComparison.OrdinalIgnoreCase));
+                    return match.Key != null ? (match.Value.GetString() ?? "") : "";
+                }
+
+                // ✅ All field names that might live in NRDatas JSON (union of sorting + dup + box criteria)
+                var boxFieldNames = fields.Select(f => f.Name).ToList();
+                var allDynamicFieldNames = fieldNames
+                    .Union(dupNames)
+                    .Union(boxFieldNames)
+                    .Union(innerBundlingFieldNames)
+                    .Distinct()
+                    .ToList();
+
                 foreach (var result in envelopeResults)
                 {
                     dynamic row = new System.Dynamic.ExpandoObject();
                     var rowDict = (IDictionary<string, object>)row;
 
-                    // Get data from EnvelopeBreakingResults first (all sorting fields are already there)
                     rowDict["CatchNo"] = result.CatchNo ?? "";
                     rowDict["CenterCode"] = result.CenterCode ?? "";
                     rowDict["CenterSort"] = result.CenterSort;
@@ -122,8 +154,10 @@ namespace Tools.Controllers
                     rowDict["EnvelopeBreakingResultId"] = result.Id;
                     rowDict["NrDataId"] = result.NrDataId;
 
-                    // Get Pages and Symbol from NRData if available
                     var nrRow = nrData.FirstOrDefault(n => n.CatchNo == result.CatchNo);
+
+                    // ✅ Parse NRDatas JSON ONCE here for this row
+                    var nrDynamic = nrRow != null ? ParseNrDatas(nrRow.NRDatas) : null;
 
                     if (nrRow != null)
                     {
@@ -135,15 +169,26 @@ namespace Tools.Controllers
                     {
                         rowDict["Symbol"] = "";
                         rowDict["Pages"] = 0;
+                        rowDict["NRQuantity"] = 0;
                     }
-                  
+
+                    // ✅ Fill in any missing fields (Remark, PaperCode, etc.) from NRDatas JSON
+                    // This covers sorting fields, duplicate fields, box criteria fields, inner bundling fields
+                    foreach (var fieldName in allDynamicFieldNames)
+                    {
+                        if (!rowDict.ContainsKey(fieldName))
+                        {
+                            rowDict[fieldName] = GetNrField(nrDynamic, fieldName);
+                        }
+                    }
+
                     breakingReportData.Add(row);
                 }
 
                 if (!breakingReportData.Any())
                     return NotFound("No data found in envelope breaking results");
 
-                // Step 1: Remove duplicates - keep first occurrence of each duplicate key
+                // Step 1: Remove duplicates
                 var uniqueRows = breakingReportData
                     .GroupBy(x =>
                     {
@@ -156,7 +201,7 @@ namespace Tools.Controllers
                     })
                     .Select(g => g.First())
                     .ToList();
-               
+
                 // Step 2: Calculate Start, End, Serial (BEFORE sorting)
                 var enrichedList = new List<dynamic>();
                 string previousCatchNo = null;
@@ -179,11 +224,9 @@ namespace Tools.Controllers
 
                     previousCatchNo = catchNo;
                     previousEnd = end;
-                   
                 }
-              
-               
-                // Step 3: Apply sorting using dictionary access (not reflection)
+
+                // Step 3: Apply sorting
                 IOrderedEnumerable<dynamic> ordered = null;
 
                 foreach (var fieldName in fieldNames)
@@ -191,34 +234,26 @@ namespace Tools.Controllers
                     Func<dynamic, object> keySelector = x =>
                     {
                         var dict = (IDictionary<string, object>)x;
-                        if (!dict.ContainsKey(fieldName))
-                        {
-                            return null;
-                        }
+                        if (!dict.ContainsKey(fieldName)) return null;
+
                         var val = dict[fieldName];
                         if (val == null) return null;
 
                         if (fieldName.Equals("NodalSort", StringComparison.OrdinalIgnoreCase))
                         {
-                            if (double.TryParse(val.ToString(), out double nodalNum))
-                                return nodalNum;
+                            if (double.TryParse(val.ToString(), out double nodalNum)) return nodalNum;
                             return 0.0;
                         }
-
                         if (fieldName.Equals("CenterSort", StringComparison.OrdinalIgnoreCase))
                         {
-                            if (int.TryParse(val.ToString(), out int centerNum))
-                                return centerNum;
+                            if (int.TryParse(val.ToString(), out int centerNum)) return centerNum;
                             return 0;
                         }
-
                         if (fieldName.Equals("RouteSort", StringComparison.OrdinalIgnoreCase))
                         {
-                            if (int.TryParse(val.ToString(), out int routeNum))
-                                return routeNum;
+                            if (int.TryParse(val.ToString(), out int routeNum)) return routeNum;
                             return 0;
                         }
-
                         if (fieldName.Equals("ExamDate", StringComparison.OrdinalIgnoreCase))
                         {
                             if (DateTime.TryParseExact(val.ToString(), "dd-MM-yyyy",
@@ -237,9 +272,7 @@ namespace Tools.Controllers
                 }
 
                 var sortedList = ordered?.ToList() ?? enrichedList;
-               
 
-              
                 // Get envelope size from config
                 var envelopeObj = JsonSerializer.Deserialize<Dictionary<string, string>>(projectconfig.Envelope);
                 int envelopeSize = 0;
@@ -252,13 +285,11 @@ namespace Tools.Controllers
                         string singleValue = outerParts[0].Trim();
                         string digits = new string(singleValue.Where(char.IsDigit).ToArray());
                         if (int.TryParse(digits, out int parsedValue) && parsedValue > 0)
-                        {
                             envelopeSize = parsedValue;
-                        }
                     }
                 }
 
-                // Box breaking logic - EXACT SAME AS REPLICATION ENDPOINT
+                // Box breaking logic
                 var finalWithBoxes = new List<dynamic>();
                 int boxNo = startBox;
                 int runningPages = 0;
@@ -272,7 +303,6 @@ namespace Tools.Controllers
 
                 foreach (var item in sortedList)
                 {
-                    // RIGHT AFTER: var sortedList = ordered?.ToList() ?? enrichedList;
                     var itemDict = (IDictionary<string, object>)item;
 
                     string catchNo = itemDict["CatchNo"]?.ToString();
@@ -282,15 +312,14 @@ namespace Tools.Controllers
                     string currentSymbol = resetOnSymbolChange ? (nrRow?.Symbol ?? "") : "";
                     string currentCourseName = itemDict["CourseName"]?.ToString() ?? "";
 
-                    // Check if this row has OMR serial data (stored in BookletSerial field)
                     string bookletSerial = itemDict["BookletSerial"]?.ToString() ?? "";
                     string omrSerial = itemDict["OmrSerial"]?.ToString();
                     bool hasOmr = !string.IsNullOrWhiteSpace(omrSerial) && omrSerial != "0";
                     bool hasBooklet = !string.IsNullOrWhiteSpace(bookletSerial) && bookletSerial != "0";
-                    // Reset boxNo when CourseName changes
+
                     bool courseChanged = resetOnSymbolChange
-    && previousCourse != null
-    && currentCourseName != previousCourse;
+                        && previousCourse != null
+                        && currentCourseName != previousCourse;
 
                     if (courseChanged)
                     {
@@ -298,30 +327,25 @@ namespace Tools.Controllers
                         runningPages = 0;
                         innerBundlingSerial = 0;
                         prevInnerBundlingKey = null;
-                        prevMergeKey = null; // clears stale key so first row of new course doesn't trigger boxNo++
+                        prevMergeKey = null;
                     }
 
                     if (previousCatchForOmr != itemDict["CatchNo"]?.ToString())
                     {
                         runningOmrPointer = 0;
                         previousCatchForOmr = itemDict["CatchNo"]?.ToString();
-                        
-                        // If this row has OMR serial, extract the starting number from BookletSerial
+
                         if (hasOmr && omrSerial.Contains("-"))
                         {
                             var parts = omrSerial.Split('-');
                             if (long.TryParse(parts[0], out long omrStart))
-                            {
                                 runningOmrPointer = omrStart;
-                            }
                         }
                         if (hasBooklet && bookletSerial.Contains("-"))
                         {
                             var parts = bookletSerial.Split('-');
                             if (long.TryParse(parts[0], out long bookletStart))
-                            {
                                 runningBooklet = bookletStart;
-                            }
                         }
                     }
 
@@ -330,9 +354,7 @@ namespace Tools.Controllers
                     if (InnerBundling && innerBundlingFieldNames.Any())
                     {
                         innerBundlingKey = string.Join("_", innerBundlingFieldNames.Select(fieldName =>
-                        {
-                            return itemDict.ContainsKey(fieldName) ? itemDict[fieldName]?.ToString()?.Trim() ?? "" : "";
-                        }));
+                            itemDict.ContainsKey(fieldName) ? itemDict[fieldName]?.ToString()?.Trim() ?? "" : ""));
 
                         if (innerBundlingKey != prevInnerBundlingKey)
                         {
@@ -342,7 +364,6 @@ namespace Tools.Controllers
                         currentInnerBundlingSerial = innerBundlingSerial;
                     }
 
-                    // Build merge key
                     string mergeKey = "";
                     if (boxIds.Any())
                     {
@@ -350,9 +371,7 @@ namespace Tools.Controllers
                         {
                             var fieldName = fields.FirstOrDefault(f => f.FieldId == fieldId)?.Name;
                             if (fieldName != null && itemDict.ContainsKey(fieldName))
-                            {
                                 return itemDict[fieldName]?.ToString() ?? "";
-                            }
                             return "";
                         }));
                     }
@@ -403,11 +422,7 @@ namespace Tools.Controllers
                                     {
                                         boxNo++;
                                         runningPages = 0;
-                                        if (InnerBundling)
-                                        {
-                                            innerBundlingSerial++;
-                                            currentInnerBundlingSerial = innerBundlingSerial;
-                                        }
+                                        if (InnerBundling) { innerBundlingSerial++; currentInnerBundlingSerial = innerBundlingSerial; }
                                         continue;
                                     }
 
@@ -418,11 +433,7 @@ namespace Tools.Controllers
                                     {
                                         boxNo++;
                                         runningPages = 0;
-                                        if (InnerBundling)
-                                        {
-                                            innerBundlingSerial++;
-                                            currentInnerBundlingSerial = innerBundlingSerial;
-                                        }
+                                        if (InnerBundling) { innerBundlingSerial++; currentInnerBundlingSerial = innerBundlingSerial; }
                                         continue;
                                     }
 
@@ -434,6 +445,7 @@ namespace Tools.Controllers
                                     string serial = $"{start} to {end}";
                                     string omrRange = "";
                                     string bookletRange = "";
+
                                     if (hasOmr)
                                     {
                                         long omrStart = runningOmrPointer;
@@ -448,9 +460,10 @@ namespace Tools.Controllers
                                         bookletRange = $"{bookletStart}-{bookletEnd}";
                                         runningBooklet = bookletEnd + 1;
                                     }
+
                                     object boxNoValue = (resetOnSymbolChange && !string.IsNullOrEmpty(currentSymbol))
-      ? (object)$"{currentSymbol}-{boxNo}"
-      : boxNo;
+                                        ? (object)$"{currentSymbol}-{boxNo}" : boxNo;
+
                                     var boxItem = new System.Dynamic.ExpandoObject();
                                     var boxItemDict = (IDictionary<string, object>)boxItem;
 
@@ -495,6 +508,7 @@ namespace Tools.Controllers
                         runningPages += totalPages;
                         string normalOmrRange = "";
                         string normalBookletRange = "";
+
                         if (hasOmr)
                         {
                             long normalOmrStart = runningOmrPointer;
@@ -502,7 +516,6 @@ namespace Tools.Controllers
                             normalOmrRange = $"{normalOmrStart}-{normalOmrEnd}";
                             runningOmrPointer = normalOmrEnd + 1;
                         }
-
                         if (hasBooklet)
                         {
                             long normalBookletStart = runningBooklet;
@@ -512,8 +525,8 @@ namespace Tools.Controllers
                         }
 
                         object normalBoxNoValue = resetOnSymbolChange
-    ? (object)$"{currentSymbol}-{boxNo}"   // e.g. "A-1"
-    : boxNo;
+                            ? (object)$"{currentSymbol}-{boxNo}" : boxNo;
+
                         var normalBoxItem = new System.Dynamic.ExpandoObject();
                         var normalBoxItemDict = (IDictionary<string, object>)normalBoxItem;
 
@@ -551,37 +564,29 @@ namespace Tools.Controllers
                     }
                 }
 
-                // Get current batch number
-                // RIGHT AFTER: the foreach (var item in sortedList) loop ends
-               
                 var maxBoxBatch = await _context.BoxBreakingResults
                     .Where(r => r.ProjectId == ProjectId)
                     .MaxAsync(r => (int?)r.UploadBatch) ?? 0;
                 int currentBatch = maxBoxBatch + 1;
 
-                // Save to database
                 var boxResults = new List<BoxBreakingResult>();
                 int serialNumber = 1;
 
                 foreach (var item in finalWithBoxes)
                 {
                     var itemDict = (IDictionary<string, object>)item;
-
-                    // Store BoxNo in symbol-boxno format when resetOnSymbolChange is true
                     string boxNoValue = itemDict["BoxNo"]?.ToString() ?? "";
-                    string boxNoForStorage = boxNoValue;
-                 
+
                     boxResults.Add(new BoxBreakingResult
                     {
                         ProjectId = ProjectId,
                         EnvelopeBreakingResultId = itemDict.ContainsKey("EnvelopeBreakingResultId") && itemDict["EnvelopeBreakingResultId"] != null
-                            ? (int?)itemDict["EnvelopeBreakingResultId"]
-                            : null,
+                            ? (int?)itemDict["EnvelopeBreakingResultId"] : null,
                         Start = (int)itemDict["Start"],
                         End = (int)itemDict["End"],
                         Serial = itemDict["Serial"]?.ToString(),
                         TotalPages = (int)itemDict["TotalPages"],
-                        BoxNo = boxNoForStorage,
+                        BoxNo = boxNoValue,
                         OmrSerial = itemDict["OmrSerial"]?.ToString(),
                         BookletSerial = itemDict["BookletSerial"]?.ToString(),
                         InnerBundlingSerial = itemDict["InnerBundlingSerial"] as int?,
@@ -589,12 +594,13 @@ namespace Tools.Controllers
                         UploadBatch = currentBatch
                     });
                 }
-             
+
                 _context.BoxBreakingResults.AddRange(boxResults);
                 foreach (var nr in nrData)
                 {
                     nr.Steps = 5; // Assuming NRData has a Step property
                 }
+
                 await _context.SaveChangesAsync();
 
                 _loggerService.LogEvent(
@@ -602,14 +608,19 @@ namespace Tools.Controllers
                     "BoxBreakingProcessing",
                     LogHelper.GetTriggeredBy(User),
                     ProjectId);
+
                 using var client = new HttpClient();
-                var response = await client.GetAsync($"{_apiSettings.BoxBreaking}?ProjectId={ProjectId}");
+                var query = string.Join("&", LotNo.Select(l => $"LotNo={Uri.EscapeDataString(l.ToString())}"));
+                var url = $"{_apiSettings.BoxBreaking}?ProjectId={ProjectId}&{query}";
+                var response = await client.GetAsync(url);
+
+                _loggerService.LogError("Calling URL", url, nameof(BoxBreakingProcessingController));
                 if (!response.IsSuccessStatusCode)
                 {
-                    // Handle failure from GET call as needed
                     _loggerService.LogError("Failed to generate report", "", nameof(BoxBreakingProcessingController));
                     return StatusCode((int)response.StatusCode, "Failed to get envelope breakages after configuration.");
                 }
+
                 return Ok(new
                 {
                     message = "Box breaking data saved to database",
@@ -629,10 +640,14 @@ namespace Tools.Controllers
         /// </summary>
 
         [HttpGet("GetBoxBreakingReport")]
-        public async Task<IActionResult> GetBoxBreakingReport(int ProjectId)
+        public async Task<IActionResult> GetBoxBreakingReport(int ProjectId, [FromQuery] List<int> LotNo)
         {
             try
             {
+                if (LotNo == null || !LotNo.Any())
+                {
+                    return BadRequest("LotNo is empty");
+                }
                 var maxBatch = await _context.BoxBreakingResults
                    .Where(r => r.ProjectId == ProjectId)
                    .MaxAsync(r => (int?)r.UploadBatch);
@@ -646,7 +661,7 @@ namespace Tools.Controllers
 
                 var envelopeResults = await _context.EnvelopeBreakingResults.ToListAsync();
                 var nrData = await _context.NRDatas
-                    .Where(p => p.ProjectId == ProjectId && p.Status == true && p.Steps==3)
+                    .Where(p => p.ProjectId == ProjectId && p.Status == true && LotNo.Contains(p.LotNo))
                     .ToListAsync();
 
                 var projectconfig = await _context.ProjectConfigs
@@ -721,8 +736,9 @@ namespace Tools.Controllers
                 var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
                 if (!Directory.Exists(reportPath))
                     Directory.CreateDirectory(reportPath);
-
-                var filePath = Path.Combine(reportPath, "BoxBreaking.xlsx");
+                var lotNoPart = string.Join("_", LotNo);
+                var fileName = $"BoxBreaking_{lotNoPart}.xlsx";
+                var filePath = Path.Combine(reportPath, fileName);
                 if (System.IO.File.Exists(filePath))
                     System.IO.File.Delete(filePath);
 

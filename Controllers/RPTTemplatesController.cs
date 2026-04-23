@@ -47,9 +47,24 @@ namespace Tools.Controllers
 
         // GET: api/RPTTemplates
         [HttpGet]
-        public async Task<ActionResult<IEnumerable<RPTTemplate>>> GetRPTTemplate()
+        public async Task<ActionResult<IEnumerable<object>>> GetRPTTemplate()
         {
-            return await _context.RPTTemplates.ToListAsync();
+            var templates = await _context.RPTTemplates
+                .ToListAsync();
+
+            var templateIds = templates.Select(t => t.TemplateId).ToList();
+            var mappedIds = (await _context.RPTMappings
+                .Where(m => templateIds.Contains(m.TemplateId))
+                .Select(m => m.TemplateId)
+                .ToListAsync()).ToHashSet();
+
+            return Ok(templates.Select(t => new
+            {
+                t.TemplateId, t.GroupId, t.TypeId, t.ProjectId, t.UploadedByUserId,
+                t.ModuleIds, t.TemplateName, t.RPTFilePath, t.ParsedFieldsJson,
+                t.Version, t.CreatedDate, t.UpdatedDate, t.IsActive, t.IsDeleted,
+                HasMapping = mappedIds.Contains(t.TemplateId)
+            }));
         }
 
         // GET: api/RPTTemplates/by-group?typeId=2&groupId=1&projectId=10
@@ -86,7 +101,7 @@ namespace Tools.Controllers
                     groupId.Value,
                     projectId.Value);
 
-                return Ok(resolved);
+                return Ok(await AttachMappingFlags(resolved));
             }
 
             if (groupId.HasValue)
@@ -102,7 +117,7 @@ namespace Tools.Controllers
                     .OrderBy(t => t.TemplateName)
                     .ToListAsync();
 
-                return Ok(groupTemplates);
+                return Ok(await AttachMappingFlags(groupTemplates));
             }
 
             if (!typeId.HasValue)
@@ -116,7 +131,7 @@ namespace Tools.Controllers
                 .OrderBy(t => t.TemplateName)
                 .ToListAsync();
 
-            return Ok(standardTemplates);
+            return Ok(await AttachMappingFlags(standardTemplates));
         }
 
         // GET: api/RPTTemplates/versions?typeId=2&templateName=ABC&groupId=1&projectId=10
@@ -158,7 +173,22 @@ namespace Tools.Controllers
                 .OrderByDescending(t => t.Version)
                 .ToListAsync();
 
-            return Ok(versions);
+            var ids = versions.Select(t => t.TemplateId).ToList();
+            var mappedIds = (await _context.RPTMappings
+                .Where(m => ids.Contains(m.TemplateId))
+                .Select(m => m.TemplateId)
+                .ToListAsync()).ToHashSet();
+
+            return Ok(versions.Select(t => new
+            {
+                t.TemplateId, t.GroupId, t.TypeId, t.ProjectId, t.UploadedByUserId,
+                t.ModuleIds, t.TemplateName, t.RPTFilePath, t.ParsedFieldsJson,
+                t.Version, t.CreatedDate, t.UpdatedDate, t.IsActive, t.IsDeleted,
+                HasMapping = mappedIds.Contains(t.TemplateId),
+                MappingWarning = mappedIds.Contains(t.TemplateId)
+                    ? null
+                    : "This template does not have a mapping configured and will not appear in the processing pipeline."
+            }));
         }
 
         // GET: api/RPTTemplates/mapping-options?groupId=1&typeId=2
@@ -308,6 +338,26 @@ namespace Tools.Controllers
                 ["value"] = "calc:TOTAL_BOXES",
                 ["label"] = "Total Boxes"
             });
+            result.Add(new Dictionary<string, string>
+            {
+                ["value"] = "calc:BOX_NUMBERS",
+                ["label"] = "Box Numbers"
+            });
+            result.Add(new Dictionary<string, string>
+            {
+                ["value"] = "calc:BOX_LABEL",
+                ["label"] = "Box Label (X/Y)"
+            });
+            result.Add(new Dictionary<string, string>
+            {
+                ["value"] = "calc:SRNO",
+                ["label"] = "Serial No (Sr No)"
+            });
+            result.Add(new Dictionary<string, string>
+            {
+                ["value"] = "calc:PACKING_DENOMINATION",
+                ["label"] = "Packing Denomination"
+            });
 
             // x.Inner � store as eb.<actualValue> so the mapping saves the real field reference
             // e.g. if Inner = "E10", value = "eb.E10", label = "E10"
@@ -380,6 +430,76 @@ namespace Tools.Controllers
             return Ok(new { templateId = template.TemplateId, message = "Template updated." });
         }
 
+        // DELETE: api/RPTTemplates/{id}/soft-delete?scope=project|group|standard
+        // Soft-deletes the template only within the specified scope.
+        // scope=project  → marks deleted only for the project scope (ProjectId must be set on template)
+        // scope=group    → marks deleted only for the group+type scope (GroupId set, ProjectId null)
+        // scope=standard → marks deleted only for the standard scope (GroupId null, ProjectId null)
+        [HttpDelete("{id}/soft-delete")]
+        public async Task<ActionResult> SoftDelete(int id, [FromQuery] string? scope = null)
+        {
+            var template = await _context.RPTTemplates.FindAsync(id);
+            if (template == null) return NotFound("Template not found.");
+
+            // Determine which scope to delete from based on the template's own scope
+            // (the caller can also pass scope explicitly to be safe)
+            var effectiveScope = (scope ?? string.Empty).Trim().ToLowerInvariant();
+            if (string.IsNullOrEmpty(effectiveScope))
+            {
+                if (template.ProjectId.HasValue) effectiveScope = "project";
+                else if (template.GroupId.HasValue) effectiveScope = "group";
+                else effectiveScope = "standard";
+            }
+
+            IQueryable<RPTTemplate> scopeQuery;
+            switch (effectiveScope)
+            {
+                case "project":
+                    if (!template.ProjectId.HasValue)
+                        return BadRequest("Template does not belong to a project scope.");
+                    scopeQuery = _context.RPTTemplates
+                        .Where(t => t.TypeId == template.TypeId
+                                    && t.TemplateName == template.TemplateName
+                                    && t.GroupId == template.GroupId
+                                    && t.ProjectId == template.ProjectId);
+                    break;
+                case "group":
+                    if (!template.GroupId.HasValue)
+                        return BadRequest("Template does not belong to a group scope.");
+                    scopeQuery = _context.RPTTemplates
+                        .Where(t => t.TypeId == template.TypeId
+                                    && t.TemplateName == template.TemplateName
+                                    && t.GroupId == template.GroupId
+                                    && t.ProjectId == null);
+                    break;
+                default: // standard
+                    scopeQuery = _context.RPTTemplates
+                        .Where(t => t.TypeId == template.TypeId
+                                    && t.TemplateName == template.TemplateName
+                                    && t.GroupId == null
+                                    && t.ProjectId == null);
+                    break;
+            }
+
+            var items = await scopeQuery.ToListAsync();
+            if (!items.Any()) return NotFound("No templates found for the given scope.");
+
+            var now = DateTime.Now;
+            foreach (var item in items)
+            {
+                item.IsDeleted = true;
+                item.UpdatedDate = now;
+            }
+
+            await _context.SaveChangesAsync();
+            _loggerService.LogEvent(
+                $"Soft-deleted template '{template.TemplateName}' scope={effectiveScope} (id={id})",
+                "RPTTemplate", LogHelper.GetTriggeredBy(User), 0);
+
+            return Ok(new { message = $"Template removed from {effectiveScope} scope.", affectedVersions = items.Count });
+        }
+
+
         // POST: api/RPTTemplates/{id}/activate
         // Marks a specific version as active for its scope (standard/group/project)
         [HttpPost("{id}/activate")]
@@ -403,6 +523,8 @@ namespace Tools.Controllers
             {
                 item.IsActive = item.TemplateId == template.TemplateId;
                 item.UpdatedDate = now;
+                // Activating any version restores the whole scope from soft-delete
+                item.IsDeleted = false;
             }
 
             await _context.SaveChangesAsync();
@@ -1051,31 +1173,7 @@ namespace Tools.Controllers
             return id.Value > 0 ? id : null;
         }
 
-        private int? GetUserIdFromToken()
-        {
-            var token = Request.Headers["Authorization"].ToString()?.Replace("Bearer ", "");
-            if (string.IsNullOrWhiteSpace(token)) return null;
 
-            try
-            {
-                var handler = new JwtSecurityTokenHandler();
-                if (!handler.CanReadToken(token)) return null;
-                var jwt = handler.ReadToken(token) as JwtSecurityToken;
-                if (jwt == null) return null;
-
-                var claim = jwt.Claims.FirstOrDefault(c =>
-                    c.Type == "userid" ||
-                    c.Type == "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name" ||
-                    c.Type == "sub");
-
-                if (claim == null) return null;
-                return int.TryParse(claim.Value, out var id) ? id : null;
-            }
-            catch
-            {
-                return null;
-            }
-        }
 
         private static int GetScopeRank(RPTTemplate template)
         {
@@ -1105,6 +1203,25 @@ namespace Tools.Controllers
             return resolved;
         }
 
+        private async Task<List<object>> AttachMappingFlags(List<RPTTemplate> templates)
+        {
+            var ids = templates.Select(t => t.TemplateId).ToList();
+            var mappedIds = (await _context.RPTMappings
+                .Where(m => ids.Contains(m.TemplateId))
+                .Select(m => m.TemplateId)
+                .ToListAsync()).ToHashSet();
+
+            return templates.Select(t => (object)new
+            {
+                t.TemplateId, t.GroupId, t.TypeId, t.ProjectId, t.UploadedByUserId,
+                t.ModuleIds, t.TemplateName, t.RPTFilePath, t.ParsedFieldsJson,
+                t.Version, t.CreatedDate, t.UpdatedDate, t.IsActive, t.IsDeleted,
+                HasMapping = mappedIds.Contains(t.TemplateId),
+                MappingWarning = mappedIds.Contains(t.TemplateId)
+                    ? null
+                    : "This template does not have a mapping configured and will not appear in the processing pipeline."
+            }).ToList();
+        }
         private int? GetLastActiveTemplateId(int groupId, int typeId)
         {
             return _context.RPTTemplates

@@ -181,7 +181,7 @@ namespace Tools.Controllers
                 if (isOnlyReport)
                 {
                     envelopesToUse = await _context.ExtrasEnvelope
-                        .Where(e => e.ProjectId == ProjectId)
+                        .Where(e => e.ProjectId == ProjectId && e.Status == 1)
                         .ToListAsync();
 
                     if (!envelopesToUse.Any())
@@ -330,7 +330,7 @@ namespace Tools.Controllers
                     var catchNos = nodalGroup.Select(x => x.CatchNo).ToHashSet();
 
                     var extras1 = envelopesToUse
-                        .Where(e => e.ExtraId == 1 && catchNos.Contains(e.CatchNo))
+                        .Where(e => e.ExtraId == 1 && e.Status == 1&& catchNos.Contains(e.CatchNo))
                         .ToList();
 
                     foreach (var extra in extras1)
@@ -347,7 +347,7 @@ namespace Tools.Controllers
 
                 foreach (var extraType in new[] { 2, 3 })
                 {
-                    var extras = envelopesToUse.Where(e => e.ExtraId == extraType).ToList();
+                    var extras = envelopesToUse.Where(e => e.ExtraId == extraType && e.Status == 1).ToList();
 
                     foreach (var extra in extras)
                     {

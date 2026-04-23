@@ -794,16 +794,17 @@ namespace Tools.Controllers
                     .Where(x => x.ProjectId == projectId)
                     .ToListAsync();
 
-                // =============================
-                // ? GET CURRENT BATCH NUMBER
-                // =============================
-                int currentBatch = (await _context.NRDatas
-         .Where(x => x.ProjectId == projectId && x.UploadList != null)
-         .Select(x => x.UploadList)
-         .ToListAsync())
-     .SelectMany(x => x)
-     .DefaultIfEmpty(0)
-     .Max() + 1;
+                // ✅ FIX 1: Load full entities first (avoid EF translation error)
+                var existingNRDataList = await _context.NRDatas
+                    .Where(x => x.ProjectId == projectId)
+                    .ToListAsync();
+
+                // ✅ FIX 2: Safe batch calculation
+                int currentBatch = existingNRDataList
+                    .Where(x => x.UploadList != null)
+                    .SelectMany(x => x.UploadList ?? new List<int>())
+                    .DefaultIfEmpty(0)
+                    .Max() + 1;
 
                 var nrDatasToAdd = new List<NRData>();
                 var extraEnvelopesToAdd = new List<ExtraEnvelopes>();
@@ -860,9 +861,7 @@ namespace Tools.Controllers
                         }
                     }
 
-                    // =============================
-                    // ? Day calculation
-                    // =============================
+                    // ✅ Day calculation
                     if (!string.IsNullOrWhiteSpace(nRData.ExamDate) &&
                         DateTime.TryParse(nRData.ExamDate, out DateTime examDate))
                     {
@@ -872,14 +871,13 @@ namespace Tools.Controllers
                     if (extraData.Any())
                         nRData.NRDatas = JsonSerializer.Serialize(extraData);
 
-                    // =============================
-                    // ? DUPLICATE CHECK
-                    // =============================
-                    var existingRecord = await _context.NRDatas.FirstOrDefaultAsync(x =>
+                    // ✅ FIX 3: Use in-memory duplicate check (no DB call inside loop)
+                    var existingRecord = existingNRDataList.FirstOrDefault(x =>
                         x.ProjectId == projectId &&
                         x.CatchNo == nRData.CatchNo &&
                         x.CenterCode == nRData.CenterCode &&
-                        x.ExamDate == nRData.ExamDate
+                        x.ExamDate == nRData.ExamDate &&
+                        x.Status == true
                     );
 
                     if (existingRecord != null)
@@ -887,7 +885,6 @@ namespace Tools.Controllers
                         if (existingRecord.UploadList == null)
                             existingRecord.UploadList = new List<int>();
 
-                        // ? Add current batch only if not already present
                         if (!existingRecord.UploadList.Contains(currentBatch))
                         {
                             existingRecord.UploadList.Add(currentBatch);
@@ -897,13 +894,10 @@ namespace Tools.Controllers
                     }
                     else
                     {
-                        // ? New record gets current batch
                         nRData.UploadList = new List<int> { currentBatch };
                     }
 
-                    // =============================
-                    // EXTRA CENTER LOGIC
-                    // =============================
+                    // ✅ Extra center logic
                     int? extraTypeId = nRData.CenterCode switch
                     {
                         "Nodal Extra" => 1,
@@ -915,6 +909,7 @@ namespace Tools.Controllers
                     if (extraTypeId.HasValue)
                     {
                         var config = extraConfigs.FirstOrDefault(x => x.ExtraType == extraTypeId);
+
                         if (config != null)
                         {
                             EnvelopeType envelopeType = null;
@@ -2207,12 +2202,111 @@ namespace Tools.Controllers
 
                     foreach (var row in matchingRows)
                     {
+
                         // Handle additional dynamic fields - store ALL fields in NRDatas as JSON
                         // (including Pages, ExamDate, ExamTime which are now also dynamic)
                         if (item.AdditionalFields != null && item.AdditionalFields.Any())
                         {
                             try
                             {
+
+                                var modelProperties = typeof(NRData)
+                                    .GetProperties()
+                                    .Where(p => p.Name != nameof(NRData.NRDatas))
+                                    .ToDictionary(p => p.Name.ToLower(), p => p);
+
+
+                                var dynamicFields = new Dictionary<string, object>();
+
+
+                                foreach (var field in item.AdditionalFields)
+                                {
+                                    var key = field.Key;
+                                    var valueStr = field.Value?.ToString()?.Trim();
+
+                                    if (string.IsNullOrWhiteSpace(valueStr))
+                                        continue;
+
+                                    var keyLower = key.ToLower();
+
+                                    if (modelProperties.ContainsKey(keyLower))
+                                    {
+                                        var property = modelProperties[keyLower];
+
+                                        try
+                                        {
+                                            object? convertedValue = null;
+
+                                            if (property.PropertyType == typeof(int))
+                                            {
+                                                if (int.TryParse(valueStr, out int intVal))
+                                                    convertedValue = intVal;
+                                            }
+                                            else if (property.PropertyType == typeof(int?))
+                                            {
+                                                if (int.TryParse(valueStr, out int intVal))
+                                                    convertedValue = intVal;
+                                            }
+                                            else if (property.PropertyType == typeof(double))
+                                            {
+                                                if (double.TryParse(valueStr, out double dblVal))
+                                                    convertedValue = dblVal;
+                                            }
+                                            else if (property.PropertyType == typeof(bool))
+                                            {
+                                                if (bool.TryParse(valueStr, out bool boolVal))
+                                                    convertedValue = boolVal;
+                                            }
+                                            else
+                                            {
+                                                convertedValue = valueStr;
+                                            }
+
+                                            if (convertedValue != null)
+                                            {
+                                                property.SetValue(row, convertedValue);
+                                            }
+                                        }
+                                        catch
+                                        {
+                                            dynamicFields[key] = valueStr;
+                                        }
+                                    }
+                                    else
+                                    {
+                                        dynamicFields[key] = valueStr;
+                                    }
+                                }
+
+
+                                Dictionary<string, object> existingData;
+
+                                if (!string.IsNullOrWhiteSpace(row.NRDatas))
+                                {
+                                    try
+                                    {
+                                        existingData = System.Text.Json.JsonSerializer
+                                            .Deserialize<Dictionary<string, object>>(row.NRDatas)
+                                            ?? new Dictionary<string, object>();
+                                    }
+                                    catch
+                                    {
+                                        existingData = new Dictionary<string, object>();
+                                    }
+                                }
+                                else
+                                {
+                                    existingData = new Dictionary<string, object>();
+                                }
+
+
+                                foreach (var kv in dynamicFields)
+                                {
+                                    existingData[kv.Key] = kv.Value;
+                                }
+
+
+                                row.NRDatas = System.Text.Json.JsonSerializer.Serialize(existingData);
                                 // Parse existing NRDatas JSON if it exists
                                 Dictionary<string, object> nrDatasDict;
                                 if (!string.IsNullOrWhiteSpace(row.NRDatas))
@@ -2289,7 +2383,7 @@ namespace Tools.Controllers
                 _loggerService.LogEvent(
                     $"Saved missing data for ProjectId {request.ProjectId}. Catches updated: {updatedCatchCount}, rows updated: {updatedRowCount}",
                     "NRData",
-                    LogHelper.GetTriggeredBy(User),
+                    User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
                     request.ProjectId);
 
                 return Ok(new
