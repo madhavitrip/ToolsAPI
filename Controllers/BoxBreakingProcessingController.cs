@@ -24,7 +24,6 @@ namespace Tools.Controllers
             _loggerService = loggerService;
             _apiSettings = apiSettings.Value;
         }
-
         [HttpPost("ProcessBoxBreaking")]
         public async Task<IActionResult> ProcessBoxBreaking(int ProjectId, List<int> LotNo)
         {
@@ -42,7 +41,6 @@ namespace Tools.Controllers
                     .ToListAsync();
 
                 var nrData = await _context.NRDatas
-
                     .Where(p => p.ProjectId == ProjectId && p.Status == true && LotNo.Contains(p.LotNo))
                     .ToListAsync();
 
@@ -601,6 +599,7 @@ namespace Tools.Controllers
                     nr.Steps = 5; // Assuming NRData has a Step property
                 }
 
+
                 await _context.SaveChangesAsync();
 
                 _loggerService.LogEvent(
@@ -635,45 +634,53 @@ namespace Tools.Controllers
             }
         }
 
-        /// <summary>
-        /// GET: Retrieve BoxBreaking data from database and generate Excel
-        /// </summary>
-
         [HttpGet("GetBoxBreakingReport")]
-        public async Task<IActionResult> GetBoxBreakingReport(int ProjectId, [FromQuery] List<int> LotNo)
+        public async Task<IActionResult> GetBoxBreakingReport(int ProjectId, [FromQuery] int LotNo)
         {
             try
             {
-                if (LotNo == null || !LotNo.Any())
-                {
-                    return BadRequest("LotNo is empty");
-                }
+                // ✅ Get NRData for this lot to know which CatchNos belong to it
+                var nrData = await _context.NRDatas
+                    .Where(p => p.ProjectId == ProjectId && p.Status == true && p.LotNo == LotNo)
+                    .ToListAsync();
+
+                if (!nrData.Any())
+                    return NotFound($"No NRData found for Lot {LotNo}");
+
+                var nrCatchNos = nrData.Select(n => n.CatchNo).ToHashSet();
+
+                // ✅ Get envelope results for this lot's catches
+                var envelopeResults = await _context.EnvelopeBreakingResults
+                    .Where(nr => nrCatchNos.Contains(nr.CatchNo) && nr.ProjectId == ProjectId)
+                    .ToListAsync();
+
+                var envelopeResultIds = envelopeResults.Select(e => e.Id).ToHashSet();
+
+                // ✅ Get the latest batch
                 var maxBatch = await _context.BoxBreakingResults
-                   .Where(r => r.ProjectId == ProjectId)
-                   .MaxAsync(r => (int?)r.UploadBatch);
+                    .Where(r => r.ProjectId == ProjectId)
+                    .MaxAsync(r => (int?)r.UploadBatch);
+
+                // ✅ Filter box results by latest batch AND only envelope result IDs belonging to this lot
                 var boxResults = await _context.BoxBreakingResults
-                    .Where(r => r.ProjectId == ProjectId && r.UploadBatch == maxBatch)
+                    .Where(r => r.ProjectId == ProjectId
+                             && r.UploadBatch == maxBatch
+                             && r.EnvelopeBreakingResultId.HasValue
+                             && envelopeResultIds.Contains(r.EnvelopeBreakingResultId.Value))
                     .OrderBy(r => r.Id)
                     .ToListAsync();
 
                 if (!boxResults.Any())
-                    return NotFound("No box breaking results found");
-
-                var envelopeResults = await _context.EnvelopeBreakingResults.ToListAsync();
-                var nrData = await _context.NRDatas
-                    .Where(p => p.ProjectId == ProjectId && p.Status == true && LotNo.Contains(p.LotNo))
-                    .ToListAsync();
+                    return NotFound($"No box breaking results found for Lot {LotNo}");
 
                 var projectconfig = await _context.ProjectConfigs
                     .FirstOrDefaultAsync(p => p.ProjectId == ProjectId);
 
                 bool resetOnSymbolChange = projectconfig?.ResetOnSymbolChange ?? false;
 
-                // ?? Optimize lookups
                 var envelopeDict = envelopeResults.ToDictionary(e => e.Id);
                 var nrDict = nrData.ToDictionary(n => n.Id);
 
-                // ?? Fixed Columns
                 var headers = new List<string>
         {
             "SerialNo","CatchNo","CenterCode","CenterSort","ExamTime","ExamDate","Quantity",
@@ -681,96 +688,58 @@ namespace Tools.Controllers
             "Serial","Pages","TotalPages","BoxNo","Beejak"
         };
 
-                if (resetOnSymbolChange)
-                {
-                    headers.Add("Symbol");
-                    headers.Add("CourseName");
-                }
+                if (resetOnSymbolChange) { headers.Add("Symbol"); headers.Add("CourseName"); }
+                if (projectconfig.BookletSerialNumber > 0) headers.Add("BookletSerial");
+                if (projectconfig.OmrSerialNumber > 0) headers.Add("OmrSerial");
+                if (projectconfig.IsInnerBundlingDone) headers.Add("InnerBundlingSerial");
 
-                if (projectconfig.BookletSerialNumber > 0)
-                    headers.Add("BookletSerial");
-
-                if (projectconfig.OmrSerialNumber > 0)
-                    headers.Add("OmrSerial");
-
-                if (projectconfig.IsInnerBundlingDone)
-                    headers.Add("InnerBundlingSerial");
-
-                // ?? Get ALL remaining NRData columns dynamically
-                var nrProperties = typeof(NRData).GetProperties()
-                    .Select(p => p.Name)
-                    .ToList();
-
-                // ?? Exclude already used + unwanted
-                var excludedColumns = new HashSet<string>(headers)
-        {
-            "Id","ProjectId","NRDatas" // handled separately
-        };
-
-                var extraNRColumns = nrProperties
-                    .Where(p => !excludedColumns.Contains(p))
-                    .ToList();
-
+                var nrProperties = typeof(NRData).GetProperties().Select(p => p.Name).ToList();
+                var excludedColumns = new HashSet<string>(headers) { "Id", "ProjectId", "NRDatas" };
+                var extraNRColumns = nrProperties.Where(p => !excludedColumns.Contains(p)).ToList();
                 headers.AddRange(extraNRColumns);
 
-                // ?? Extract JSON keys
-
                 var jsonKeys = new HashSet<string>();
-
                 foreach (var nr in nrData)
                 {
                     if (!string.IsNullOrEmpty(nr.NRDatas))
                     {
                         var dict = JsonSerializer.Deserialize<Dictionary<string, object>>(nr.NRDatas);
                         foreach (var key in dict.Keys)
-                        {
-                            if (!headers.Contains(key))
-                                jsonKeys.Add(key);
-                        }
+                            if (!headers.Contains(key)) jsonKeys.Add(key);
                     }
                 }
-
                 headers.AddRange(jsonKeys);
 
-                // ?? Excel Generation
                 var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
-                if (!Directory.Exists(reportPath))
-                    Directory.CreateDirectory(reportPath);
-                var lotNoPart = string.Join("_", LotNo);
-                var fileName = $"BoxBreaking_{lotNoPart}.xlsx";
+
+                if (!Directory.Exists(reportPath)) Directory.CreateDirectory(reportPath);
+
+                // ✅ One file per lot
+                var fileName = $"BoxBreaking_{LotNo}.xlsx";
                 var filePath = Path.Combine(reportPath, fileName);
-                if (System.IO.File.Exists(filePath))
-                    System.IO.File.Delete(filePath);
+                if (System.IO.File.Exists(filePath)) System.IO.File.Delete(filePath);
 
                 using (var package = new ExcelPackage())
                 {
                     var ws = package.Workbook.Worksheets.Add("BoxBreaking");
 
-                    // Header
                     for (int i = 0; i < headers.Count; i++)
                     {
                         ws.Cells[1, i + 1].Value = headers[i];
                         ws.Cells[1, i + 1].Style.Font.Bold = true;
                     }
 
-                    int row = 2;
-                    int serial = 1;
-                    var processedCenters = new HashSet<string>();
+                    int row = 2, serial = 1;
+                    var processedBoxCenters = new HashSet<string>(); // ✅ Beejak: per box+center combo
 
                     foreach (var result in boxResults)
                     {
-                        if (!result.EnvelopeBreakingResultId.HasValue)
-                            continue;
-
-                        if (!envelopeDict.TryGetValue(result.EnvelopeBreakingResultId.Value, out var env))
-                            continue;
-
+                        if (!result.EnvelopeBreakingResultId.HasValue) continue;
+                        if (!envelopeDict.TryGetValue(result.EnvelopeBreakingResultId.Value, out var env)) continue;
 
                         nrDict.TryGetValue(env.NrDataId, out var nrRow);
 
                         int col = 1;
-
-                        // ?? Fixed values
                         ws.Cells[row, col++].Value = serial++;
                         ws.Cells[row, col++].Value = env.CatchNo;
                         ws.Cells[row, col++].Value = env.CenterCode;
@@ -790,8 +759,9 @@ namespace Tools.Controllers
                         ws.Cells[row, col++].Value = result.TotalPages;
                         ws.Cells[row, col++].Value = result.BoxNo;
 
-                        bool isFirst = processedCenters.Add(env.CenterCode);
-                        ws.Cells[row, col++].Value = isFirst ? "Beejak" : "";
+                        // ✅ Beejak: first time a box+center combo appears
+                        string beejakKey = $"{result.BoxNo}_{env.CenterCode}";
+                        ws.Cells[row, col++].Value = processedBoxCenters.Add(beejakKey) ? "Beejak" : "";
 
                         if (resetOnSymbolChange)
                         {
@@ -799,54 +769,41 @@ namespace Tools.Controllers
                             ws.Cells[row, col++].Value = nrRow?.CourseName;
                         }
 
-                        if (projectconfig.BookletSerialNumber > 0)
-                            ws.Cells[row, col++].Value = result.BookletSerial;
+                        if (projectconfig.BookletSerialNumber > 0) ws.Cells[row, col++].Value = result.BookletSerial;
+                        if (projectconfig.OmrSerialNumber > 0) ws.Cells[row, col++].Value = result.OmrSerial;
+                        if (projectconfig.IsInnerBundlingDone) ws.Cells[row, col++].Value = result.InnerBundlingSerial;
 
-                        if (projectconfig.OmrSerialNumber > 0)
-                            ws.Cells[row, col++].Value = result.OmrSerial;
-
-                        if (projectconfig.IsInnerBundlingDone)
-                            ws.Cells[row, col++].Value = result.InnerBundlingSerial;
-
-                        // ?? Extra NRData columns
                         foreach (var prop in extraNRColumns)
                         {
                             var val = nrRow?.GetType().GetProperty(prop)?.GetValue(nrRow);
                             ws.Cells[row, col++].Value = val;
                         }
 
-                        // ?? JSON columns
                         Dictionary<string, object> jsonDict = null;
-
                         if (!string.IsNullOrEmpty(nrRow?.NRDatas))
-                        {
                             jsonDict = JsonSerializer.Deserialize<Dictionary<string, object>>(nrRow.NRDatas);
-                        }
 
                         foreach (var key in jsonKeys)
-                        {
-                            ws.Cells[row, col++].Value =
-                                (jsonDict != null && jsonDict.ContainsKey(key))
-                                ? jsonDict[key]?.ToString()
-                                : "";
-                        }
+                            ws.Cells[row, col++].Value = jsonDict != null && jsonDict.ContainsKey(key) ? jsonDict[key]?.ToString() : "";
 
                         row++;
                     }
 
                     ws.Cells[ws.Dimension.Address].AutoFitColumns();
                     ws.View.FreezePanes(2, 1);
-
                     package.SaveAs(new FileInfo(filePath));
                 }
 
-                return Ok(new { message = "Report generated successfully", filePath });
+                return Ok(new { message = "Report generated successfully", filePath, lot = LotNo });
             }
             catch (Exception ex)
             {
                 return StatusCode(500, new { error = ex.Message });
             }
         }
+
+
+
     }
 }
 

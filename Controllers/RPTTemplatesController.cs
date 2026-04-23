@@ -9,12 +9,11 @@ using MySqlConnector;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
-using System.IdentityModel.Tokens.Jwt;
-using System.Net.Http.Headers;
 using System.Reflection;
-using System.Security.Claims;
-using System.Security.Cryptography;
+using System.Net.Http.Headers;
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Security.Cryptography;
 using Tools.Models;
 using Tools.Services;
 
@@ -193,7 +192,7 @@ namespace Tools.Controllers
 
         // GET: api/RPTTemplates/mapping-options?groupId=1&typeId=2
         [HttpGet("mapping-options")]
-        public async Task<ActionResult> GetMappingOptions(int groupId, int typeId, int? projectId = null)
+        public async Task<ActionResult> GetMappingOptions(int groupId, int typeId, int? projectId = null, int? templateId = null)
         {
             var excludeColumns = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
@@ -281,6 +280,13 @@ namespace Tools.Controllers
             // Load all fields from the Fields table
             var allFields = await _context.Fields.OrderBy(f => f.Name).ToListAsync();
 
+            // Template-aware priority: when the template uses Envelope Breaking (but not Box Breaking),
+            // prefer e.* over b.* for overlapping columns like OmrSerial/BookletSerial.
+            var preferredSerialPrefix = templateId.HasValue && templateId.Value > 0
+                ? await ResolvePreferredSerialPrefixForTemplate(templateId.Value)
+                : null;
+            var preferEnvelopeOverBox = string.Equals(preferredSerialPrefix, "e", StringComparison.OrdinalIgnoreCase);
+
             // Build single deduplicated flat list � priority: b ? e ? n ? eb ? x
             // Each column name appears exactly once, mapped to the highest-priority table prefix
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -300,11 +306,19 @@ namespace Tools.Controllers
                 }
             }
 
-            AddColumns(boxColumns, "b.");
-            AddColumns(envColumns, "e.");
-            AddColumns(nrColumns, "n.");
-            AddColumns(nrJsonKeys, "n.");
-            AddColumns(envBreakageCols, "eb.");
+            if (preferEnvelopeOverBox)
+            {
+                AddColumns(envColumns, "e.");
+                AddColumns(boxColumns, "b.");
+            }
+            else
+            {
+                AddColumns(boxColumns, "b.");
+                AddColumns(envColumns, "e.");
+            }
+            AddColumns(nrColumns,                                     "n.");
+            AddColumns(nrJsonKeys,                                    "n.");
+            AddColumns(envBreakageCols,                               "eb.");
             AddColumns(envBreakageJsonKeys.Where(k => !excludeColumns.Contains(k)), "eb.");
 
             // Add Fields table entries � always use n. prefix.
@@ -357,6 +371,11 @@ namespace Tools.Controllers
             {
                 ["value"] = "calc:PACKING_DENOMINATION",
                 ["label"] = "Packing Denomination"
+            });
+            result.Add(new Dictionary<string, string>
+            {
+                ["value"] = "calc:PAGE_CONFIG",
+                ["label"] = "Page Config"
             });
 
             // x.Inner � store as eb.<actualValue> so the mapping saves the real field reference
@@ -430,6 +449,251 @@ namespace Tools.Controllers
             return Ok(new { templateId = template.TemplateId, message = "Template updated." });
         }
 
+        // POST: api/RPTTemplates/upload
+        // multipart/form-data: file (.rpt), typeId, templateName, optional groupId, optional projectId
+        [HttpPost("upload")]
+        public async Task<ActionResult> Upload([FromForm] int typeId, [FromForm] string templateName, IFormFile file,
+            [FromForm] int? groupId, [FromForm] int? projectId, [FromForm] List<int>? moduleIds, [FromForm] bool forceUpload = false)
+        {
+            if (file == null || file.Length == 0)
+                return BadRequest("No file uploaded.");
+
+            var ext = Path.GetExtension(file.FileName).ToLowerInvariant();
+            if (ext != ".rpt")
+                return BadRequest("Only .rpt files are accepted.");
+
+            if (string.IsNullOrWhiteSpace(templateName))
+                return BadRequest("templateName is required.");
+
+            groupId = NormalizeNullableId(groupId);
+            projectId = NormalizeNullableId(projectId);
+            if (projectId.HasValue && !groupId.HasValue)
+                return BadRequest("groupId is required when projectId is provided.");
+
+            // Determine next version for this scope+type+name combo
+            var scopeQuery = _context.RPTTemplates
+                .Where(t => t.TypeId == typeId && t.TemplateName == templateName);
+            if (projectId.HasValue)
+                scopeQuery = scopeQuery.Where(t => t.ProjectId == projectId && t.GroupId == groupId);
+            else if (groupId.HasValue)
+                scopeQuery = scopeQuery.Where(t => t.GroupId == groupId && t.ProjectId == null);
+            else
+                scopeQuery = scopeQuery.Where(t => t.GroupId == null && t.ProjectId == null);
+
+            var lastVersion = await scopeQuery.MaxAsync(t => (int?)t.Version) ?? 0;
+
+            // Save file to wwwroot/rpt-templates/{scope}/
+            var webRoot = _env.WebRootPath ?? Path.Combine(Directory.GetCurrentDirectory(), "wwwroot");
+            var folderParts = new List<string> { webRoot, "rpt-templates" };
+            string scopeSlug;
+            if (projectId.HasValue)
+            {
+                folderParts.Add(groupId.Value.ToString());
+                folderParts.Add(typeId.ToString());
+                folderParts.Add("projects");
+                folderParts.Add(projectId.Value.ToString());
+                scopeSlug = $"g{groupId}_t{typeId}_p{projectId}";
+            }
+            else if (groupId.HasValue)
+            {
+                folderParts.Add(groupId.Value.ToString());
+                folderParts.Add(typeId.ToString());
+                scopeSlug = $"g{groupId}_t{typeId}";
+            }
+            else
+            {
+                folderParts.Add("standard");
+                folderParts.Add(typeId.ToString());
+                scopeSlug = $"std_t{typeId}";
+            }
+
+            var folder = Path.Combine(folderParts.ToArray());
+            Directory.CreateDirectory(folder);
+            var fileName     = $"{templateName}_{scopeSlug}_v{lastVersion + 1}{ext}";
+            var absolutePath = Path.Combine(folder, fileName);
+            var relativePath = Path.Combine(folderParts.Skip(1).ToArray());
+            relativePath = Path.Combine(relativePath, fileName);
+
+            using (var stream = new FileStream(absolutePath, FileMode.Create))
+                await file.CopyToAsync(stream);
+
+            var (parsedFields, parseError) = await ParseFieldsAsync(absolutePath, file.FileName);
+            if (!string.IsNullOrWhiteSpace(parseError))
+            {
+                Console.WriteLine($"[RPTTemplates] Parse warning: {parseError}");
+            }
+            var parsedFieldsJson = parsedFields.Count > 0
+                ? System.Text.Json.JsonSerializer.Serialize(parsedFields)
+                : null;
+
+            var previousActive = await scopeQuery
+                .Where(t => t.IsActive)
+                .OrderByDescending(t => t.Version)
+                .FirstOrDefaultAsync();
+
+            // If the entire scope is soft-deleted, treat this upload as fresh — skip the identical-file check
+            var scopeIsDeleted = await scopeQuery.AllAsync(t => t.IsDeleted);
+
+            var newHash = ComputeFileHash(absolutePath);
+            var previousHash = TryGetPreviousHash(previousActive, webRoot);
+
+            var fileIdentical = !scopeIsDeleted
+                && previousHash != null
+                && string.Equals(previousHash, newHash, StringComparison.OrdinalIgnoreCase);
+
+            var fieldsSame = !scopeIsDeleted
+                && previousActive != null
+                && AreFieldsEqual(previousActive.ParsedFieldsJson, parsedFieldsJson);
+
+            var likelyLayoutOnly = !fileIdentical && fieldsSame && previousActive != null;
+
+            if (fileIdentical && !forceUpload)
+            {
+                try
+                {
+                    if (System.IO.File.Exists(absolutePath))
+                        System.IO.File.Delete(absolutePath);
+                }
+                catch
+                {
+                    // ignore cleanup errors
+                }
+                return Conflict(new
+                {
+                    message = "No changes detected between this file and the latest version.",
+                    allowForceUpload = true,
+                    changeSummary = new
+                    {
+                        fileIdentical,
+                        fieldsSame,
+                        likelyLayoutOnly
+                    }
+                });
+            }
+
+            // Deactivate previous versions (never delete)
+            var previous = await scopeQuery.Where(t => t.IsActive).ToListAsync();
+            previous.ForEach(t => t.IsActive = false);
+
+            // If scope was soft-deleted, restore all versions (un-delete the scope)
+            if (scopeIsDeleted)
+            {
+                var allInScope = await scopeQuery.ToListAsync();
+                allInScope.ForEach(t => t.IsDeleted = false);
+            }
+
+            var uploadedByUserId = LogHelper.GetTriggeredBy(User);
+
+            var template = new RPTTemplate
+            {
+                GroupId      = groupId,
+                TypeId       = typeId,
+                ProjectId    = projectId,
+                UploadedByUserId = uploadedByUserId,
+                ModuleIds    = moduleIds != null && moduleIds.Count > 0 ? moduleIds : null,
+                TemplateName = templateName,
+                RPTFilePath  = relativePath,   // store relative path only
+                ParsedFieldsJson = parsedFieldsJson,
+                Version      = lastVersion + 1,
+                IsActive     = true,
+                CreatedDate  = DateTime.Now,
+                UpdatedDate  = DateTime.Now
+            };
+
+            _context.RPTTemplates.Add(template);
+            await _context.SaveChangesAsync();
+
+            // If user skips mapping for new version, reuse mapping from previous version if available
+            if (previous.Count > 0)
+            {
+                var previousTemplateId = previous
+                    .OrderByDescending(t => t.Version)
+                    .Select(t => (int?)t.TemplateId)
+                    .FirstOrDefault();
+
+                if (previousTemplateId.HasValue)
+                {
+                    var prevMapping = await _context.RPTMappings
+                        .FirstOrDefaultAsync(m => m.TemplateId == previousTemplateId.Value);
+                    if (prevMapping != null)
+                    {
+                        var exists = await _context.RPTMappings
+                            .AnyAsync(m => m.TemplateId == template.TemplateId);
+                        if (!exists)
+                        {
+                            _context.RPTMappings.Add(new RPTMapping
+                            {
+                                TemplateId = template.TemplateId,
+                                MappingJson = prevMapping.MappingJson
+                            });
+                            await _context.SaveChangesAsync();
+                        }
+                    }
+                }
+            }
+            else if (projectId.HasValue && groupId.HasValue)
+            {
+                // For first-time project overrides, reuse mapping from group/standard template if available
+                var fallbackTemplate = await _context.RPTTemplates
+                    .Where(t => t.TypeId == typeId
+                                && t.TemplateName == templateName
+                                && t.GroupId == groupId
+                                && t.ProjectId == null
+                                && t.IsActive)
+                    .OrderByDescending(t => t.Version)
+                    .FirstOrDefaultAsync();
+
+                if (fallbackTemplate == null)
+                {
+                    fallbackTemplate = await _context.RPTTemplates
+                        .Where(t => t.TypeId == typeId
+                                    && t.TemplateName == templateName
+                                    && t.GroupId == null
+                                    && t.ProjectId == null
+                                    && t.IsActive)
+                        .OrderByDescending(t => t.Version)
+                        .FirstOrDefaultAsync();
+                }
+
+                if (fallbackTemplate != null)
+                {
+                    var fallbackMapping = await _context.RPTMappings
+                        .FirstOrDefaultAsync(m => m.TemplateId == fallbackTemplate.TemplateId);
+                    if (fallbackMapping != null)
+                    {
+                        var exists = await _context.RPTMappings
+                            .AnyAsync(m => m.TemplateId == template.TemplateId);
+                        if (!exists)
+                        {
+                            _context.RPTMappings.Add(new RPTMapping
+                            {
+                                TemplateId = template.TemplateId,
+                                MappingJson = fallbackMapping.MappingJson
+                            });
+                            await _context.SaveChangesAsync();
+                        }
+                    }
+                }
+            }
+
+            _loggerService.LogEvent($"Uploaded template '{template.TemplateName}' v{template.Version} (id={template.TemplateId})", "RPTTemplate", LogHelper.GetTriggeredBy(User), 0);
+            return Ok(new
+            {
+                template.TemplateId,
+                template.TemplateName,
+                template.Version,
+                template.RPTFilePath,
+                parsedFields = parsedFields,
+                parseError = parseError,
+                changeSummary = new
+                {
+                    fileIdentical,
+                    fieldsSame,
+                    likelyLayoutOnly
+                }
+            });
+        }
+
         // DELETE: api/RPTTemplates/{id}/soft-delete?scope=project|group|standard
         // Soft-deletes the template only within the specified scope.
         // scope=project  → marks deleted only for the project scope (ProjectId must be set on template)
@@ -498,7 +762,6 @@ namespace Tools.Controllers
 
             return Ok(new { message = $"Template removed from {effectiveScope} scope.", affectedVersions = items.Count });
         }
-
 
         // POST: api/RPTTemplates/{id}/activate
         // Marks a specific version as active for its scope (standard/group/project)
@@ -706,19 +969,120 @@ namespace Tools.Controllers
             if (!await _context.RPTTemplates.AnyAsync(t => t.TemplateId == id))
                 return NotFound("Template not found.");
 
+            if (req == null)
+                return BadRequest("Request body is required.");
+
+            var mappingJson = req.MappingJson;
+            var preferredSerialPrefix = await ResolvePreferredSerialPrefixForTemplate(id);
+            if (!string.IsNullOrWhiteSpace(preferredSerialPrefix) && !string.IsNullOrWhiteSpace(mappingJson))
+                mappingJson = NormalizeSerialSourcesInMappingJson(mappingJson, preferredSerialPrefix);
+
             var existing = await _context.RPTMappings.FirstOrDefaultAsync(m => m.TemplateId == id);
             if (existing != null)
             {
-                existing.MappingJson = req.MappingJson;
+                existing.MappingJson = mappingJson;
             }
             else
             {
-                _context.RPTMappings.Add(new RPTMapping { TemplateId = id, MappingJson = req.MappingJson });
+                _context.RPTMappings.Add(new RPTMapping { TemplateId = id, MappingJson = mappingJson });
             }
 
             await _context.SaveChangesAsync();
             _loggerService.LogEvent($"Saved mapping for templateId {id}", "RPTMapping", LogHelper.GetTriggeredBy(User), 0);
             return Ok(new { templateId = id, message = "Mapping saved." });
+        }
+
+        private async Task<string?> ResolvePreferredSerialPrefixForTemplate(int templateId)
+        {
+            var template = await _context.RPTTemplates.AsNoTracking().FirstOrDefaultAsync(t => t.TemplateId == templateId);
+            var moduleIds = template?.ModuleIds?.Where(x => x > 0).Distinct().ToList();
+            if (moduleIds == null || moduleIds.Count == 0) return null;
+
+            var moduleNames = await _context.Modules.AsNoTracking()
+                .Where(m => moduleIds.Contains(m.Id))
+                .Select(m => m.Name)
+                .ToListAsync();
+
+            var hasBoxBreaking = moduleNames.Any(IsBoxBreakingModuleName);
+            var hasEnvelopeBreaking = moduleNames.Any(IsEnvelopeBreakingModuleName);
+
+            if (hasBoxBreaking) return "b";
+            if (hasEnvelopeBreaking) return "e";
+            return null;
+        }
+
+        private static bool IsBoxBreakingModuleName(string? name)
+        {
+            if (string.IsNullOrWhiteSpace(name)) return false;
+            var n = name.Trim();
+            return n.IndexOf("box", StringComparison.OrdinalIgnoreCase) >= 0
+                   && n.IndexOf("break", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private static bool IsEnvelopeBreakingModuleName(string? name)
+        {
+            if (string.IsNullOrWhiteSpace(name)) return false;
+            var n = name.Trim();
+            return n.IndexOf("envelop", StringComparison.OrdinalIgnoreCase) >= 0
+                   && n.IndexOf("break", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private static string NormalizeSerialSourcesInMappingJson(string mappingJson, string prefix)
+        {
+            if (string.IsNullOrWhiteSpace(mappingJson)) return mappingJson;
+            if (string.IsNullOrWhiteSpace(prefix)) return mappingJson;
+
+            var p = prefix.Trim().ToLowerInvariant();
+            if (p != "e" && p != "b") return mappingJson;
+
+            try
+            {
+                var node = JsonNode.Parse(mappingJson);
+                if (node is not JsonObject root) return mappingJson;
+                if (root["mappings"] is not JsonArray mappings) return mappingJson;
+
+                foreach (var item in mappings)
+                {
+                    if (item is not JsonObject obj) continue;
+                    var src = obj["source"]?.GetValue<string>();
+                    if (string.IsNullOrWhiteSpace(src)) continue;
+
+                    if (TryGetSerialFieldName(src, out var fieldName))
+                        obj["source"] = $"{p}.{fieldName}";
+                }
+
+                return root.ToJsonString(new JsonSerializerOptions { WriteIndented = false });
+            }
+            catch
+            {
+                return mappingJson;
+            }
+        }
+
+        private static bool TryGetSerialFieldName(string source, out string fieldName)
+        {
+            fieldName = null;
+            if (string.IsNullOrWhiteSpace(source)) return false;
+
+            var s = source.Trim();
+            if (s.StartsWith("calc:", StringComparison.OrdinalIgnoreCase)) return false;
+
+            var dot = s.IndexOf('.');
+            var field = dot >= 0 ? s.Substring(dot + 1).Trim() : s;
+
+            if (field.Equals("OmrSerial", StringComparison.OrdinalIgnoreCase))
+            {
+                fieldName = "OmrSerial";
+                return true;
+            }
+
+            if (field.Equals("BookletSerial", StringComparison.OrdinalIgnoreCase))
+            {
+                fieldName = "BookletSerial";
+                return true;
+            }
+
+            return false;
         }
 
         // POST: api/RPTTemplates/{id}/parse-fields
@@ -747,7 +1111,7 @@ namespace Tools.Controllers
             return Ok(new { templateId = id, parsedFields });
         }
 
-
+/*
         [HttpPost("upload")]
         public async Task<ActionResult> Upload(
             [FromForm] int? templateId,
@@ -978,7 +1342,7 @@ namespace Tools.Controllers
             {
                 return StatusCode(500, ex.Message);
             }
-        }
+        }*/
         //GET: api/RPTTemplates/5/download
         [HttpGet("{id}/download")]
         public async Task<ActionResult> Download(int id)

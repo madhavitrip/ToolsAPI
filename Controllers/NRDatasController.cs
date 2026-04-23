@@ -2202,7 +2202,6 @@ namespace Tools.Controllers
 
                     foreach (var row in matchingRows)
                     {
-
                         // Handle additional dynamic fields - store ALL fields in NRDatas as JSON
                         // (including Pages, ExamDate, ExamTime which are now also dynamic)
                         if (item.AdditionalFields != null && item.AdditionalFields.Any())
@@ -2307,6 +2306,7 @@ namespace Tools.Controllers
 
 
                                 row.NRDatas = System.Text.Json.JsonSerializer.Serialize(existingData);
+
                                 // Parse existing NRDatas JSON if it exists
                                 Dictionary<string, object> nrDatasDict;
                                 if (!string.IsNullOrWhiteSpace(row.NRDatas))
