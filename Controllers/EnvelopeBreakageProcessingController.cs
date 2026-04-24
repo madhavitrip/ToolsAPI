@@ -205,7 +205,7 @@ namespace Tools.Controllers
                         extraDict["TotalEnv"] = totalEnv;
                         extraDict["Env"] = $"{j}/{totalEnv}";
                         extraDict["NRQuantity"] = NrQuantity;
-                        extraDict["NodalCode"] = NodalCode;
+                        extraDict["NodalCode"] = extra.ExtraId == 1 ? NodalCode : "-";
                         extraDict["Route"] = extra.ExtraId==1 ? Route : "-";
                         extraDict["NodalSort"] = modifiedNodalSort;
                         extraDict["CenterSort"] = modifiedCenterSort;
