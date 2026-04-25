@@ -1,4 +1,4 @@
-using ERPToolsAPI.Data;
+﻿using ERPToolsAPI.Data;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.CodeAnalysis;
@@ -611,6 +611,8 @@ namespace Tools.Controllers
         [HttpPut("UpdateSingle/{id}")]
         public async Task<IActionResult> UpdateSingleNRData(int id, [FromBody] JsonElement inputData)
         {
+            using var transaction = await _context.Database.BeginTransactionAsync();
+
             try
             {
                 var existingRecord = await _context.NRDatas.FindAsync(id);
@@ -619,16 +621,23 @@ namespace Tools.Controllers
                     return NotFound($"NRData with ID {id} not found");
                 }
 
+                // 👉 Store OLD values BEFORE update
+                var oldCentreCode = existingRecord.CenterCode;
+                var oldLot = existingRecord.LotNo;
+                var oldSteps = existingRecord.Steps;
+                var oldExamDate = existingRecord.ExamDate;
                 var nRDataType = typeof(NRData);
-                var properties = nRDataType.GetProperties().ToDictionary(p => p.Name.ToLower(), p => p);
+                var properties = nRDataType.GetProperties()
+                    .ToDictionary(p => p.Name.ToLower(), p => p);
+
                 var extraData = new Dictionary<string, string>();
 
+                // 👉 Update fields dynamically
                 foreach (var prop in inputData.EnumerateObject())
                 {
                     string key = prop.Name.Replace(" ", "").ToLower();
                     string value = prop.Value.ToString();
 
-                    // Skip Id and ProjectId as they shouldn't be updated
                     if (key == "id" || key == "projectid")
                         continue;
 
@@ -637,6 +646,7 @@ namespace Tools.Controllers
                         try
                         {
                             var targetType = Nullable.GetUnderlyingType(propInfo.PropertyType) ?? propInfo.PropertyType;
+
                             object convertedValue = string.IsNullOrWhiteSpace(value)
                                 ? null
                                 : Convert.ChangeType(value, targetType);
@@ -654,21 +664,88 @@ namespace Tools.Controllers
                     }
                 }
 
-                // Update NRDatas JSON field if there are extra fields
+                // 👉 Update extra JSON fields
                 if (extraData.Any())
                 {
                     existingRecord.NRDatas = JsonSerializer.Serialize(extraData);
                 }
 
-                // Auto-calculate Day from ExamDate if provided
+                // 👉 Auto-calculate Day
                 if (!string.IsNullOrWhiteSpace(existingRecord.ExamDate) &&
                     DateTime.TryParse(existingRecord.ExamDate, out DateTime examDate))
                 {
                     existingRecord.Day = examDate.DayOfWeek.ToString();
                 }
 
-                await _context.SaveChangesAsync();
+                // =====================================================
+                // 🎯 BUSINESS LOGIC STARTS HERE
+                // =====================================================
 
+                // Default: set current record to Step 0
+                existingRecord.Steps = 0;
+
+                // 👉 1. CentreCode changed
+                if (oldCentreCode != existingRecord.CenterCode)
+                {
+                    // If it was already Step 4, keep it 4
+                    if (oldSteps == 4)
+                    {
+                        existingRecord.Steps = 4;
+                    }
+
+                    // Reset EnvelopeBreakingResultTable status
+                    await _context.EnvelopeBreakingResults
+                        .Where(x => x.NrDataId == existingRecord.Id)
+                        .ExecuteUpdateAsync(setters => setters
+                            .SetProperty(x => x.Status, 0)
+                        );
+                }
+
+                // 👉 2. Lot changed
+                if (oldLot != existingRecord.LotNo)
+                {
+                    // OLD LOT → Step 5 → 4
+                    if (oldLot!=0)
+                    {
+                        await _context.NRDatas
+                            .Where(x => x.LotNo == oldLot && x.Steps == 5)
+                            .ExecuteUpdateAsync(setters => setters
+                                .SetProperty(x => x.Steps, 4)
+                            );
+                    }
+
+                    // NEW LOT → Step 5 → 4
+                    if (existingRecord.LotNo!=0)
+                    {
+                        await _context.NRDatas
+                            .Where(x => x.LotNo == existingRecord.LotNo && x.Steps == 5)
+                            .ExecuteUpdateAsync(setters => setters
+                                .SetProperty(x => x.Steps, 4)
+                            );
+                    }
+                }
+                // 👉 3. ExamDate changed but Lot NOT changed
+                if (oldLot == existingRecord.LotNo &&
+                    oldExamDate != existingRecord.ExamDate)
+                {
+                    var projectConfig = await _context.ProjectConfigs
+                        .FirstOrDefaultAsync(x => x.ProjectId == existingRecord.ProjectId);
+
+                    if (projectConfig != null && projectConfig.SortingBoxReport != null)
+                    {
+                        int examDateFieldId = 6; // 👈 IMPORTANT: replace with actual ID
+
+                        if (projectConfig.SortingBoxReport.Contains(examDateFieldId))
+                        {
+                            existingRecord.Steps = 4;
+                        }
+                    }
+                }
+
+                await _context.SaveChangesAsync();
+                await transaction.CommitAsync();
+
+                // 👉 Logging
                 _loggerService.LogEvent(
                     $"Updated NRData with ID {id}",
                     "NRData",
@@ -676,21 +753,30 @@ namespace Tools.Controllers
                     existingRecord.ProjectId
                 );
 
-                return Ok(new { message = "Data updated successfully", data = existingRecord });
+                return Ok(new
+                {
+                    message = "Data updated successfully",
+                    data = existingRecord
+                });
             }
             catch (DbUpdateException dbEx)
             {
+                await transaction.RollbackAsync();
+
                 var error = dbEx.InnerException?.Message ?? dbEx.Message;
                 _loggerService.LogError("Database update error", error, nameof(NRDatasController));
+
                 return StatusCode(500, error);
             }
             catch (Exception ex)
             {
+                await transaction.RollbackAsync();
+
                 _loggerService.LogError("NRData update error", ex.ToString(), nameof(NRDatasController));
+
                 return StatusCode(500, ex.Message);
             }
         }
-
         // POST: api/NRDatas
         // To protect from overposting attacks, see https://go.microsoft.com/fwlink/?linkid=2123754
         [HttpPost]
@@ -708,16 +794,17 @@ namespace Tools.Controllers
                     .Where(x => x.ProjectId == projectId)
                     .ToListAsync();
 
-                // =============================
-                // ? GET CURRENT BATCH NUMBER
-                // =============================
-                int currentBatch = (await _context.NRDatas
-         .Where(x => x.ProjectId == projectId && x.UploadList != null)
-         .Select(x => x.UploadList)
-         .ToListAsync())
-     .SelectMany(x => x)
-     .DefaultIfEmpty(0)
-     .Max() + 1;
+                // ✅ FIX 1: Load full entities first (avoid EF translation error)
+                var existingNRDataList = await _context.NRDatas
+                    .Where(x => x.ProjectId == projectId)
+                    .ToListAsync();
+
+                // ✅ FIX 2: Safe batch calculation
+                int currentBatch = existingNRDataList
+                    .Where(x => x.UploadList != null)
+                    .SelectMany(x => x.UploadList ?? new List<int>())
+                    .DefaultIfEmpty(0)
+                    .Max() + 1;
 
                 var nrDatasToAdd = new List<NRData>();
                 var extraEnvelopesToAdd = new List<ExtraEnvelopes>();
@@ -746,9 +833,24 @@ namespace Tools.Controllers
                             {
                                 var targetType = Nullable.GetUnderlyingType(propInfo.PropertyType) ?? propInfo.PropertyType;
 
-                                object convertedValue = string.IsNullOrWhiteSpace(value)
-                                    ? null
-                                    : Convert.ChangeType(value, targetType);
+                                object convertedValue;
+
+                                // ✅ Custom handling for IsNep
+                                if (propInfo.Name.Equals("IsNep", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    if (value.Equals("nep", StringComparison.OrdinalIgnoreCase))
+                                        convertedValue = true;
+                                    else if (value.Equals("non-nep", StringComparison.OrdinalIgnoreCase))
+                                        convertedValue = false;
+                                    else
+                                        convertedValue = null; // or false depending on your requirement
+                                }
+                                else
+                                {
+                                    convertedValue = string.IsNullOrWhiteSpace(value)
+                                        ? null
+                                        : Convert.ChangeType(value, targetType);
+                                }
 
                                 propInfo.SetValue(nRData, convertedValue);
                             }
@@ -757,15 +859,9 @@ namespace Tools.Controllers
                                 throw new Exception($"Error converting '{prop.Name}' value '{value}'", e);
                             }
                         }
-                        else
-                        {
-                            extraData[prop.Name] = value;
-                        }
                     }
 
-                    // =============================
-                    // ? Day calculation
-                    // =============================
+                    // ✅ Day calculation
                     if (!string.IsNullOrWhiteSpace(nRData.ExamDate) &&
                         DateTime.TryParse(nRData.ExamDate, out DateTime examDate))
                     {
@@ -775,14 +871,13 @@ namespace Tools.Controllers
                     if (extraData.Any())
                         nRData.NRDatas = JsonSerializer.Serialize(extraData);
 
-                    // =============================
-                    // ? DUPLICATE CHECK
-                    // =============================
-                    var existingRecord = await _context.NRDatas.FirstOrDefaultAsync(x =>
+                    // ✅ FIX 3: Use in-memory duplicate check (no DB call inside loop)
+                    var existingRecord = existingNRDataList.FirstOrDefault(x =>
                         x.ProjectId == projectId &&
                         x.CatchNo == nRData.CatchNo &&
                         x.CenterCode == nRData.CenterCode &&
-                        x.ExamDate == nRData.ExamDate
+                        x.ExamDate == nRData.ExamDate &&
+                        x.Status == true
                     );
 
                     if (existingRecord != null)
@@ -790,7 +885,6 @@ namespace Tools.Controllers
                         if (existingRecord.UploadList == null)
                             existingRecord.UploadList = new List<int>();
 
-                        // ? Add current batch only if not already present
                         if (!existingRecord.UploadList.Contains(currentBatch))
                         {
                             existingRecord.UploadList.Add(currentBatch);
@@ -800,13 +894,10 @@ namespace Tools.Controllers
                     }
                     else
                     {
-                        // ? New record gets current batch
                         nRData.UploadList = new List<int> { currentBatch };
                     }
 
-                    // =============================
-                    // EXTRA CENTER LOGIC
-                    // =============================
+                    // ✅ Extra center logic
                     int? extraTypeId = nRData.CenterCode switch
                     {
                         "Nodal Extra" => 1,
@@ -818,6 +909,7 @@ namespace Tools.Controllers
                     if (extraTypeId.HasValue)
                     {
                         var config = extraConfigs.FirstOrDefault(x => x.ExtraType == extraTypeId);
+
                         if (config != null)
                         {
                             EnvelopeType envelopeType = null;
@@ -2114,7 +2206,6 @@ namespace Tools.Controllers
                         {
                             try
                             {
-                               
                                 var modelProperties = typeof(NRData)
                                     .GetProperties()
                                     .Where(p => p.Name != nameof(NRData.NRDatas))
@@ -2183,9 +2274,38 @@ namespace Tools.Controllers
                                     }
                                 }
 
-                               
+
                                 Dictionary<string, object> existingData;
 
+                                if (!string.IsNullOrWhiteSpace(row.NRDatas))
+                                {
+                                    try
+                                    {
+                                        existingData = System.Text.Json.JsonSerializer
+                                            .Deserialize<Dictionary<string, object>>(row.NRDatas)
+                                            ?? new Dictionary<string, object>();
+                                    }
+                                    catch
+                                    {
+                                        existingData = new Dictionary<string, object>();
+                                    }
+                                }
+                                else
+                                {
+                                    existingData = new Dictionary<string, object>();
+                                }
+
+
+                                foreach (var kv in dynamicFields)
+                                {
+                                    existingData[kv.Key] = kv.Value;
+                                }
+
+
+                                row.NRDatas = System.Text.Json.JsonSerializer.Serialize(existingData);
+
+                                // Parse existing NRDatas JSON if it exists
+                                Dictionary<string, object> nrDatasDict;
                                 if (!string.IsNullOrWhiteSpace(row.NRDatas))
                                 {
                                     try
@@ -2242,7 +2362,7 @@ namespace Tools.Controllers
                 _loggerService.LogEvent(
                     $"Saved missing data for ProjectId {request.ProjectId}. Catches updated: {updatedCatchCount}, rows updated: {updatedRowCount}",
                     "NRData",
-                    LogHelper.GetTriggeredBy(User),
+                    User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
                     request.ProjectId);
 
                 return Ok(new
@@ -2561,7 +2681,7 @@ namespace Tools.Controllers
                 }
 
                 // ? REMOVE FILE DELETE if not needed
-                // (keeping it optional � you can remove this block if you want full soft behavior)
+                // (keeping it optional — you can remove this block if you want full soft behavior)
                 var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
                 if (Directory.Exists(reportPath))
                 {

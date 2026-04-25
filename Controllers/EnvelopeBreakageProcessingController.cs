@@ -43,7 +43,7 @@ namespace Tools.Controllers
                     .ToListAsync();
 
                 var nrData = await _context.NRDatas
-                    .Where(p => p.ProjectId == ProjectId && p.Status == true)
+                    .Where(p => p.ProjectId == ProjectId && p.Status == true && p.Steps==3)
                     .OrderBy(p => p.CatchNo)
                     .ThenBy(p => p.RouteSort)
                     .ThenBy(p => p.NodalSort)
@@ -206,7 +206,7 @@ namespace Tools.Controllers
                         extraDict["Env"] = $"{j}/{totalEnv}";
                         extraDict["NRQuantity"] = NrQuantity;
                         extraDict["NodalCode"] = NodalCode;
-                        extraDict["Route"] = extra.ExtraId==1 ? Route : "";
+                        extraDict["Route"] = extra.ExtraId==1 ? Route : "-";
                         extraDict["NodalSort"] = modifiedNodalSort;
                         extraDict["CenterSort"] = modifiedCenterSort;
                         extraDict["RouteSort"] = modifiedRouteSort;
@@ -655,7 +655,7 @@ namespace Tools.Controllers
                 _context.EnvelopeBreakingResults.AddRange(envelopeResults);
                 foreach (var nr in nrData)
                 {
-                    nr.Steps = 3; // Assuming NRData has a Step property
+                    nr.Steps = 4; // Assuming NRData has a Step property
                 }
                 await _context.SaveChangesAsync();
 
@@ -774,12 +774,11 @@ namespace Tools.Controllers
                     return NotFound("Project config not found");
 
                 var nrDataDict = await _context.NRDatas
-                    .Where(p => p.ProjectId == ProjectId)
+                    .Where(p => p.ProjectId == ProjectId && p.Steps==3 && p.Status == true)
                     .ToDictionaryAsync(p => p.Id);
 
-                // ✅ NEW: Catch-wise NR mapping (for MSS rows)
                 var nrDataByCatch = await _context.NRDatas
-                    .Where(p => p.ProjectId == ProjectId)
+                    .Where(p => p.ProjectId == ProjectId && p.Steps == 3 && p.Status == true)
                     .GroupBy(p => p.CatchNo)
                     .ToDictionaryAsync(g => g.Key, g => g.First());
 
@@ -791,6 +790,13 @@ namespace Tools.Controllers
                     .OrderBy(f => projectconfig.EnvelopeMakingCriteria.IndexOf(f.FieldId))
                     .Select(f => f.Name)
                     .ToList();
+
+                // ✅ UNIQUE FIELDS
+                var uniqueFieldNames = (await _context.Fields
+      .Where(f => f.IsUnique == true)
+      .Select(f => f.Name)
+      .ToListAsync())
+      .ToHashSet();
 
                 IQueryable<EnvelopeBreakingResult> query = _context.EnvelopeBreakingResults
                     .Where(r => r.ProjectId == ProjectId);
@@ -815,34 +821,47 @@ namespace Tools.Controllers
                     var rowDict = (IDictionary<string, object>)row;
 
                     bool isMssRow = result.NrDataId == 0 && result.SerialNumber == 0;
+                    bool isUniversityOrOfficeExtra = result.ExtraId == 2 || result.ExtraId == 3;
+
+                    // ✅ APPLY RULE HERE
+                    bool restrictToUniqueFields = isMssRow || isUniversityOrOfficeExtra;
+
                     rowDict["isMss"] = isMssRow;
 
-                    // ✅ FIXED NR MAPPING
                     NRData nr = null;
 
-                    // Normal rows
                     if (result.NrDataId != 0 && nrDataDict.TryGetValue(result.NrDataId, out var nrData))
                     {
                         nr = nrData;
                     }
-                    // MSS rows → fallback using CatchNo
                     else if (isMssRow && !string.IsNullOrEmpty(result.CatchNo) &&
                              nrDataByCatch.TryGetValue(result.CatchNo, out var catchNr))
                     {
                         nr = catchNr;
                     }
 
-                    // ✅ NR fields (now works for MSS too)
+                    // ✅ FILTERED NR FIELDS
                     if (nr != null)
                     {
-                        rowDict["SubjectName"] = nr.SubjectName;
-                        rowDict["Pages"] = nr.Pages;
-                        rowDict["Symbol"] = nr.Symbol;
-                        rowDict["Day"] = nr.Day;
-                        rowDict["NRQuantity"] = nr.NRQuantity;
+                        var nrDict = new Dictionary<string, object>
+                {
+                    { "SubjectName", nr.SubjectName },
+                    { "Pages", nr.Pages },
+                    { "Symbol", nr.Symbol },
+                    { "Day", nr.Day },
+                    { "NRQuantity", nr.NRQuantity }
+                };
+
+                        foreach (var kvp in nrDict)
+                        {
+                            if (!restrictToUniqueFields || uniqueFieldNames.Contains(kvp.Key))
+                            {
+                                rowDict[kvp.Key] = kvp.Value;
+                            }
+                        }
                     }
 
-                    // ✅ JSON dynamic fields
+                    // ✅ FILTERED JSON FIELDS
                     if (nr != null && !string.IsNullOrEmpty(nr.NRDatas))
                     {
                         try
@@ -852,14 +871,29 @@ namespace Tools.Controllers
                             {
                                 foreach (var kvp in extraFields)
                                 {
-                                    rowDict[kvp.Key] = kvp.Value;
+                                    if (!restrictToUniqueFields || uniqueFieldNames.Contains(kvp.Key))
+                                    {
+                                        rowDict[kvp.Key] = kvp.Value;
+                                    }
                                 }
                             }
                         }
                         catch { }
                     }
 
-                    // Envelope fields
+                    // ✅ Ensure all unique fields exist for restricted rows
+                    if (restrictToUniqueFields)
+                    {
+                        foreach (var field in uniqueFieldNames)
+                        {
+                            if (!rowDict.ContainsKey(field))
+                            {
+                                rowDict[field] = null;
+                            }
+                        }
+                    }
+
+                    // Envelope fields (ALWAYS included)
                     rowDict["SerialNo"] = result.SerialNumber;
                     rowDict["CatchNo"] = result.CatchNo ?? "";
                     rowDict["CenterCode"] = result.CenterCode ?? "";
@@ -883,7 +917,7 @@ namespace Tools.Controllers
                     fullData.Add(row);
                 }
 
-                // Separate MSS
+                // 🔽 REST OF YOUR CODE (UNCHANGED)
                 var nonMssData = fullData.Where(x =>
                 {
                     var d = (IDictionary<string, object>)x;
@@ -899,7 +933,6 @@ namespace Tools.Controllers
                     .GroupBy(x => ((IDictionary<string, object>)x)["CatchNo"]?.ToString())
                     .ToDictionary(g => g.Key, g => g.ToList());
 
-                // Sorting
                 IOrderedEnumerable<dynamic> ordered = null;
 
                 foreach (var fieldName in fieldNames)
@@ -940,7 +973,6 @@ namespace Tools.Controllers
 
                 var sortedNonMss = ordered?.ToList() ?? nonMssData;
 
-                // Reinsert MSS
                 string mssMode = projectconfig.MssAttached?.ToLower();
                 var finalSortedList = new List<dynamic>();
 
@@ -979,7 +1011,6 @@ namespace Tools.Controllers
                         finalSortedList.AddRange(mssRowsByCatch[lastCatch]);
                 }
 
-                // Columns
                 var allKeys = finalSortedList
                     .SelectMany(x => ((IDictionary<string, object>)x).Keys)
                     .Where(k => k != "isMss")
@@ -989,7 +1020,6 @@ namespace Tools.Controllers
                 if (!finalSortedList.Any() || !allKeys.Any())
                     return BadRequest("No data available to generate Excel.");
 
-                // Excel
                 var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
                 Directory.CreateDirectory(reportPath);
 

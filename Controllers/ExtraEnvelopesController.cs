@@ -160,7 +160,7 @@ namespace Tools.Controllers
             try
             {
                 var nrDataList = await _context.NRDatas
-                    .Where(d => d.ProjectId == ProjectId && d.Status == true && d.Steps==1)
+                    .Where(d => d.ProjectId == ProjectId && d.Status == true && d.Steps==2)
                     .ToListAsync();
                 // ? Get GroupId
                 var project = await _context.Projects
@@ -171,7 +171,7 @@ namespace Tools.Controllers
                 if (project == null)
                     return BadRequest("Project not found");
 
-                bool isOnlyReport = project.GroupId == 19;
+                bool isOnlyReport = project.GroupId == 28;
 
                 List<ExtraEnvelopes> envelopesToUse = new();
 
@@ -181,7 +181,7 @@ namespace Tools.Controllers
                 if (isOnlyReport)
                 {
                     envelopesToUse = await _context.ExtrasEnvelope
-                        .Where(e => e.ProjectId == ProjectId)
+                        .Where(e => e.ProjectId == ProjectId && e.Status == 1)
                         .ToListAsync();
 
                     if (!envelopesToUse.Any())
@@ -296,7 +296,7 @@ namespace Tools.Controllers
                     await _context.ExtrasEnvelope.AddRangeAsync(envelopesToAdd);
                     foreach (var nrData in nrDataList)
                     {
-                        nrData.Steps = 2; // Assuming NRData has a Step property
+                        nrData.Steps = 3; // Assuming NRData has a Step property
                     }
                     await _context.SaveChangesAsync();
 
@@ -330,7 +330,7 @@ namespace Tools.Controllers
                     var catchNos = nodalGroup.Select(x => x.CatchNo).ToHashSet();
 
                     var extras1 = envelopesToUse
-                        .Where(e => e.ExtraId == 1 && catchNos.Contains(e.CatchNo))
+                        .Where(e => e.ExtraId == 1 && e.Status == 1&& catchNos.Contains(e.CatchNo))
                         .ToList();
 
                     foreach (var extra in extras1)
@@ -347,7 +347,7 @@ namespace Tools.Controllers
 
                 foreach (var extraType in new[] { 2, 3 })
                 {
-                    var extras = envelopesToUse.Where(e => e.ExtraId == extraType).ToList();
+                    var extras = envelopesToUse.Where(e => e.ExtraId == extraType && e.Status == 1).ToList();
 
                     foreach (var extra in extras)
                     {
