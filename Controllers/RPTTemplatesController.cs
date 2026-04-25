@@ -1565,7 +1565,6 @@ namespace Tools.Controllers
                 .OrderBy(t => t.TemplateName)
                 .ToList();
 
-            await PopulateMappingStatus(resolved);
 
             return resolved;
         }
