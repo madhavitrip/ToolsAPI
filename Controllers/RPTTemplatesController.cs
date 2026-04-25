@@ -112,7 +112,7 @@ namespace Tools.Controllers
                     .Where(t => t.GroupId == groupId
                                 && t.TypeId == typeId
                                 && t.ProjectId == null
-                                && t.IsActive)
+                                && t.IsActive == true)
                     .OrderBy(t => t.TemplateName)
                     .ToListAsync();
 
@@ -126,7 +126,7 @@ namespace Tools.Controllers
                 .Where(t => t.GroupId == null
                             && t.ProjectId == null
                             && t.TypeId == typeId
-                            && t.IsActive)
+                            && t.IsActive == true)
                 .OrderBy(t => t.TemplateName)
                 .ToListAsync();
 
@@ -523,16 +523,21 @@ namespace Tools.Controllers
                 Console.WriteLine($"[RPTTemplates] Parse warning: {parseError}");
             }
             var parsedFieldsJson = parsedFields.Count > 0
-                ? System.Text.Json.JsonSerializer.Serialize(parsedFields)
+                ? System.Text.Json.JsonSerializer.Serialize(parsedFields, new System.Text.Json.JsonSerializerOptions { PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase })
+                : null;
+
+            var requiredFields = parsedFields.Where(f => f.IsRequired).Select(f => f.Name).ToList();
+            var requiredFieldsJson = requiredFields.Count > 0
+                ? System.Text.Json.JsonSerializer.Serialize(requiredFields)
                 : null;
 
             var previousActive = await scopeQuery
-                .Where(t => t.IsActive)
+                .Where(t => t.IsActive == true)
                 .OrderByDescending(t => t.Version)
                 .FirstOrDefaultAsync();
 
             // If the entire scope is soft-deleted, treat this upload as fresh — skip the identical-file check
-            var scopeIsDeleted = await scopeQuery.AllAsync(t => t.IsDeleted);
+            var scopeIsDeleted = await scopeQuery.AllAsync(t => t.IsDeleted == true);
 
             var newHash = ComputeFileHash(absolutePath);
             var previousHash = TryGetPreviousHash(previousActive, webRoot);
@@ -572,7 +577,7 @@ namespace Tools.Controllers
             }
 
             // Deactivate previous versions (never delete)
-            var previous = await scopeQuery.Where(t => t.IsActive).ToListAsync();
+            var previous = await scopeQuery.Where(t => t.IsActive == true).ToListAsync();
             previous.ForEach(t => t.IsActive = false);
 
             // If scope was soft-deleted, restore all versions (un-delete the scope)
@@ -594,6 +599,7 @@ namespace Tools.Controllers
                 TemplateName = templateName,
                 RPTFilePath  = relativePath,   // store relative path only
                 ParsedFieldsJson = parsedFieldsJson,
+                RequiredFieldsJson = requiredFieldsJson,
                 Version      = lastVersion + 1,
                 IsActive     = true,
                 CreatedDate  = DateTime.Now,
@@ -639,7 +645,7 @@ namespace Tools.Controllers
                                 && t.TemplateName == templateName
                                 && t.GroupId == groupId
                                 && t.ProjectId == null
-                                && t.IsActive)
+                                && t.IsActive == true)
                     .OrderByDescending(t => t.Version)
                     .FirstOrDefaultAsync();
 
@@ -650,7 +656,7 @@ namespace Tools.Controllers
                                     && t.TemplateName == templateName
                                     && t.GroupId == null
                                     && t.ProjectId == null
-                                    && t.IsActive)
+                                    && t.IsActive == true)
                         .OrderByDescending(t => t.Version)
                         .FirstOrDefaultAsync();
                 }
@@ -830,7 +836,7 @@ namespace Tools.Controllers
             if (sourceScope == "standard")
             {
                 var query = _context.RPTTemplates
-                    .Where(t => t.GroupId == null && t.ProjectId == null && t.IsActive);
+                    .Where(t => t.GroupId == null && t.ProjectId == null && t.IsActive == true);
                 if (sourceTypeId.HasValue)
                     query = query.Where(t => t.TypeId == sourceTypeId);
                 sourceTemplates = await query.ToListAsync();
@@ -861,7 +867,7 @@ namespace Tools.Controllers
                     return BadRequest("SourceGroupId is required for group imports.");
 
                 var groupQuery = _context.RPTTemplates
-                    .Where(t => t.GroupId == req.SourceGroupId && t.ProjectId == null && t.IsActive);
+                    .Where(t => t.GroupId == req.SourceGroupId && t.ProjectId == null && t.IsActive == true);
                 if (sourceTypeId.HasValue)
                     groupQuery = groupQuery.Where(t => t.TypeId == sourceTypeId);
 
@@ -871,7 +877,7 @@ namespace Tools.Controllers
                 if (req.IncludeStandard)
                 {
                     var standardQuery = _context.RPTTemplates
-                        .Where(t => t.GroupId == null && t.ProjectId == null && t.IsActive);
+                        .Where(t => t.GroupId == null && t.ProjectId == null && t.IsActive == true);
                     if (sourceTypeId.HasValue)
                         standardQuery = standardQuery.Where(t => t.TypeId == sourceTypeId);
 
@@ -901,7 +907,7 @@ namespace Tools.Controllers
                     .Where(t => t.GroupId == targetGroupId && t.TypeId == targetTypeId
                                 && t.TemplateName == src.TemplateName
                                 && t.ProjectId == (targetProjectId.HasValue ? targetProjectId : null)
-                                && t.IsActive)
+                                && t.IsActive == true)
                     .ToListAsync();
                 existing.ForEach(t => t.IsActive = false);
 
@@ -921,6 +927,7 @@ namespace Tools.Controllers
                     TemplateName = src.TemplateName,
                     RPTFilePath = src.RPTFilePath,   // reuse same file
                     ParsedFieldsJson = src.ParsedFieldsJson,
+                    RequiredFieldsJson = src.RequiredFieldsJson,
                     Version = lastVersion + 1,
                     IsActive = true,
                     CreatedDate = DateTime.Now,
@@ -1550,7 +1557,7 @@ namespace Tools.Controllers
         private async Task<List<RPTTemplate>> ResolveTemplatesForContext(int typeId, int groupId, int projectId)
         {
             var candidates = await _context.RPTTemplates
-                .Where(t => t.TypeId == typeId && t.IsActive &&
+                .Where(t => t.TypeId == typeId && t.IsActive == true &&
                             ((t.ProjectId == projectId && t.GroupId == groupId)
                              || (t.GroupId == groupId && t.ProjectId == null)
                              || (t.GroupId == null && t.ProjectId == null)))

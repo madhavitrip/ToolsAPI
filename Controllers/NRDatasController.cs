@@ -2142,220 +2142,188 @@ namespace Tools.Controllers
                 return StatusCode(500, "An error occurred while retrieving unique catch data.");
             }
         }
-
         [HttpPost("missing-data")]
         public async Task<ActionResult> SaveMissingData([FromBody] MissingDataSaveRequest request)
         {
             if (request == null || request.ProjectId <= 0)
-            {
                 return BadRequest("Valid projectId is required.");
-            }
 
             if (request.Data == null || !request.Data.Any())
-            {
                 return BadRequest("Missing data payload is required.");
-            }
 
             var effectiveRows = request.Data
                 .Where(x =>
                     HasMeaningfulText(x.CatchNo) &&
-                    (x.AdditionalFields != null && x.AdditionalFields.Any()))
+                    x.AdditionalFields != null &&
+                    x.AdditionalFields.Any())
                 .ToList();
 
-            if (effectiveRows.Count <= 0)
-            {
+            if (!effectiveRows.Any())
                 return BadRequest("At least one value is required to save.");
-            }
 
             try
             {
+                // ✅ Extract Ids (if available)
+                var ids = effectiveRows
+                    .Where(x => x.Id > 0)
+                    .Select(x => x.Id)
+                    .Distinct()
+                    .ToList();
+
+                // ✅ Extract CatchNos (fallback)
                 var catchNumbers = effectiveRows
+                    .Where(x => x.Id <= 0)
                     .Select(x => x.CatchNo!.Trim())
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .ToList();
 
+                // ✅ Fetch rows using BOTH (fast + fallback)
                 var projectRows = await _context.NRDatas
-                    .Where(x => x.ProjectId == request.ProjectId && x.CatchNo != null && catchNumbers.Contains(x.CatchNo))
+                    .Where(x =>
+                        x.ProjectId == request.ProjectId &&
+                        (
+                            (ids.Any() && ids.Contains(x.Id)) ||
+                            (x.CatchNo != null && catchNumbers.Contains(x.CatchNo))
+                        ))
                     .ToListAsync();
 
-                if (projectRows.Count <= 0)
-                {
-                    return NotFound("No matching NRData rows found for the provided catch numbers.");
-                }
+                if (!projectRows.Any())
+                    return NotFound("No matching NRData rows found.");
+
+                // ✅ Fast lookup maps
+                var rowById = projectRows.ToDictionary(x => x.Id);
+                var rowByCatch = projectRows
+                    .GroupBy(x => x.CatchNo!, StringComparer.OrdinalIgnoreCase)
+                    .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
+
+                // ✅ Cache properties ONCE
+                var modelProperties = typeof(NRData)
+                    .GetProperties()
+                    .Where(p => p.Name != nameof(NRData.NRDatas))
+                    .ToDictionary(p => p.Name.ToLower(), p => p);
 
                 int updatedCatchCount = 0;
                 int updatedRowCount = 0;
 
                 foreach (var item in effectiveRows)
                 {
-                    var trimmedCatchNo = item.CatchNo!.Trim();
-                    var matchingRows = projectRows
-                        .Where(x => string.Equals(x.CatchNo, trimmedCatchNo, StringComparison.OrdinalIgnoreCase))
-                        .ToList();
+                    List<NRData> matchingRows = new();
+
+                    // ✅ Prefer Id (fast)
+                    if (item.Id > 0 && rowById.TryGetValue(item.Id, out var rowByIdMatch))
+                    {
+                        matchingRows.Add(rowByIdMatch);
+                    }
+                    else
+                    {
+                        // ✅ fallback to CatchNo
+                        var trimmedCatchNo = item.CatchNo!.Trim();
+
+                        if (rowByCatch.TryGetValue(trimmedCatchNo, out var rows))
+                            matchingRows = rows;
+                    }
 
                     if (!matchingRows.Any())
-                    {
                         continue;
-                    }
 
                     updatedCatchCount++;
 
                     foreach (var row in matchingRows)
                     {
-                        if (item.AdditionalFields != null && item.AdditionalFields.Any())
+                        try
                         {
-                            try
+                            var dynamicFields = new Dictionary<string, object>();
+
+                            foreach (var field in item.AdditionalFields!)
                             {
-                                var modelProperties = typeof(NRData)
-                                    .GetProperties()
-                                    .Where(p => p.Name != nameof(NRData.NRDatas))
-                                    .ToDictionary(p => p.Name.ToLower(), p => p);
+                                var key = field.Key;
+                                var valueStr = field.Value?.ToString()?.Trim();
 
-                                
-                                var dynamicFields = new Dictionary<string, object>();
+                                if (string.IsNullOrWhiteSpace(valueStr))
+                                    continue;
 
-                               
-                                foreach (var field in item.AdditionalFields)
+                                var keyLower = key.ToLower();
+
+                                if (modelProperties.TryGetValue(keyLower, out var property))
                                 {
-                                    var key = field.Key;
-                                    var valueStr = field.Value?.ToString()?.Trim();
-
-                                    if (string.IsNullOrWhiteSpace(valueStr))
-                                        continue;
-
-                                    var keyLower = key.ToLower();
-
-                                    if (modelProperties.ContainsKey(keyLower))
+                                    try
                                     {
-                                        var property = modelProperties[keyLower];
+                                        object? convertedValue = null;
 
-                                        try
+                                        if (property.PropertyType == typeof(int) || property.PropertyType == typeof(int?))
                                         {
-                                            object? convertedValue = null;
-
-                                            if (property.PropertyType == typeof(int))
-                                            {
-                                                if (int.TryParse(valueStr, out int intVal))
-                                                    convertedValue = intVal;
-                                            }
-                                            else if (property.PropertyType == typeof(int?))
-                                            {
-                                                if (int.TryParse(valueStr, out int intVal))
-                                                    convertedValue = intVal;
-                                            }
-                                            else if (property.PropertyType == typeof(double))
-                                            {
-                                                if (double.TryParse(valueStr, out double dblVal))
-                                                    convertedValue = dblVal;
-                                            }
-                                            else if (property.PropertyType == typeof(bool))
-                                            {
-                                                if (bool.TryParse(valueStr, out bool boolVal))
-                                                    convertedValue = boolVal;
-                                            }
-                                            else
-                                            {
-                                                convertedValue = valueStr;
-                                            }
-
-                                            if (convertedValue != null)
-                                            {
-                                                property.SetValue(row, convertedValue);
-                                            }
+                                            if (int.TryParse(valueStr, out int intVal))
+                                                convertedValue = intVal;
                                         }
-                                        catch
+                                        else if (property.PropertyType == typeof(double))
                                         {
-                                            dynamicFields[key] = valueStr;
+                                            if (double.TryParse(valueStr, out double dblVal))
+                                                convertedValue = dblVal;
                                         }
+                                        else if (property.PropertyType == typeof(bool))
+                                        {
+                                            if (bool.TryParse(valueStr, out bool boolVal))
+                                                convertedValue = boolVal;
+                                        }
+                                        else
+                                        {
+                                            convertedValue = valueStr;
+                                        }
+
+                                        if (convertedValue != null)
+                                            property.SetValue(row, convertedValue);
                                     }
-                                    else
+                                    catch
                                     {
                                         dynamicFields[key] = valueStr;
                                     }
                                 }
-
-
-                                Dictionary<string, object> existingData;
-
-                                if (!string.IsNullOrWhiteSpace(row.NRDatas))
-                                {
-                                    try
-                                    {
-                                        existingData = System.Text.Json.JsonSerializer
-                                            .Deserialize<Dictionary<string, object>>(row.NRDatas)
-                                            ?? new Dictionary<string, object>();
-                                    }
-                                    catch
-                                    {
-                                        existingData = new Dictionary<string, object>();
-                                    }
-                                }
                                 else
                                 {
-                                    existingData = new Dictionary<string, object>();
+                                    dynamicFields[key] = valueStr;
                                 }
-
-
-                                foreach (var kv in dynamicFields)
-                                {
-                                    existingData[kv.Key] = kv.Value;
-                                }
-
-
-                                row.NRDatas = System.Text.Json.JsonSerializer.Serialize(existingData);
-
-                                // Parse existing NRDatas JSON if it exists
-                                Dictionary<string, object> nrDatasDict;
-                                if (!string.IsNullOrWhiteSpace(row.NRDatas))
-                                {
-                                    try
-                                    {
-                                        existingData = System.Text.Json.JsonSerializer
-                                            .Deserialize<Dictionary<string, object>>(row.NRDatas)
-                                            ?? new Dictionary<string, object>();
-                                    }
-                                    catch
-                                    {
-                                        existingData = new Dictionary<string, object>();
-                                    }
-                                }
-                                else
-                                {
-                                    existingData = new Dictionary<string, object>();
-                                }
-
-                              
-                                foreach (var kv in dynamicFields)
-                                {
-                                    existingData[kv.Key] = kv.Value;
-                                }
-
-                                
-                                row.NRDatas = System.Text.Json.JsonSerializer.Serialize(existingData);
-
-                                _loggerService.LogEvent(
-                                    $"Updated CatchNo {trimmedCatchNo} with fields: {string.Join(", ", item.AdditionalFields.Keys)}",
-                                    "NRData",
-                                    User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
-                                    request.ProjectId);
                             }
-                            catch (Exception ex)
+
+                            // ✅ JSON handled ONCE (removed duplicate block)
+                            Dictionary<string, object> existingData;
+
+                            if (!string.IsNullOrWhiteSpace(row.NRDatas))
                             {
-                                _loggerService.LogError(
-                                    $"Failed to update CatchNo {trimmedCatchNo}",
-                                    ex.Message,
-                                    nameof(NRDatasController));
+                                try
+                                {
+                                    existingData = System.Text.Json.JsonSerializer
+                                        .Deserialize<Dictionary<string, object>>(row.NRDatas)
+                                        ?? new Dictionary<string, object>();
+                                }
+                                catch
+                                {
+                                    existingData = new Dictionary<string, object>();
+                                }
                             }
-                        }
+                            else
+                            {
+                                existingData = new Dictionary<string, object>();
+                            }
 
-                        updatedRowCount++;
+                            foreach (var kv in dynamicFields)
+                                existingData[kv.Key] = kv.Value;
+
+                            row.NRDatas = System.Text.Json.JsonSerializer.Serialize(existingData);
+
+                            updatedRowCount++;
+                        }
+                        catch (Exception ex)
+                        {
+                            _loggerService.LogError(
+                                $"Failed to update CatchNo {item.CatchNo}",
+                                ex.Message,
+                                nameof(NRDatasController));
+                        }
                     }
                 }
 
                 if (updatedRowCount == 0)
-                {
                     return NotFound("No matching NRData rows found to update.");
-                }
 
                 await _context.SaveChangesAsync();
 
@@ -2378,6 +2346,241 @@ namespace Tools.Controllers
                 return StatusCode(500, "Internal Server Error");
             }
         }
+        //[HttpPost("missing-data")]
+        //public async Task<ActionResult> SaveMissingData([FromBody] MissingDataSaveRequest request)
+        //{
+        //    if (request == null || request.ProjectId <= 0)
+        //    {
+        //        return BadRequest("Valid projectId is required.");
+        //    }
+
+        //    if (request.Data == null || !request.Data.Any())
+        //    {
+        //        return BadRequest("Missing data payload is required.");
+        //    }
+
+        //    var effectiveRows = request.Data
+        //        .Where(x =>
+        //            HasMeaningfulText(x.CatchNo) &&
+        //            (x.AdditionalFields != null && x.AdditionalFields.Any()))
+        //        .ToList();
+
+        //    if (effectiveRows.Count <= 0)
+        //    {
+        //        return BadRequest("At least one value is required to save.");
+        //    }
+
+        //    try
+        //    {
+        //        var catchNumbers = effectiveRows
+        //            .Select(x => x.CatchNo!.Trim())
+        //            .Distinct(StringComparer.OrdinalIgnoreCase)
+        //            .ToList();
+
+        //        var projectRows = await _context.NRDatas
+        //            .Where(x => x.ProjectId == request.ProjectId && x.CatchNo != null && catchNumbers.Contains(x.CatchNo))
+        //            .ToListAsync();
+
+        //        if (projectRows.Count <= 0)
+        //        {
+        //            return NotFound("No matching NRData rows found for the provided catch numbers.");
+        //        }
+
+        //        int updatedCatchCount = 0;
+        //        int updatedRowCount = 0;
+
+        //        foreach (var item in effectiveRows)
+        //        {
+        //            var trimmedCatchNo = item.CatchNo!.Trim();
+        //            var matchingRows = projectRows
+        //                .Where(x => string.Equals(x.CatchNo, trimmedCatchNo, StringComparison.OrdinalIgnoreCase))
+        //                .ToList();
+
+        //            if (!matchingRows.Any())
+        //            {
+        //                continue;
+        //            }
+
+        //            updatedCatchCount++;
+
+        //            foreach (var row in matchingRows)
+        //            {
+        //                if (item.AdditionalFields != null && item.AdditionalFields.Any())
+        //                {
+        //                    try
+        //                    {
+        //                        var modelProperties = typeof(NRData)
+        //                            .GetProperties()
+        //                            .Where(p => p.Name != nameof(NRData.NRDatas))
+        //                            .ToDictionary(p => p.Name.ToLower(), p => p);
+
+
+        //                        var dynamicFields = new Dictionary<string, object>();
+
+
+        //                        foreach (var field in item.AdditionalFields)
+        //                        {
+        //                            var key = field.Key;
+        //                            var valueStr = field.Value?.ToString()?.Trim();
+
+        //                            if (string.IsNullOrWhiteSpace(valueStr))
+        //                                continue;
+
+        //                            var keyLower = key.ToLower();
+
+        //                            if (modelProperties.ContainsKey(keyLower))
+        //                            {
+        //                                var property = modelProperties[keyLower];
+
+        //                                try
+        //                                {
+        //                                    object? convertedValue = null;
+
+        //                                    if (property.PropertyType == typeof(int))
+        //                                    {
+        //                                        if (int.TryParse(valueStr, out int intVal))
+        //                                            convertedValue = intVal;
+        //                                    }
+        //                                    else if (property.PropertyType == typeof(int?))
+        //                                    {
+        //                                        if (int.TryParse(valueStr, out int intVal))
+        //                                            convertedValue = intVal;
+        //                                    }
+        //                                    else if (property.PropertyType == typeof(double))
+        //                                    {
+        //                                        if (double.TryParse(valueStr, out double dblVal))
+        //                                            convertedValue = dblVal;
+        //                                    }
+        //                                    else if (property.PropertyType == typeof(bool))
+        //                                    {
+        //                                        if (bool.TryParse(valueStr, out bool boolVal))
+        //                                            convertedValue = boolVal;
+        //                                    }
+        //                                    else
+        //                                    {
+        //                                        convertedValue = valueStr;
+        //                                    }
+
+        //                                    if (convertedValue != null)
+        //                                    {
+        //                                        property.SetValue(row, convertedValue);
+        //                                    }
+        //                                }
+        //                                catch
+        //                                {
+        //                                    dynamicFields[key] = valueStr;
+        //                                }
+        //                            }
+        //                            else
+        //                            {
+        //                                dynamicFields[key] = valueStr;
+        //                            }
+        //                        }
+
+
+        //                        Dictionary<string, object> existingData;
+
+        //                        if (!string.IsNullOrWhiteSpace(row.NRDatas))
+        //                        {
+        //                            try
+        //                            {
+        //                                existingData = System.Text.Json.JsonSerializer
+        //                                    .Deserialize<Dictionary<string, object>>(row.NRDatas)
+        //                                    ?? new Dictionary<string, object>();
+        //                            }
+        //                            catch
+        //                            {
+        //                                existingData = new Dictionary<string, object>();
+        //                            }
+        //                        }
+        //                        else
+        //                        {
+        //                            existingData = new Dictionary<string, object>();
+        //                        }
+
+
+        //                        foreach (var kv in dynamicFields)
+        //                        {
+        //                            existingData[kv.Key] = kv.Value;
+        //                        }
+
+
+        //                        row.NRDatas = System.Text.Json.JsonSerializer.Serialize(existingData);
+
+        //                        // Parse existing NRDatas JSON if it exists
+        //                        Dictionary<string, object> nrDatasDict;
+        //                        if (!string.IsNullOrWhiteSpace(row.NRDatas))
+        //                        {
+        //                            try
+        //                            {
+        //                                existingData = System.Text.Json.JsonSerializer
+        //                                    .Deserialize<Dictionary<string, object>>(row.NRDatas)
+        //                                    ?? new Dictionary<string, object>();
+        //                            }
+        //                            catch
+        //                            {
+        //                                existingData = new Dictionary<string, object>();
+        //                            }
+        //                        }
+        //                        else
+        //                        {
+        //                            existingData = new Dictionary<string, object>();
+        //                        }
+
+
+        //                        foreach (var kv in dynamicFields)
+        //                        {
+        //                            existingData[kv.Key] = kv.Value;
+        //                        }
+
+
+        //                        row.NRDatas = System.Text.Json.JsonSerializer.Serialize(existingData);
+
+        //                        _loggerService.LogEvent(
+        //                            $"Updated CatchNo {trimmedCatchNo} with fields: {string.Join(", ", item.AdditionalFields.Keys)}",
+        //                            "NRData",
+        //                            User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
+        //                            request.ProjectId);
+        //                    }
+        //                    catch (Exception ex)
+        //                    {
+        //                        _loggerService.LogError(
+        //                            $"Failed to update CatchNo {trimmedCatchNo}",
+        //                            ex.Message,
+        //                            nameof(NRDatasController));
+        //                    }
+        //                }
+
+        //                updatedRowCount++;
+        //            }
+        //        }
+
+        //        if (updatedRowCount == 0)
+        //        {
+        //            return NotFound("No matching NRData rows found to update.");
+        //        }
+
+        //        await _context.SaveChangesAsync();
+
+        //        _loggerService.LogEvent(
+        //            $"Saved missing data for ProjectId {request.ProjectId}. Catches updated: {updatedCatchCount}, rows updated: {updatedRowCount}",
+        //            "NRData",
+        //            User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
+        //            request.ProjectId);
+
+        //        return Ok(new
+        //        {
+        //            message = "Missing data saved successfully",
+        //            updatedCatchCount,
+        //            updatedRowCount
+        //        });
+        //    }
+        //    catch (Exception ex)
+        //    {
+        //        _loggerService.LogError("Error saving missing data", ex.Message, nameof(NRDatasController));
+        //        return StatusCode(500, "Internal Server Error");
+        //    }
+        //}
 
         public class ConflictActionDto
         {
@@ -2524,6 +2727,7 @@ namespace Tools.Controllers
 
         public class MissingDataItem
         {
+            public int Id { get; set; }
             public string? CatchNo { get; set; }
             public int? Pages { get; set; }
             public string? ExamDate { get; set; }

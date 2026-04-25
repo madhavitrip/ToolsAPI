@@ -24,8 +24,8 @@ namespace Tools.Models
         public int Version { get; set; }
         public DateTime CreatedDate { get; set; } = DateTime.Now;
         public DateTime UpdatedDate { get; set;} = DateTime.Now;
-        public bool IsActive { get; set; }
-        public bool IsDeleted { get; set; } = false;
+        public bool? IsActive { get; set; }
+        public bool? IsDeleted { get; set; } = false;
     }
 }
 
