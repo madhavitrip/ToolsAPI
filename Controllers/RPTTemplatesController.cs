@@ -102,6 +102,8 @@ namespace Tools.Controllers
                     .OrderBy(t => t.TemplateName)
                     .ToListAsync();
 
+                await PopulateMappingStatus(groupTemplates);
+
                 return Ok(groupTemplates);
             }
 
@@ -115,6 +117,8 @@ namespace Tools.Controllers
                             && t.IsActive)
                 .OrderBy(t => t.TemplateName)
                 .ToListAsync();
+
+            await PopulateMappingStatus(standardTemplates);
 
             return Ok(standardTemplates);
         }
@@ -157,6 +161,8 @@ namespace Tools.Controllers
             var versions = await query
                 .OrderByDescending(t => t.Version)
                 .ToListAsync();
+
+            await PopulateMappingStatus(versions);
 
             return Ok(versions);
         }
@@ -577,7 +583,7 @@ namespace Tools.Controllers
             return Ok(new
             {
                 templateId = id,
-                mapping = mapping?.MappingJson ?? null
+                mappingJson = mapping?.MappingJson ?? null
             });
         }
 
@@ -1334,7 +1340,26 @@ namespace Tools.Controllers
                 .OrderBy(t => t.TemplateName)
                 .ToList();
 
+            await PopulateMappingStatus(resolved);
+
             return resolved;
+        }
+
+        private async Task PopulateMappingStatus(List<RPTTemplate> templates)
+        {
+            if (templates == null || !templates.Any()) return;
+
+            var ids = templates.Select(t => t.TemplateId).Distinct().ToList();
+            var mappedIds = await _context.RPTMappings
+                .Where(m => ids.Contains(m.TemplateId))
+                .Select(m => m.TemplateId)
+                .Distinct()
+                .ToListAsync();
+
+            foreach (var t in templates)
+            {
+                t.hasMapping = mappedIds.Contains(t.TemplateId);
+            }
         }
 
         private int? GetLastActiveTemplateId(int groupId, int typeId)
