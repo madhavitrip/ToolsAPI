@@ -304,9 +304,11 @@ namespace Tools.Controllers
 
                 if (!nrDataList.Any())
                     return NotFound("No NRData found.");
+
                 var envelopeDict = JsonSerializer.Deserialize<Dictionary<string, string>>(envelopesJson);
                 if (envelopeDict == null)
                     return BadRequest("Invalid envelope JSON format.");
+
                 var innerSizes = envelopeDict["Inner"]
                     .Split(',', StringSplitOptions.RemoveEmptyEntries)
                     .Select(e => e.Trim().ToUpper().Replace("E", ""))
@@ -323,41 +325,37 @@ namespace Tools.Controllers
                     .OrderByDescending(x => x)
                     .ToList();
 
-                var env = await _context.EnvelopeBreakages.Where(p => p.ProjectId == ProjectId).ToListAsync();
-                if (env.Any()) // Check if any records were found
-                {
-                    // Determine the chunk size, adjust this based on your performance testing
-                    var chunkSize = 1000; // Change this as necessary
+                // 🔥 Delete old records
+                var env = await _context.EnvelopeBreakages
+                    .Where(p => p.ProjectId == ProjectId)
+                    .ToListAsync();
 
-                    // Loop through the list and remove in chunks
-                    for (int i = 0; i < env.Count; i += chunkSize)
-                    {
-                        var chunk = env.Skip(i).Take(chunkSize).ToList();  // Get a chunk of the list
-                        _context.EnvelopeBreakages.RemoveRange(chunk);  // Remove the chunk
-                        await _context.SaveChangesAsync();  // Save changes after each chunk
-                        _loggerService.LogEvent($"Deleted {chunk.Count} Envelope Breaking entries for ProjectID {ProjectId}", "EnvelopeBreakages",
-                            LogHelper.GetTriggeredBy(User), ProjectId);
-                    }
-
-                    _loggerService.LogEvent($"Successfully deleted all Envelope Breaking entries for ProjectID {ProjectId}", "EnvelopeBreakages",
-                        LogHelper.GetTriggeredBy(User), ProjectId);
-                }
-                else
+                if (env.Any())
                 {
-                    // Handle the case where no records were found
-                    Console.WriteLine("No breakages found for the specified project.");
+                    _context.EnvelopeBreakages.RemoveRange(env);
+                    await _context.SaveChangesAsync();
+
+                    _loggerService.LogEvent(
+                        $"Deleted all Envelope Breaking entries for ProjectID {ProjectId}",
+                        "EnvelopeBreakages",
+                        LogHelper.GetTriggeredBy(User),
+                        ProjectId);
                 }
+
                 var breakagesToAdd = new List<EnvelopeBreakage>();
 
                 foreach (var row in nrDataList)
                 {
                     int quantity = row.Quantity;
-                    int remaining = quantity;
 
+                    // ================= INNER =================
+                    int remaining = quantity;
                     Dictionary<string, string> innerBreakdown = new();
+
                     foreach (var size in innerSizes)
                     {
                         int count = remaining / size;
+
                         if (count > 0)
                         {
                             innerBreakdown[$"E{size}"] = count.ToString();
@@ -365,42 +363,46 @@ namespace Tools.Controllers
                         }
                     }
 
-                    remaining = quantity; // reset for outer
+                    // ================= OUTER =================
+                    remaining = quantity;
                     Dictionary<string, string> outerBreakdown = new();
                     int totalOuterCount = 0;
 
-                    // Check if inner and outer are same
+                    // Step 1: Greedy distribution
+                    foreach (var size in outerSizes)
+                    {
+                        int count = remaining / size;
+
+                        if (count > 0)
+                        {
+                            outerBreakdown[$"E{size}"] = count.ToString();
+                            totalOuterCount += count;
+                            remaining -= count * size;
+                        }
+                    }
+
+                    // Step 2: Handle leftover ONLY if inner != outer
                     bool sameEnvelopes = innerSizes.SequenceEqual(outerSizes);
 
-                    if (sameEnvelopes)
+                    if (remaining > 0 && !sameEnvelopes)
                     {
-                        // Use same logic as inner
-                        foreach (var size in outerSizes)
-                        {
-                            int count = remaining / size;
-                            if (count > 0)
-                            {
-                                outerBreakdown[$"E{size}"] = count.ToString();
-                                totalOuterCount += count;
-                                remaining -= count * size;
-                            }
-                        }
-                    }
-                    else
-                    {
-                        // Use original logic with rounding up
-                        foreach (var size in outerSizes)
-                        {
-                            int count = (int)Math.Ceiling((double)remaining / size);
-                            if (count > 0)
-                            {
-                                outerBreakdown[$"E{size}"] = count.ToString();
-                                totalOuterCount += count;
-                                remaining -= count * size;
-                            }
-                        }
-                    }
+                        int smallestSize = outerSizes.Last();
 
+                        int count = (int)Math.Ceiling((double)remaining / smallestSize);
+
+                        if (outerBreakdown.ContainsKey($"E{smallestSize}"))
+                        {
+                            outerBreakdown[$"E{smallestSize}"] =
+                                (int.Parse(outerBreakdown[$"E{smallestSize}"]) + count).ToString();
+                        }
+                        else
+                        {
+                            outerBreakdown[$"E{smallestSize}"] = count.ToString();
+                        }
+
+                        totalOuterCount += count;
+                        remaining = 0;
+                    }
 
                     var envelope = new EnvelopeBreakage
                     {
@@ -411,25 +413,28 @@ namespace Tools.Controllers
                         TotalEnvelope = totalOuterCount
                     };
 
-                    // ? Add to database
-
                     breakagesToAdd.Add(envelope);
-
                 }
 
                 if (breakagesToAdd.Any())
                 {
                     _context.EnvelopeBreakages.AddRange(breakagesToAdd);
                     await _context.SaveChangesAsync();
-                    _loggerService.LogEvent($"Created Envelope Breaking of ProjectID {ProjectId}", "EnvelopeBreakages", LogHelper.GetTriggeredBy(User), ProjectId);
+
+                    _loggerService.LogEvent(
+                        $"Created Envelope Breaking of ProjectID {ProjectId}",
+                        "EnvelopeBreakages",
+                        LogHelper.GetTriggeredBy(User),
+                        ProjectId);
                 }
 
-
+                // 🔗 API Call
                 using var client = new HttpClient();
                 var response = await client.PostAsync(
-     $"{_apiSettings.EnvelopeBreakageUrl}?ProjectId={ProjectId}&triggeredBy={LogHelper.GetTriggeredBy(User)}",
-     new StringContent("") // required
- );
+                    $"{_apiSettings.EnvelopeBreakageUrl}?ProjectId={ProjectId}&triggeredBy={LogHelper.GetTriggeredBy(User)}",
+                    new StringContent("")
+                );
+
                 if (!response.IsSuccessStatusCode)
                 {
                     var error = await response.Content.ReadAsStringAsync();
@@ -440,6 +445,7 @@ namespace Tools.Controllers
                     var data = await response.Content.ReadAsStringAsync();
                     Console.WriteLine($"API Success: {data}");
                 }
+
                 return Ok("Envelope breakdown report has been successfully created.");
             }
             catch (Exception ex)
