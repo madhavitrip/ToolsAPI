@@ -55,7 +55,7 @@ namespace Tools.Controllers
                     .ToListAsync();
 
                 var extras = await _context.ExtrasEnvelope
-                    .Where(p => p.ProjectId == ProjectId )
+                    .Where(p => p.ProjectId == ProjectId)
                     .ToListAsync();
 
                 var projectconfig = await _context.ProjectConfigs
@@ -92,6 +92,52 @@ namespace Tools.Controllers
                 var extrasconfig = await _context.ExtraConfigurations
                     .Where(p => p.ProjectId == ProjectId)
                     .ToListAsync();
+
+                // ✅ Load sorting field names EARLY so they're available inside helpers
+                var sortFields = await _context.Fields
+                    .Where(f => projectconfig.EnvelopeMakingCriteria.Contains(f.FieldId))
+                    .ToListAsync();
+
+                var sortingFieldNames = sortFields
+                    .OrderBy(f => projectconfig.EnvelopeMakingCriteria.IndexOf(f.FieldId))
+                    .Select(f => f.Name)
+                    .ToList();
+
+                // ✅ Build a lookup: CatchNo -> parsed NRDatas JSON dictionary
+                // This avoids re-parsing JSON on every row iteration
+                var nrDataJsonLookup = nrData.ToDictionary(
+                    nr => nr.Id,
+                    nr =>
+                    {
+                        if (string.IsNullOrWhiteSpace(nr.NRDatas)) return null;
+                        try { return JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(nr.NRDatas); }
+                        catch { return null; }
+                    }
+                );
+
+                // ✅ Helper: get a field value from parsed NRDatas JSON (case-insensitive)
+                string GetNrField(Dictionary<string, JsonElement> nrDynamic, string fieldName)
+                {
+                    if (nrDynamic == null) return "";
+                    var match = nrDynamic.FirstOrDefault(k =>
+                        k.Key.Equals(fieldName, StringComparison.OrdinalIgnoreCase));
+                    return match.Key != null ? (match.Value.GetString() ?? "") : "";
+                }
+
+                // ✅ Helper: fill any sorting fields missing from a row dict using NRDatas JSON
+                void FillDynamicFields(IDictionary<string, object> rowDict, int nrDataId)
+                {
+                    if (!nrDataJsonLookup.TryGetValue(nrDataId, out var nrDynamic) || nrDynamic == null)
+                        return;
+
+                    foreach (var fieldName in sortingFieldNames)
+                    {
+                        if (!rowDict.ContainsKey(fieldName))
+                        {
+                            rowDict[fieldName] = GetNrField(nrDynamic, fieldName);
+                        }
+                    }
+                }
 
                 // Helper: Create MSS rows for a given catch
                 List<dynamic> CreateMssRows(string catchNo, string examDate, string examTime, string courseName)
@@ -206,10 +252,13 @@ namespace Tools.Controllers
                         extraDict["Env"] = $"{j}/{totalEnv}";
                         extraDict["NRQuantity"] = NrQuantity;
                         extraDict["NodalCode"] = extra.ExtraId == 1 ? NodalCode : "-";
-                        extraDict["Route"] = extra.ExtraId==1 ? Route : "-";
+                        extraDict["Route"] = extra.ExtraId == 1 ? Route : "-";
                         extraDict["NodalSort"] = modifiedNodalSort;
                         extraDict["CenterSort"] = modifiedCenterSort;
                         extraDict["RouteSort"] = modifiedRouteSort;
+
+                        // ✅ Fill dynamic NRDatas fields for extra rows too
+                        FillDynamicFields(extraDict, nrDataId);
 
                         resultList.Add(extraRow);
                     }
@@ -347,6 +396,9 @@ namespace Tools.Controllers
                                 nrDict["NrDataId"] = current.Id;
                                 nrDict["ExtraId"] = (int?)null;
 
+                                // ✅ Fill any sorting fields from NRDatas JSON (e.g. Remark, PaperCode, etc.)
+                                FillDynamicFields(nrDict, current.Id);
+
                                 resultList.Add(nrRow);
 
                                 remainingQty -= envQty;
@@ -402,15 +454,7 @@ namespace Tools.Controllers
                     .MaxAsync(r => (int?)r.UploadBatch) ?? 0;
                 int currentBatch = maxBatch + 1;
 
-                // ✅ STEP 1: Sort only non-MSS rows
-                var sortFields = await _context.Fields
-                    .Where(f => projectconfig.EnvelopeMakingCriteria.Contains(f.FieldId))
-                    .ToListAsync();
-
-                var sortingFieldNames = sortFields
-                    .OrderBy(f => projectconfig.EnvelopeMakingCriteria.IndexOf(f.FieldId))
-                    .Select(f => f.Name)
-                    .ToList();
+                // sortFields and sortingFieldNames already loaded above ✅
 
                 var nonMssRows = resultList
                     .Where(r =>
@@ -448,7 +492,7 @@ namespace Tools.Controllers
 
                 var sortedNonMss = sortedResultList?.Cast<dynamic>().ToList() ?? nonMssRows;
 
-                // ✅ STEP 2: Re-insert MSS rows at correct positions after sorting
+                // STEP 2: Re-insert MSS rows at correct positions after sorting
                 var finalResultList = new List<dynamic>();
                 string lastCatchForMss = null;
                 var buffer = new List<dynamic>();
@@ -484,7 +528,6 @@ namespace Tools.Controllers
                         buffer.Clear();
                     }
 
-                    // Very first catch in start mode
                     if (mssMode == "start" && lastCatchForMss == null)
                     {
                         finalResultList.AddRange(CreateMssRows(
@@ -515,7 +558,7 @@ namespace Tools.Controllers
                     }
                 }
 
-                // ✅ STEP 3: Assign serials - skip MSS rows
+                // STEP 3: Assign serials
                 int bookletStart = projectconfig?.BookletSerialNumber ?? 0;
                 int omrStart = projectconfig.OmrSerialNumber;
                 bool assignBookletSerial = bookletStart > 0;
@@ -534,19 +577,13 @@ namespace Tools.Controllers
                     bool isExtra = (bool)dict["ExtraAttached"];
                     string catchNo = dict["CatchNo"]?.ToString();
 
-                    // Reset serials on catch change - but not triggered by MSS rows
                     if (!isMssRow && prevCatchForSerial != null && catchNo != prevCatchForSerial)
                     {
                         serial = 1;
-
-                        if (resetOmrSerialOnCatchChange)
-                            omrStart = projectconfig.OmrSerialNumber;
-
-                        if (resetBookletSerialOnCatchChange)
-                            bookletStart = projectconfig?.BookletSerialNumber ?? 0;
+                        if (resetOmrSerialOnCatchChange) omrStart = projectconfig.OmrSerialNumber;
+                        if (resetBookletSerialOnCatchChange) bookletStart = projectconfig?.BookletSerialNumber ?? 0;
                     }
 
-                    // MSS rows: save with blank serials, no serial increment
                     if (isMssRow)
                     {
                         envelopeResults.Add(new EnvelopeBreakingResult
@@ -574,7 +611,6 @@ namespace Tools.Controllers
                             CourseName = dict["CourseName"]?.ToString(),
                             UploadBatch = currentBatch,
                         });
-                        // Don't update prevCatchForSerial for MSS rows
                         continue;
                     }
 
@@ -654,9 +690,8 @@ namespace Tools.Controllers
 
                 _context.EnvelopeBreakingResults.AddRange(envelopeResults);
                 foreach (var nr in nrData)
-                {
-                    nr.Steps = 3; // Assuming NRData has a Step property
-                }
+                    nr.Steps = 3;
+
                 await _context.SaveChangesAsync();
 
                 _loggerService.LogEvent(
@@ -664,11 +699,11 @@ namespace Tools.Controllers
                     "EnvelopeBreakageProcessing",
                     triggeredBy,
                     ProjectId);
+
                 using var client = new HttpClient();
                 var response = await client.GetAsync($"{_apiSettings.EnvelopeBreaking}?ProjectId={ProjectId}");
                 if (!response.IsSuccessStatusCode)
                 {
-                    // Handle failure from GET call as needed
                     _loggerService.LogError("Failed to generate report", "", nameof(EnvelopeBreakageProcessingController));
                     return StatusCode((int)response.StatusCode, "Failed to get envelope breakages after configuration.");
                 }
