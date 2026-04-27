@@ -694,11 +694,11 @@ namespace Tools.Controllers
                     }
 
                     // Reset EnvelopeBreakingResultTable status
-                    await _context.EnvelopeBreakingResults
+                   /* await _context.EnvelopeBreakingResults
                         .Where(x => x.NrDataId == existingRecord.Id)
                         .ExecuteUpdateAsync(setters => setters
                             .SetProperty(x => x.Status, 0)
-                        );
+                        );*/
                 }
 
                 // 👉 2. Lot changed
@@ -2163,21 +2163,21 @@ namespace Tools.Controllers
 
             try
             {
-                // ✅ Extract Ids (if available)
+              
                 var ids = effectiveRows
                     .Where(x => x.Id > 0)
                     .Select(x => x.Id)
                     .Distinct()
                     .ToList();
 
-                // ✅ Extract CatchNos (fallback)
+               
                 var catchNumbers = effectiveRows
                     .Where(x => x.Id <= 0)
                     .Select(x => x.CatchNo!.Trim())
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .ToList();
 
-                // ✅ Fetch rows using BOTH (fast + fallback)
+              
                 var projectRows = await _context.NRDatas
                     .Where(x =>
                         x.ProjectId == request.ProjectId &&
@@ -2190,13 +2190,12 @@ namespace Tools.Controllers
                 if (!projectRows.Any())
                     return NotFound("No matching NRData rows found.");
 
-                // ✅ Fast lookup maps
+                
                 var rowById = projectRows.ToDictionary(x => x.Id);
                 var rowByCatch = projectRows
                     .GroupBy(x => x.CatchNo!, StringComparer.OrdinalIgnoreCase)
                     .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
 
-                // ✅ Cache properties ONCE
                 var modelProperties = typeof(NRData)
                     .GetProperties()
                     .Where(p => p.Name != nameof(NRData.NRDatas))
@@ -2209,14 +2208,14 @@ namespace Tools.Controllers
                 {
                     List<NRData> matchingRows = new();
 
-                    // ✅ Prefer Id (fast)
+                   
                     if (item.Id > 0 && rowById.TryGetValue(item.Id, out var rowByIdMatch))
                     {
                         matchingRows.Add(rowByIdMatch);
                     }
                     else
                     {
-                        // ✅ fallback to CatchNo
+                        
                         var trimmedCatchNo = item.CatchNo!.Trim();
 
                         if (rowByCatch.TryGetValue(trimmedCatchNo, out var rows))
@@ -2284,7 +2283,7 @@ namespace Tools.Controllers
                                 }
                             }
 
-                            // ✅ JSON handled ONCE (removed duplicate block)
+                            //  JSON handled ONCE (removed duplicate block)
                             Dictionary<string, object> existingData;
 
                             if (!string.IsNullOrWhiteSpace(row.NRDatas))

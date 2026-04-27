@@ -378,6 +378,18 @@ namespace Tools.Controllers
                 ["label"] = "Page Config"
             });
 
+            // Box label SP-computed fields
+            result.Add(new Dictionary<string, string>
+            {
+                ["value"] = "calc:BOX_TOTAL_QTY",
+                ["label"] = "Box Total Qty (Box Label)"
+            });
+            result.Add(new Dictionary<string, string>
+            {
+                ["value"] = "calc:CATCH_QTY",
+                ["label"] = "Catch Qty (Box Label)"
+            });
+
             // x.Inner � store as eb.<actualValue> so the mapping saves the real field reference
             // e.g. if Inner = "E10", value = "eb.E10", label = "E10"
             if (!string.IsNullOrWhiteSpace(innerEnvelopeValue)

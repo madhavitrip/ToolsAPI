@@ -22,7 +22,6 @@ namespace Tools.Models
         public string BookletSerial { get; set; }
         public int? InnerBundlingSerial { get; set; }
         public int Quantity { get; set; }       // Quantity for this box
-        public int Status { get; set; }
         // Metadata
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
         public int UploadBatch { get; set; }

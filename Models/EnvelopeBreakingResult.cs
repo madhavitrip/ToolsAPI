@@ -33,7 +33,6 @@ namespace Tools.Models
         public string? Route { get; set; }
         public int RouteSort { get; set; }
         public string? CourseName { get; set; }
-        public int Status { get; set; }
         // Metadata
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
         public int UploadBatch { get; set; }
