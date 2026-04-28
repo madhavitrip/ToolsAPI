@@ -9,7 +9,7 @@ namespace Tools.Models
         [DatabaseGenerated(DatabaseGeneratedOption.Identity)]
         public int Id { get; set; }
         public int ProjectId { get; set; }
-        public string? CourseName {  get; set; }
+        public string? CourseName { get; set; }
         public string? SubjectName { get; set; }
         public string? CenterCode { get; set; }
         public int Quantity { get; set; }
@@ -19,9 +19,9 @@ namespace Tools.Models
         public string? ExamTime { get; set; }
         public string? Day { get; set; }
         public string? NRDatas { get; set; }
-        public string ? NodalCode { get; set; }
+        public string? NodalCode { get; set; }
         public int Pages { get; set; }
-        public string? Route {  get; set; }
+        public string? Route { get; set; }
         public int RouteSort { get; set; }
         public double CenterSort { get; set; }
         public double NodalSort { get; set; }
@@ -31,5 +31,7 @@ namespace Tools.Models
         public int Steps { get; set; }
         public List<int> UploadList { get; set; } = new List<int>();
         public int LotNo { get; set; } = 0;
+        public string? District { get; set; }
+        public int DistrictSort { get; set; }
     }
 }
