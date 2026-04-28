@@ -29,6 +29,7 @@ namespace Tools.Controllers
         {
             try
             {
+                // Read EnvelopeBreakingResults from DB (latest batch)
                 var maxBatch = await _context.EnvelopeBreakingResults
                     .Where(r => r.ProjectId == ProjectId)
                     .MaxAsync(r => (int?)r.UploadBatch);
@@ -92,27 +93,23 @@ namespace Tools.Controllers
                     .Select(c => c.Capacity)
                     .FirstOrDefaultAsync();
 
-                // ==============================
-                // Read from EnvelopeBreakingResults and build data rows
-                // ==============================
-                var breakingReportData = new List<dynamic>();
-
-                // ✅ HELPER FUNCTION — placed here so fieldNames, dupNames, fields are all in scope
-                // Deserializes the NRDatas JSON column once per row and returns a lookup function
-                Dictionary<string, JsonElement> ParseNrDatas(string nrDatasJson)
-                {
-                    if (string.IsNullOrWhiteSpace(nrDatasJson)) return null;
-                    try
+                // ✅ Build NRDatas JSON lookup once
+                var nrDataJsonLookup = nrData.ToDictionary(
+                    nr => nr.Id,
+                    nr =>
                     {
-                        return JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(nrDatasJson);
+                        if (string.IsNullOrWhiteSpace(nr.NRDatas)) return null;
+                        try { return JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(nr.NRDatas); }
+                        catch { return null; }
                     }
-                    catch
-                    {
-                        return null;
-                    }
-                }
+                );
 
-                // ✅ Given a parsed NRDatas dictionary, get a field value by name (case-insensitive)
+                // ✅ Also build CatchNo -> NRData lookup for quick access
+                var nrDataByCatch = nrData
+                    .GroupBy(n => n.CatchNo)
+                    .ToDictionary(g => g.Key, g => g.First());
+
+                // ✅ Helper: get field value from NRDatas JSON (case-insensitive)
                 string GetNrField(Dictionary<string, JsonElement> nrDynamic, string fieldName)
                 {
                     if (nrDynamic == null) return "";
@@ -121,14 +118,33 @@ namespace Tools.Controllers
                     return match.Key != null ? (match.Value.GetString() ?? "") : "";
                 }
 
-                // ✅ All field names that might live in NRDatas JSON (union of sorting + dup + box criteria)
-                var boxFieldNames = fields.Select(f => f.Name).ToList();
+                // ✅ All field names that might come from NRDatas JSON
                 var allDynamicFieldNames = fieldNames
                     .Union(dupNames)
-                    .Union(boxFieldNames)
+                    .Union(fields.Select(f => f.Name))
                     .Union(innerBundlingFieldNames)
                     .Distinct()
                     .ToList();
+
+                // ✅ Helper: fill missing dynamic fields into row dict from NRDatas JSON
+                void FillDynamicFields(IDictionary<string, object> rowDict, string catchNo)
+                {
+                    if (!nrDataByCatch.TryGetValue(catchNo, out var nr)) return;
+                    if (!nrDataJsonLookup.TryGetValue(nr.Id, out var nrDynamic) || nrDynamic == null) return;
+
+                    foreach (var fieldName in allDynamicFieldNames)
+                    {
+                        if (!rowDict.ContainsKey(fieldName))
+                        {
+                            rowDict[fieldName] = GetNrField(nrDynamic, fieldName);
+                        }
+                    }
+                }
+
+                // ==============================
+                // Read from EnvelopeBreakingResults and build data rows
+                // ==============================
+                var breakingReportData = new List<dynamic>();
 
                 foreach (var result in envelopeResults)
                 {
@@ -151,11 +167,10 @@ namespace Tools.Controllers
                     rowDict["OmrSerial"] = result.OmrSerial;
                     rowDict["EnvelopeBreakingResultId"] = result.Id;
                     rowDict["NrDataId"] = result.NrDataId;
-
-                    var nrRow = nrData.FirstOrDefault(n => n.CatchNo == result.CatchNo);
-
-                    // ✅ Parse NRDatas JSON ONCE here for this row
-                    var nrDynamic = nrRow != null ? ParseNrDatas(nrRow.NRDatas) : null;
+                    rowDict["DistrictSort"] = result.DistrictSort;
+                    rowDict["District"] = result.District;
+                    // Get NRData for this catch
+                    var nrRow = nrDataByCatch.TryGetValue(result.CatchNo ?? "", out var nr) ? nr : null;
 
                     if (nrRow != null)
                     {
@@ -170,15 +185,8 @@ namespace Tools.Controllers
                         rowDict["NRQuantity"] = 0;
                     }
 
-                    // ✅ Fill in any missing fields (Remark, PaperCode, etc.) from NRDatas JSON
-                    // This covers sorting fields, duplicate fields, box criteria fields, inner bundling fields
-                    foreach (var fieldName in allDynamicFieldNames)
-                    {
-                        if (!rowDict.ContainsKey(fieldName))
-                        {
-                            rowDict[fieldName] = GetNrField(nrDynamic, fieldName);
-                        }
-                    }
+                    // ✅ Fill District Sort and any other dynamic fields from NRDatas JSON
+                    FillDynamicFields(rowDict, result.CatchNo ?? "");
 
                     breakingReportData.Add(row);
                 }
@@ -186,7 +194,7 @@ namespace Tools.Controllers
                 if (!breakingReportData.Any())
                     return NotFound("No data found in envelope breaking results");
 
-                // Step 1: Remove duplicates
+                // Step 1: Remove duplicates - keep first occurrence of each duplicate key
                 var uniqueRows = breakingReportData
                     .GroupBy(x =>
                     {
@@ -233,32 +241,22 @@ namespace Tools.Controllers
                     {
                         var dict = (IDictionary<string, object>)x;
                         if (!dict.ContainsKey(fieldName)) return null;
-
                         var val = dict[fieldName];
                         if (val == null) return null;
 
+                        // Explicitly defined with specific types
                         if (fieldName.Equals("NodalSort", StringComparison.OrdinalIgnoreCase))
-                        {
-                            if (double.TryParse(val.ToString(), out double nodalNum)) return nodalNum;
-                            return 0.0;
-                        }
-                        if (fieldName.Equals("CenterSort", StringComparison.OrdinalIgnoreCase))
-                        {
-                            if (int.TryParse(val.ToString(), out int centerNum)) return centerNum;
-                            return 0;
-                        }
-                        if (fieldName.Equals("RouteSort", StringComparison.OrdinalIgnoreCase))
-                        {
-                            if (int.TryParse(val.ToString(), out int routeNum)) return routeNum;
-                            return 0;
-                        }
+                            return double.TryParse(val.ToString(), out double n) ? (object)n : 0.0;
+
                         if (fieldName.Equals("ExamDate", StringComparison.OrdinalIgnoreCase))
-                        {
-                            if (DateTime.TryParseExact(val.ToString(), "dd-MM-yyyy",
+                            return DateTime.TryParseExact(val.ToString(), "dd-MM-yyyy",
                                 System.Globalization.CultureInfo.InvariantCulture,
-                                System.Globalization.DateTimeStyles.None, out DateTime parsedDate))
-                                return parsedDate;
-                        }
+                                System.Globalization.DateTimeStyles.None, out DateTime parsedDate)
+                                ? (object)parsedDate : DateTime.MinValue;
+
+                        // ✅ Any field containing "sort" → always int
+                        if (fieldName.Contains("sort", StringComparison.OrdinalIgnoreCase))
+                            return int.TryParse(val.ToString(), out int i) ? (object)i : 0;
 
                         return val.ToString().Trim().ToLowerInvariant();
                     };
@@ -304,7 +302,7 @@ namespace Tools.Controllers
                     var itemDict = (IDictionary<string, object>)item;
 
                     string catchNo = itemDict["CatchNo"]?.ToString();
-                    var nrRow = nrData.FirstOrDefault(n => n.CatchNo == catchNo);
+                    var nrRow = nrDataByCatch.TryGetValue(catchNo ?? "", out var nrMatch) ? nrMatch : null;
                     int pages = nrRow?.Pages ?? 0;
                     int totalPages = ((int)itemDict["Quantity"]) * pages;
                     string currentSymbol = resetOnSymbolChange ? (nrRow?.Symbol ?? "") : "";
@@ -328,10 +326,10 @@ namespace Tools.Controllers
                         prevMergeKey = null;
                     }
 
-                    if (previousCatchForOmr != itemDict["CatchNo"]?.ToString())
+                    if (previousCatchForOmr != catchNo)
                     {
                         runningOmrPointer = 0;
-                        previousCatchForOmr = itemDict["CatchNo"]?.ToString();
+                        previousCatchForOmr = catchNo;
 
                         if (hasOmr && omrSerial.Contains("-"))
                         {
@@ -397,7 +395,7 @@ namespace Tools.Controllers
                                     .Where(b =>
                                     {
                                         var dict = (IDictionary<string, object>)b;
-                                        return dict["CatchNo"]?.ToString() == itemDict["CatchNo"]?.ToString();
+                                        return dict["CatchNo"]?.ToString() == catchNo;
                                     })
                                     .OrderBy(b =>
                                     {
@@ -549,7 +547,8 @@ namespace Tools.Controllers
                         normalBoxItemDict["InnerBundlingSerial"] = currentInnerBundlingSerial;
                         normalBoxItemDict["CourseName"] = currentCourseName;
                         normalBoxItemDict["EnvelopeBreakingResultId"] = itemDict["EnvelopeBreakingResultId"];
-
+                        normalBoxItemDict["District"] = itemDict["District"];
+                        normalBoxItemDict["DistrictSort"] = itemDict["DistrictSort"];
                         finalWithBoxes.Add(normalBoxItem);
 
                         prevMergeKey = mergeKey;
@@ -568,7 +567,6 @@ namespace Tools.Controllers
                 int currentBatch = maxBoxBatch + 1;
 
                 var boxResults = new List<BoxBreakingResult>();
-                int serialNumber = 1;
 
                 foreach (var item in finalWithBoxes)
                 {
@@ -685,7 +683,7 @@ namespace Tools.Controllers
         {
             "SerialNo","CatchNo","CenterCode","CenterSort","ExamTime","ExamDate","Quantity",
             "NodalCode","NodalSort","Route","RouteSort","TotalEnv","Start","End",
-            "Serial","Pages","TotalPages","BoxNo","Beejak"
+            "Serial","Pages","TotalPages","BoxNo","District","DistrictSort","Beejak"
         };
 
                 if (resetOnSymbolChange) { headers.Add("Symbol"); headers.Add("CourseName"); }
@@ -757,7 +755,8 @@ namespace Tools.Controllers
                         ws.Cells[row, col++].Value = nrRow?.Pages ?? 0;
                         ws.Cells[row, col++].Value = result.TotalPages;
                         ws.Cells[row, col++].Value = result.BoxNo;
-
+                        ws.Cells[row, col++].Value = env.District;
+                        ws.Cells[row, col++].Value = env.DistrictSort;
                         // ✅ Beejak: first time a box+center combo appears
                         string beejakKey = $"{result.BoxNo}_{env.CenterCode}";
                         ws.Cells[row, col++].Value = processedBoxCenters.Add(beejakKey) ? "Beejak" : "";
