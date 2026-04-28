@@ -593,7 +593,10 @@ namespace Tools.Controllers
 
                 _context.BoxBreakingResults.AddRange(boxResults);
                 foreach (var nr in nrData)
-                    nr.Steps = 4;
+                {
+                    nr.Steps = 5; // Assuming NRData has a Step property
+                }
+
 
                 await _context.SaveChangesAsync();
 
@@ -668,9 +671,6 @@ namespace Tools.Controllers
                 if (!boxResults.Any())
                     return NotFound($"No box breaking results found for Lot {LotNo}");
 
-                // ✅ Get only envelope results for this lot's catches
-             
-
                 var projectconfig = await _context.ProjectConfigs
                     .FirstOrDefaultAsync(p => p.ProjectId == ProjectId);
 
@@ -709,6 +709,7 @@ namespace Tools.Controllers
                 headers.AddRange(jsonKeys);
 
                 var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
+
                 if (!Directory.Exists(reportPath)) Directory.CreateDirectory(reportPath);
 
                 // ✅ One file per lot

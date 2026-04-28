@@ -33,5 +33,6 @@ namespace Tools.Models
         public int LotNo { get; set; } = 0;
         public string District { get; set; }
         public int DistrictSort { get; set; }
+
     }
 }

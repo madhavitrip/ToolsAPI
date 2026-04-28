@@ -35,7 +35,7 @@ namespace Tools.Controllers
             {
                 Console.WriteLine("inside");
                 var data = await _context.NRDatas
-                    .Where(p => p.ProjectId == ProjectId && p.Status == true)
+                    .Where(p => p.ProjectId == ProjectId && p.Status == true && p.Steps==0)
                     .ToListAsync();
                 Console.WriteLine(data.Count.ToString());
                 var projectconfig = await _context.ProjectConfigs
@@ -306,7 +306,7 @@ SET Quantity = IFNULL(Quantity, 0),
 WHERE ProjectId = {0};", ProjectId);
 
                 var data = await _context.NRDatas
-                    .Where(p => p.ProjectId == ProjectId && p.Status==true)
+                    .Where(p => p.ProjectId == ProjectId && p.Status==true && p.Steps==1)
                     .ToListAsync();
 
                 if (!data.Any())
@@ -394,7 +394,10 @@ WHERE ProjectId = {0};", ProjectId);
                     }
                 }
 
-              
+              foreach (var d in data)
+                {
+                    d.Steps = 2;
+                }
 
                 await _context.SaveChangesAsync();
                 var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());

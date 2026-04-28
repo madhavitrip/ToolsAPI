@@ -608,9 +608,11 @@ namespace Tools.Controllers
         }
 
         // PUT: api/NRDatas/UpdateSingle/{id}
-        [HttpPut("UpdateSingle/{id}")]
+     /*   [HttpPut("UpdateSingle/{id}")]
         public async Task<IActionResult> UpdateSingleNRData(int id, [FromBody] JsonElement inputData)
         {
+            using var transaction = await _context.Database.BeginTransactionAsync();
+
             try
             {
                 var existingRecord = await _context.NRDatas.FindAsync(id);
@@ -619,16 +621,23 @@ namespace Tools.Controllers
                     return NotFound($"NRData with ID {id} not found");
                 }
 
+                // 👉 Store OLD values BEFORE update
+                var oldCentreCode = existingRecord.CenterCode;
+                var oldLot = existingRecord.LotNo;
+                var oldSteps = existingRecord.Steps;
+                var oldExamDate = existingRecord.ExamDate;
                 var nRDataType = typeof(NRData);
-                var properties = nRDataType.GetProperties().ToDictionary(p => p.Name.ToLower(), p => p);
+                var properties = nRDataType.GetProperties()
+                    .ToDictionary(p => p.Name.ToLower(), p => p);
+
                 var extraData = new Dictionary<string, string>();
 
+                // 👉 Update fields dynamically
                 foreach (var prop in inputData.EnumerateObject())
                 {
                     string key = prop.Name.Replace(" ", "").ToLower();
                     string value = prop.Value.ToString();
 
-                    // Skip Id and ProjectId as they shouldn't be updated
                     if (key == "id" || key == "projectid")
                         continue;
 
@@ -637,6 +646,7 @@ namespace Tools.Controllers
                         try
                         {
                             var targetType = Nullable.GetUnderlyingType(propInfo.PropertyType) ?? propInfo.PropertyType;
+
                             object convertedValue = string.IsNullOrWhiteSpace(value)
                                 ? null
                                 : Convert.ChangeType(value, targetType);
@@ -654,21 +664,88 @@ namespace Tools.Controllers
                     }
                 }
 
-                // Update NRDatas JSON field if there are extra fields
+                // 👉 Update extra JSON fields
                 if (extraData.Any())
                 {
                     existingRecord.NRDatas = JsonSerializer.Serialize(extraData);
                 }
 
-                // Auto-calculate Day from ExamDate if provided
+                // 👉 Auto-calculate Day
                 if (!string.IsNullOrWhiteSpace(existingRecord.ExamDate) &&
                     DateTime.TryParse(existingRecord.ExamDate, out DateTime examDate))
                 {
                     existingRecord.Day = examDate.DayOfWeek.ToString();
                 }
 
-                await _context.SaveChangesAsync();
+                // =====================================================
+                // 🎯 BUSINESS LOGIC STARTS HERE
+                // =====================================================
 
+                // Default: set current record to Step 0
+                existingRecord.Steps = 0;
+
+                // 👉 1. CentreCode changed
+                if (oldCentreCode != existingRecord.CenterCode)
+                {
+                    // If it was already Step 4, keep it 4
+                    if (oldSteps == 4)
+                    {
+                        existingRecord.Steps = 4;
+                    }
+
+                    // Reset EnvelopeBreakingResultTable status
+                    await _context.EnvelopeBreakingResults
+                        .Where(x => x.NrDataId == existingRecord.Id)
+                        .ExecuteUpdateAsync(setters => setters
+                            .SetProperty(x => x.Status, 0)
+                        );
+                }
+
+                // 👉 2. Lot changed
+                if (oldLot != existingRecord.LotNo)
+                {
+                    // OLD LOT → Step 5 → 4
+                    if (oldLot!=0)
+                    {
+                        await _context.NRDatas
+                            .Where(x => x.LotNo == oldLot && x.Steps == 5)
+                            .ExecuteUpdateAsync(setters => setters
+                                .SetProperty(x => x.Steps, 4)
+                            );
+                    }
+
+                    // NEW LOT → Step 5 → 4
+                    if (existingRecord.LotNo!=0)
+                    {
+                        await _context.NRDatas
+                            .Where(x => x.LotNo == existingRecord.LotNo && x.Steps == 5)
+                            .ExecuteUpdateAsync(setters => setters
+                                .SetProperty(x => x.Steps, 4)
+                            );
+                    }
+                }
+                // 👉 3. ExamDate changed but Lot NOT changed
+                if (oldLot == existingRecord.LotNo &&
+                    oldExamDate != existingRecord.ExamDate)
+                {
+                    var projectConfig = await _context.ProjectConfigs
+                        .FirstOrDefaultAsync(x => x.ProjectId == existingRecord.ProjectId);
+
+                    if (projectConfig != null && projectConfig.SortingBoxReport != null)
+                    {
+                        int examDateFieldId = 6; // 👈 IMPORTANT: replace with actual ID
+
+                        if (projectConfig.SortingBoxReport.Contains(examDateFieldId))
+                        {
+                            existingRecord.Steps = 4;
+                        }
+                    }
+                }
+
+                await _context.SaveChangesAsync();
+                await transaction.CommitAsync();
+
+                // 👉 Logging
                 _loggerService.LogEvent(
                     $"Updated NRData with ID {id}",
                     "NRData",
@@ -676,21 +753,30 @@ namespace Tools.Controllers
                     existingRecord.ProjectId
                 );
 
-                return Ok(new { message = "Data updated successfully", data = existingRecord });
+                return Ok(new
+                {
+                    message = "Data updated successfully",
+                    data = existingRecord
+                });
             }
             catch (DbUpdateException dbEx)
             {
+                await transaction.RollbackAsync();
+
                 var error = dbEx.InnerException?.Message ?? dbEx.Message;
                 _loggerService.LogError("Database update error", error, nameof(NRDatasController));
+
                 return StatusCode(500, error);
             }
             catch (Exception ex)
             {
+                await transaction.RollbackAsync();
+
                 _loggerService.LogError("NRData update error", ex.ToString(), nameof(NRDatasController));
+
                 return StatusCode(500, ex.Message);
             }
-        }
-
+        }*/
         // POST: api/NRDatas
         // To protect from overposting attacks, see https://go.microsoft.com/fwlink/?linkid=2123754
         [HttpPost]
@@ -747,9 +833,24 @@ namespace Tools.Controllers
                             {
                                 var targetType = Nullable.GetUnderlyingType(propInfo.PropertyType) ?? propInfo.PropertyType;
 
-                                object convertedValue = string.IsNullOrWhiteSpace(value)
-                                    ? null
-                                    : Convert.ChangeType(value, targetType);
+                                object convertedValue;
+
+                                // ✅ Custom handling for IsNep
+                                if (propInfo.Name.Equals("IsNep", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    if (value.Equals("nep", StringComparison.OrdinalIgnoreCase))
+                                        convertedValue = true;
+                                    else if (value.Equals("non-nep", StringComparison.OrdinalIgnoreCase))
+                                        convertedValue = false;
+                                    else
+                                        convertedValue = null; // or false depending on your requirement
+                                }
+                                else
+                                {
+                                    convertedValue = string.IsNullOrWhiteSpace(value)
+                                        ? null
+                                        : Convert.ChangeType(value, targetType);
+                                }
 
                                 propInfo.SetValue(nRData, convertedValue);
                             }
@@ -757,10 +858,6 @@ namespace Tools.Controllers
                             {
                                 throw new Exception($"Error converting '{prop.Name}' value '{value}'", e);
                             }
-                        }
-                        else
-                        {
-                            extraData[prop.Name] = value;
                         }
                     }
 
@@ -2111,6 +2208,105 @@ namespace Tools.Controllers
                         {
                             try
                             {
+
+                                var modelProperties = typeof(NRData)
+                                    .GetProperties()
+                                    .Where(p => p.Name != nameof(NRData.NRDatas))
+                                    .ToDictionary(p => p.Name.ToLower(), p => p);
+
+
+                                var dynamicFields = new Dictionary<string, object>();
+
+
+                                foreach (var field in item.AdditionalFields)
+                                {
+                                    var key = field.Key;
+                                    var valueStr = field.Value?.ToString()?.Trim();
+
+                                    if (string.IsNullOrWhiteSpace(valueStr))
+                                        continue;
+
+                                    var keyLower = key.ToLower();
+
+                                    if (modelProperties.ContainsKey(keyLower))
+                                    {
+                                        var property = modelProperties[keyLower];
+
+                                        try
+                                        {
+                                            object? convertedValue = null;
+
+                                            if (property.PropertyType == typeof(int))
+                                            {
+                                                if (int.TryParse(valueStr, out int intVal))
+                                                    convertedValue = intVal;
+                                            }
+                                            else if (property.PropertyType == typeof(int?))
+                                            {
+                                                if (int.TryParse(valueStr, out int intVal))
+                                                    convertedValue = intVal;
+                                            }
+                                            else if (property.PropertyType == typeof(double))
+                                            {
+                                                if (double.TryParse(valueStr, out double dblVal))
+                                                    convertedValue = dblVal;
+                                            }
+                                            else if (property.PropertyType == typeof(bool))
+                                            {
+                                                if (bool.TryParse(valueStr, out bool boolVal))
+                                                    convertedValue = boolVal;
+                                            }
+                                            else
+                                            {
+                                                convertedValue = valueStr;
+                                            }
+
+                                            if (convertedValue != null)
+                                            {
+                                                property.SetValue(row, convertedValue);
+                                            }
+                                        }
+                                        catch
+                                        {
+                                            dynamicFields[key] = valueStr;
+                                        }
+                                    }
+                                    else
+                                    {
+                                        dynamicFields[key] = valueStr;
+                                    }
+                                }
+
+
+                                Dictionary<string, object> existingData;
+
+                                if (!string.IsNullOrWhiteSpace(row.NRDatas))
+                                {
+                                    try
+                                    {
+                                        existingData = System.Text.Json.JsonSerializer
+                                            .Deserialize<Dictionary<string, object>>(row.NRDatas)
+                                            ?? new Dictionary<string, object>();
+                                    }
+                                    catch
+                                    {
+                                        existingData = new Dictionary<string, object>();
+                                    }
+                                }
+                                else
+                                {
+                                    existingData = new Dictionary<string, object>();
+                                }
+
+
+                                foreach (var kv in dynamicFields)
+                                {
+                                    existingData[kv.Key] = kv.Value;
+                                }
+
+
+                                row.NRDatas = System.Text.Json.JsonSerializer.Serialize(existingData);
+
                                 // Parse existing NRDatas JSON if it exists
                                 Dictionary<string, object> nrDatasDict;
                                 if (!string.IsNullOrWhiteSpace(row.NRDatas))
