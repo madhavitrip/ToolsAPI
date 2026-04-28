@@ -19,7 +19,7 @@ namespace Tools.Models
         public int CenterEnv { get; set; }
         public int TotalEnv { get; set; }
         public string? Env { get; set; }         // "1/2", "2/2"
-        public int SerialNumber { get; set; } 
+        public int SerialNumber { get; set; }
         public string? BookletSerial { get; set; }
         public string? OmrSerial { get; set; }
         // All fields needed for sorting in both EnvelopeBreakage and BoxBreaking
@@ -33,9 +33,8 @@ namespace Tools.Models
         public string? Route { get; set; }
         public int RouteSort { get; set; }
         public string? CourseName { get; set; }
-        public string District { get; set; }
+        public string? District { get; set; }
         public int DistrictSort { get; set; }
-        // Metadata
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
         public int UploadBatch { get; set; }
     }
