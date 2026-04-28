@@ -271,6 +271,9 @@ namespace Tools.Controllers
                         // ✅ Fill dynamic NRDatas fields for extra rows too
                         FillDynamicFields(extraDict, nrDataId);
 
+                        // ✅ Fill dynamic NRDatas fields for extra rows too
+                        FillDynamicFields(extraDict, nrDataId);
+
                         resultList.Add(extraRow);
                     }
                 }
@@ -722,6 +725,7 @@ namespace Tools.Controllers
                 {
                     nr.Steps = 4; // Assuming NRData has a Step property
                 }
+
                 await _context.SaveChangesAsync();
 
                 _loggerService.LogEvent(
