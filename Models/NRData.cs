@@ -31,6 +31,8 @@ namespace Tools.Models
         public int Steps { get; set; }
         public List<int> UploadList { get; set; } = new List<int>();
         public int LotNo { get; set; } = 0;
+        public string District { get; set; }
+        public int DistrictSort { get; set; }
 
     }
 }

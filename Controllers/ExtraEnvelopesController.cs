@@ -324,7 +324,7 @@ namespace Tools.Controllers
                 var outerKeys = new HashSet<string>();
 
                 var allRows = new List<Dictionary<string, object>>();
-
+                
                 foreach (var nodalGroup in groupedByNodal)
                 {
                     var catchNos = nodalGroup.Select(x => x.CatchNo).ToHashSet();
@@ -344,7 +344,7 @@ namespace Tools.Controllers
                         allRows.Add(dict);
                     }
                 }
-
+               
                 foreach (var extraType in new[] { 2, 3 })
                 {
                     var extras = envelopesToUse.Where(e => e.ExtraId == extraType && e.Status == 1).ToList();
@@ -361,8 +361,8 @@ namespace Tools.Controllers
                         allRows.Add(dict);
                     }
                 }
-
-                if (!allRows.Any())
+               
+                if (allRows.Count == 0)
                     return BadRequest("No valid data for Excel");
 
                 var headers = typeof(NRData).GetProperties()
