@@ -381,7 +381,7 @@ namespace Tools.Controllers
             // Box label SP-computed fields
             result.Add(new Dictionary<string, string>
             {
-                ["value"] = "calc:BOX_TOTAL_QTY",
+                ["value"] = "calc:BoxTotalQty",
                 ["label"] = "Box Total Qty (Box Label)"
             });
             result.Add(new Dictionary<string, string>
