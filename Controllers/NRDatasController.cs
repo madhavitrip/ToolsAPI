@@ -608,7 +608,7 @@ namespace Tools.Controllers
         }
 
         // PUT: api/NRDatas/UpdateSingle/{id}
-        [HttpPut("UpdateSingle/{id}")]
+     /*   [HttpPut("UpdateSingle/{id}")]
         public async Task<IActionResult> UpdateSingleNRData(int id, [FromBody] JsonElement inputData)
         {
             using var transaction = await _context.Database.BeginTransactionAsync();
@@ -776,7 +776,7 @@ namespace Tools.Controllers
 
                 return StatusCode(500, ex.Message);
             }
-        }
+        }*/
         // POST: api/NRDatas
         // To protect from overposting attacks, see https://go.microsoft.com/fwlink/?linkid=2123754
         [HttpPost]
