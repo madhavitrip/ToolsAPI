@@ -45,7 +45,7 @@ namespace ERPToolsAPI.Data
             base.OnModelCreating(modelBuilder);
 
             modelBuilder.Entity<ExtraEnvelopes>()
-                .HasIndex(e => new { e.NrDataId, e.ExtraId, e.ProjectId})
+                .HasIndex(e => new { e.NodalCode, e.ExtraId, e.ProjectId})
                 .IsUnique();
             modelBuilder.Entity<EnvelopeBreakage>()
                 .HasIndex(e => new { e.NrDataId, e.ProjectId })

@@ -286,7 +286,8 @@ namespace Tools.Controllers
 
                         if (!nodalExtrasAddedForNodalCatch.Contains((prevNrData.NodalCode, prevCatchNo)))
                         {
-                            var extrasToAdd = extras.Where(e => e.ExtraId == 1 && e.CatchNo == prevCatchNo).ToList();
+                            var extrasToAdd = extras.Where(e => e.ExtraId == 1 && e.CatchNo == prevCatchNo &&
+    (string.IsNullOrEmpty(e.NodalCode) || e.NodalCode == prevNrData.NodalCode)).ToList();
                             foreach (var extra in extrasToAdd)
                             {
                                 AddExtraWithEnv(extra, prevNrData.ExamDate, prevNrData.ExamTime, prevNrData.CourseName,
@@ -316,7 +317,8 @@ namespace Tools.Controllers
                     {
                         if (!nodalExtrasAddedForNodalCatch.Contains((prevNodalCode, current.CatchNo)))
                         {
-                            var extrasToAdd = extras.Where(e => e.ExtraId == 1 && e.CatchNo == current.CatchNo).ToList();
+                            var extrasToAdd = extras.Where(e => e.ExtraId == 1 && e.CatchNo == current.CatchNo &&
+    (string.IsNullOrEmpty(e.NodalCode) || e.NodalCode == prevNodalCode)).ToList();
                             foreach (var extra in extrasToAdd)
                             {
                                 AddExtraWithEnv(extra, current.ExamDate, current.ExamTime, current.CourseName,
@@ -437,7 +439,8 @@ namespace Tools.Controllers
                     {
                         if (!nodalExtrasAddedForNodalCatch.Contains((lastNrData.NodalCode, prevCatchNo)))
                         {
-                            var extrasToAdd = extras.Where(e => e.ExtraId == 1 && e.CatchNo == prevCatchNo).ToList();
+                            var extrasToAdd = extras.Where(e => e.ExtraId == 1 && e.CatchNo == prevCatchNo &&
+    (string.IsNullOrEmpty(e.NodalCode) || e.NodalCode == lastNrData.NodalCode)).ToList();
                             foreach (var extra in extrasToAdd)
                             {
                                 AddExtraWithEnv(extra, lastNrData.ExamDate, lastNrData.ExamTime, lastNrData.CourseName,

@@ -326,20 +326,6 @@ namespace Tools.Controllers
                 var env = await _context.EnvelopeBreakages.Where(p => p.ProjectId == ProjectId).ToListAsync();
                 if (env.Any()) // Check if any records were found
                 {
-                    // // Determine the chunk size, adjust this based on your performance testing
-                    // var chunkSize = 1000; // Change this as necessary
-
-                    // // Loop through the list and remove in chunks
-                    // for (int i = 0; i < env.Count; i += chunkSize)
-                    // {
-                    //     var chunk = env.Skip(i).Take(chunkSize).ToList();  // Get a chunk of the list
-                    //     _context.EnvelopeBreakages.RemoveRange(chunk);  // Remove the chunk
-                    //     await _context.SaveChangesAsync();  // Save changes after each chunk
-                    //     _loggerService.LogEvent($"Deleted {chunk.Count} Envelope Breaking entries for ProjectID {ProjectId}", "EnvelopeBreakages",
-                    //         LogHelper.GetTriggeredBy(User), ProjectId);
-                    // }
-
-                    // Optimized deletion
                     _context.EnvelopeBreakages.RemoveRange(env);
                     await _context.SaveChangesAsync();
 
@@ -437,21 +423,21 @@ namespace Tools.Controllers
                 }
 
 
-                //             using var client = new HttpClient();
-                //             var response = await client.PostAsync(
-                //  $"{_apiSettings.EnvelopeBreakageUrl}?ProjectId={ProjectId}&triggeredBy={LogHelper.GetTriggeredBy(User)}",
-                //  new StringContent("") // required
-                // );
-                //             if (!response.IsSuccessStatusCode)
-                //             {
-                //                 var error = await response.Content.ReadAsStringAsync();
-                //                 Console.WriteLine($"API Failed: {response.StatusCode}, {error}");
-                //             }
-                //             else
-                //             {
-                //                 var data = await response.Content.ReadAsStringAsync();
-                //                 Console.WriteLine($"API Success: {data}");
-                //             }
+                            using var client = new HttpClient();
+                             var response = await client.PostAsync(
+                $"{_apiSettings.EnvelopeBreakageUrl}?ProjectId={ProjectId}&triggeredBy={LogHelper.GetTriggeredBy(User)}",
+                 new StringContent("") // required
+                 );
+                             if (!response.IsSuccessStatusCode)
+                             {
+                                var error = await response.Content.ReadAsStringAsync();
+                                Console.WriteLine($"API Failed: {response.StatusCode}, {error}");
+                             }
+                            else
+                            {
+                                var data = await response.Content.ReadAsStringAsync();
+                                 Console.WriteLine($"API Success: {data}");
+                            }
                 return Ok("Envelope breakdown report has been successfully created.");
             }
             catch (Exception ex)
