@@ -1,4 +1,4 @@
-﻿using ERPToolsAPI.Data;
+using ERPToolsAPI.Data;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.CodeAnalysis;
@@ -914,6 +914,10 @@ namespace Tools.Controllers
                             {
                                 throw new Exception($"Error converting '{prop.Name}' value '{value}'", e);
                             }
+                        }
+                        else if (prop.Name != "projectId" && prop.Name != "isCorrectedNrdataReport")
+                        {
+                            extraData[prop.Name] = value;
                         }
                     }
 
