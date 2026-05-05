@@ -160,9 +160,9 @@ namespace Tools.Controllers
             try
             {
                 var nrDataList = await _context.NRDatas
-                    .Where(d => d.ProjectId == ProjectId && d.Status == true && d.Steps==2)
+                    .Where(d => d.ProjectId == ProjectId && d.Status == true && d.Steps == 2)
                     .ToListAsync();
-                // ? Get GroupId
+
                 var project = await _context.Projects
                     .Where(p => p.ProjectId == ProjectId)
                     .Select(p => new { p.GroupId })
@@ -175,9 +175,7 @@ namespace Tools.Controllers
 
                 List<ExtraEnvelopes> envelopesToUse = new();
 
-                // =====================================================
-                // ? CASE 1: REPORT ONLY (GroupId = 28)
-                // =====================================================
+                // ================= REPORT ONLY =================
                 if (isOnlyReport)
                 {
                     envelopesToUse = await _context.ExtrasEnvelope
@@ -189,18 +187,6 @@ namespace Tools.Controllers
                 }
                 else
                 {
-                    var groupedNR = nrDataList
-                        .GroupBy(x => x.CatchNo)
-                        .Select(g => new
-                        {
-                            CatchNo = g.Key,
-                            Quantity = g.Sum(x => x.Quantity)
-                        })
-                        .ToList();
-
-                    if (!groupedNR.Any())
-                        return BadRequest("No grouping found");
-
                     var extraConfig = await _context.ExtraConfigurations
                         .Where(c => c.ProjectId == ProjectId)
                         .ToListAsync();
@@ -208,13 +194,14 @@ namespace Tools.Controllers
                     if (!extraConfig.Any())
                         return BadRequest("No ExtraConfiguration found");
 
-                    var existingCombinations = await _context.ExtrasEnvelope
+                    // Remove old
+                    var existing = await _context.ExtrasEnvelope
                         .Where(e => e.ProjectId == ProjectId)
                         .ToListAsync();
 
-                    if (existingCombinations.Any())
+                    if (existing.Any())
                     {
-                        _context.ExtrasEnvelope.RemoveRange(existingCombinations);
+                        _context.ExtrasEnvelope.RemoveRange(existing);
                         await _context.SaveChangesAsync();
                     }
 
@@ -222,8 +209,9 @@ namespace Tools.Controllers
 
                     foreach (var config in extraConfig)
                     {
-                        EnvelopeType envelopeType;
+                        bool useNodal = !string.IsNullOrWhiteSpace(config.nodalValue);
 
+                        EnvelopeType envelopeType;
                         try
                         {
                             envelopeType = JsonSerializer.Deserialize<EnvelopeType>(config.EnvelopeType);
@@ -236,49 +224,63 @@ namespace Tools.Controllers
                         int innerCapacity = GetEnvelopeCapacity(envelopeType.Inner);
                         int outerCapacity = GetEnvelopeCapacity(envelopeType.Outer);
 
-                        foreach (var data in groupedNR)
+                        // ---------- GROUPING ----------
+                        var groupedData = useNodal
+                            ? nrDataList
+                                .GroupBy(x => new { x.CatchNo, NodalCode = x.NodalCode ?? "" })
+                                .Select(g => new
+                                {
+                                    g.Key.CatchNo,
+                                    g.Key.NodalCode,
+                                    Quantity = g.Sum(x => x.Quantity)
+                                }).ToList()
+                            : nrDataList
+                                .GroupBy(x => x.CatchNo)
+                                .Select(g => new
+                                {
+                                    CatchNo = g.Key,
+                                    NodalCode = (string)null,
+                                    Quantity = g.Sum(x => x.Quantity)
+                                }).ToList();
+
+                        // ---------- NODAL CONFIG ----------
+                        List<NodalValueConfig> nodalConfigs = null;
+                        if (useNodal)
+                        {
+                            try
+                            {
+                                nodalConfigs = JsonSerializer.Deserialize<List<NodalValueConfig>>(
+                                    config.nodalValue,
+                                    new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                            }
+                            catch { }
+                        }
+
+                        foreach (var data in groupedData)
                         {
                             int calculatedQuantity = 0;
 
-                            List<NodalValueConfig> nodalConfigs = null;
-                            if (!string.IsNullOrWhiteSpace(config.nodalValue))
+                            if (useNodal && nodalConfigs != null)
                             {
-                                try { nodalConfigs = JsonSerializer.Deserialize<List<NodalValueConfig>>(config.nodalValue, new JsonSerializerOptions { PropertyNameCaseInsensitive = true }); } catch { }
-                            }
+                                var match = nodalConfigs.FirstOrDefault(nc =>
+                                    !string.IsNullOrEmpty(nc.NodalCodes) &&
+                                    nc.NodalCodes.Split(',')
+                                        .Select(n => n.Trim())
+                                        .Contains(data.NodalCode, StringComparer.OrdinalIgnoreCase));
 
-                            if (nodalConfigs != null && nodalConfigs.Any())
-                            {
-                                var nodalGroups = nrDataList
-                                    .Where(x => x.CatchNo == data.CatchNo)
-                                    .GroupBy(x => x.NodalCode?.Trim() ?? "")
-                                    .ToList();
-
-                                foreach (var nodalGroup in nodalGroups)
+                                if (match != null)
                                 {
-                                    var nodalCode = nodalGroup.Key;
-                                    var match = nodalConfigs.FirstOrDefault(nc =>
-                                        !string.IsNullOrEmpty(nc.NodalCodes) &&
-                                        nc.NodalCodes.Split(',').Select(n => n.Trim()).Contains(nodalCode, StringComparer.OrdinalIgnoreCase));
-
-                                    if (match != null)
+                                    switch (config.Mode)
                                     {
-                                        double nodalExtraQty = 0;
-                                        double nodalTotalQuantity = nodalGroup.Sum(x => x.Quantity);
+                                        case "Fixed":
+                                            if (int.TryParse(match.Value, out var fv))
+                                                calculatedQuantity = fv;
+                                            break;
 
-                                        switch (config.Mode)
-                                        {
-                                            case "Fixed":
-                                                if (int.TryParse(match.Value, out var fv))
-                                                    nodalExtraQty = fv;
-                                                break;
-                                            case "Percentage":
-                                                if (decimal.TryParse(match.Value, out var pv))
-                                                {
-                                                    nodalExtraQty = (double)(nodalTotalQuantity * (double)pv) / 100.0;
-                                                }
-                                                break;
-                                        }
-                                        calculatedQuantity += (int)Math.Round(nodalExtraQty);
+                                        case "Percentage":
+                                            if (decimal.TryParse(match.Value, out var pv))
+                                                calculatedQuantity = (int)Math.Round((double)(data.Quantity * pv) / 100);
+                                            break;
                                     }
                                 }
                             }
@@ -287,18 +289,19 @@ namespace Tools.Controllers
                                 switch (config.Mode)
                                 {
                                     case "Fixed":
-                                        if (int.TryParse(config.Value, out var fqv)) calculatedQuantity = fqv;
+                                        if (int.TryParse(config.Value, out var fqv))
+                                            calculatedQuantity = fqv;
                                         break;
 
                                     case "Percentage":
-                                        if (decimal.TryParse(config.Value, out var percentValue))
+                                        if (decimal.TryParse(config.Value, out var percent))
                                         {
-                                            var rawQuantity = (double)(data.Quantity * percentValue) / 100;
+                                            var raw = (double)(data.Quantity * percent) / 100;
 
                                             if (innerCapacity > 10)
-                                                calculatedQuantity = (int)Math.Ceiling(rawQuantity / innerCapacity) * innerCapacity;
-                                            else
-                                                calculatedQuantity = outerCapacity > 0 ? (int)Math.Ceiling(rawQuantity / outerCapacity) * outerCapacity : 0;
+                                                calculatedQuantity = (int)Math.Ceiling(raw / innerCapacity) * innerCapacity;
+                                            else if (outerCapacity > 0)
+                                                calculatedQuantity = (int)Math.Ceiling(raw / outerCapacity) * outerCapacity;
                                         }
                                         break;
 
@@ -329,6 +332,7 @@ namespace Tools.Controllers
                             {
                                 ProjectId = ProjectId,
                                 CatchNo = data.CatchNo,
+                                NodalCode = data.NodalCode,
                                 ExtraId = config.ExtraType,
                                 Quantity = calculatedQuantity,
                                 InnerEnvelope = innerCount.ToString(),
@@ -339,75 +343,41 @@ namespace Tools.Controllers
                     }
 
                     await _context.ExtrasEnvelope.AddRangeAsync(envelopesToAdd);
-                    foreach (var nrData in nrDataList)
-                    {
-                        nrData.Steps = 3; // Assuming NRData has a Step property
-                    }
+
+                    foreach (var nr in nrDataList)
+                        nr.Steps = 3;
+
                     await _context.SaveChangesAsync();
 
                     envelopesToUse = envelopesToAdd;
                 }
 
-               
-                _loggerService.LogEvent($"Created ExtraEnvelopes for Project {ProjectId}", "ExtraEnvelopes", LogHelper.GetTriggeredBy(User), ProjectId);
-
-                // ------------------- ?? Generate Excel Report -------------------
-               
-                var extraconfig = await _context.ExtraConfigurations
-                    .Where(x => x.ProjectId == ProjectId).ToListAsync();
-                if (extraconfig == null || !extraconfig.Any())
-                {
-                    _loggerService.LogError($"No ExtraConfiguration found for ProjectId: {ProjectId}", "", "ExtraEnvelopes");
-                    return BadRequest("No ExtraConfiguration found for the project.");
-                }
-
-
-                var groupedByNodal = nrDataList.GroupBy(x => x.NodalCode).ToList();
+                // ================= EXCEL =================
+                var extraConfigs = await _context.ExtraConfigurations
+                    .Where(x => x.ProjectId == ProjectId)
+                    .ToListAsync();
 
                 var extraHeaders = new HashSet<string>();
                 var innerKeys = new HashSet<string>();
                 var outerKeys = new HashSet<string>();
 
                 var allRows = new List<Dictionary<string, object>>();
-                
-                foreach (var nodalGroup in groupedByNodal)
+
+                foreach (var extra in envelopesToUse)
                 {
-                    var catchNos = nodalGroup.Select(x => x.CatchNo).ToHashSet();
+                    var baseRow = nrDataList.FirstOrDefault(x =>
+                        x.CatchNo == extra.CatchNo &&
+                        (extra.NodalCode == null || x.NodalCode == extra.NodalCode));
 
-                    var extras1 = envelopesToUse
-                        .Where(e => e.ExtraId == 1 && e.Status == 1&& catchNos.Contains(e.CatchNo))
-                        .ToList();
+                    var config = extraConfigs.FirstOrDefault(c => c.ExtraType == extra.ExtraId);
 
-                    foreach (var extra in extras1)
-                    {
-                        var baseRow = nrDataList.FirstOrDefault(x => x.CatchNo == extra.CatchNo);
-                        var config = extraconfig.FirstOrDefault(c => c.ExtraType == extra.ExtraId);
+                    if (baseRow == null || config == null) continue;
 
-                        if (baseRow == null || config == null) continue;
-
-                        var dict = ExtraEnvelopeToDictionary(baseRow, extra, config, extraHeaders, innerKeys, outerKeys);
-                        allRows.Add(dict);
-                    }
+                    var dict = ExtraEnvelopeToDictionary(baseRow, extra, config, extraHeaders, innerKeys, outerKeys);
+                    allRows.Add(dict);
                 }
-               
-                foreach (var extraType in new[] { 2, 3 })
-                {
-                    var extras = envelopesToUse.Where(e => e.ExtraId == extraType && e.Status == 1).ToList();
 
-                    foreach (var extra in extras)
-                    {
-
-                        var baseRow = nrDataList.FirstOrDefault(x => x.CatchNo == extra.CatchNo);
-                        var config = extraconfig.FirstOrDefault(c => c.ExtraType == extra.ExtraId);
-
-                        if (baseRow == null || config == null) continue;
-
-                        var dict = ExtraEnvelopeToDictionary(baseRow, extra, config, extraHeaders, innerKeys, outerKeys);
-                        allRows.Add(dict);
-                    }
-                }
-               
-                if (allRows.Count == 0)
+                if (!allRows.Any())
                     return BadRequest("No valid data for Excel");
 
                 var headers = typeof(NRData).GetProperties()
@@ -420,13 +390,10 @@ namespace Tools.Controllers
                 headers.AddRange(outerKeys);
 
                 var path = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
-                if (!Directory.Exists(path))
-                    Directory.CreateDirectory(path);
+                if (!Directory.Exists(path)) Directory.CreateDirectory(path);
 
                 var filePath = Path.Combine(path, "ExtrasCalculation.xlsx");
-
-                if (System.IO.File.Exists(filePath))
-                    System.IO.File.Delete(filePath);
+                if (System.IO.File.Exists(filePath)) System.IO.File.Delete(filePath);
 
                 using (var package = new ExcelPackage())
                 {
@@ -454,8 +421,8 @@ namespace Tools.Controllers
                 return Ok(new
                 {
                     message = isOnlyReport
-                        ? "Report generated from existing data (GroupId = 28)"
-                        : "Data calculated, saved, and report generated",
+                        ? "Report generated from existing data"
+                        : "Calculated and report generated",
                     data = envelopesToUse
                 });
             }

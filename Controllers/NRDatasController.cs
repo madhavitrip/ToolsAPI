@@ -548,7 +548,7 @@ namespace Tools.Controllers
                             {
                                 ProjectId = ProjectId,
                                 CatchNo = mergedCatchNo,
-                                NrDataId = nrData.Id, // NEW: Link to specific NRData
+                                NodalCode = nrData.NodalCode, // NEW: Link to specific NRData
                                 ExtraId = config.ExtraType,
                                 Quantity = calculatedQuantity,
                                 InnerEnvelope = innerCount.ToString(),
@@ -589,7 +589,7 @@ namespace Tools.Controllers
                         {
                             ProjectId = ProjectId,
                             CatchNo = mergedCatchNo,
-                            NrDataId = null, // EXISTING: No NrDataId for catch-based
+                            NodalCode = null, // EXISTING: No NrDataId for catch-based
                             ExtraId = config.ExtraType,
                             Quantity = calculatedQuantity,
                             InnerEnvelope = innerCount.ToString(),
