@@ -512,38 +512,94 @@ namespace Tools.Controllers
                 foreach (var config in extraConfigs)
                 {
                     var (innerCapacity, outerCapacity) = GetEnvelopeCapacities(config.EnvelopeType);
-                    var calculatedQuantity = perCatchTotals.Any()
-                        ? perCatchTotals
-                            .Select(qty => CalculateExtraQuantity(config, qty))
-                            .DefaultIfEmpty(0)
-                            .Sum()
-                        : CalculateExtraQuantity(config, totalQuantity);
-                    if (extraOverrides.TryGetValue(config.ExtraType, out var overrideQuantity))
+                    
+                    // NEW: Check if nodal calculation should be used
+                    if (UseNodalCalculation(config))
                     {
-                        var roundedOverride = RoundUpToMinimumCapacity(
-                            Math.Max(overrideQuantity, 0),
-                            innerCapacity,
-                            outerCapacity);
-                        calculatedQuantity = roundedOverride;
-                    }
-                    var innerCount = innerCapacity > 0
-                        ? (int)Math.Ceiling((double)calculatedQuantity / innerCapacity)
-                        : 0;
-                    var outerCount = outerCapacity > 0
-                        ? (int)Math.Ceiling((double)calculatedQuantity / outerCapacity)
-                        : 0;
+                        // NEW: Create extras per NRData with nodal support
+                        Console.WriteLine($" Using nodal calculation for ExtraType {config.ExtraType}");
+                        
+                        var nrDataRecords = await _context.NRDatas
+                            .Where(n => n.ProjectId == ProjectId 
+                                     && n.CatchNo == mergedCatchNo 
+                                     && n.Status == true)
+                            .ToListAsync();
 
-                    extrasToAdd.Add(new ExtraEnvelopes
+                        Console.WriteLine($" Found {nrDataRecords.Count} NRData records for catch {mergedCatchNo}");
+
+                        foreach (var nrData in nrDataRecords)
+                        {
+                            var calculatedQuantity = CalculateExtraQuantityWithNodal(
+                                config, 
+                                nrData.NRQuantity, 
+                                nrData.NodalCode
+                            );
+
+                            Console.WriteLine($"   NRData {nrData.Id}, NodalCode: {nrData.NodalCode}, Quantity: {calculatedQuantity}");
+
+                            var innerCount = innerCapacity > 0
+                                ? (int)Math.Ceiling((double)calculatedQuantity / innerCapacity)
+                                : 0;
+                            var outerCount = outerCapacity > 0
+                                ? (int)Math.Ceiling((double)calculatedQuantity / outerCapacity)
+                                : 0;
+
+                            extrasToAdd.Add(new ExtraEnvelopes
+                            {
+                                ProjectId = ProjectId,
+                                CatchNo = mergedCatchNo,
+                                NrDataId = nrData.Id, // NEW: Link to specific NRData
+                                ExtraId = config.ExtraType,
+                                Quantity = calculatedQuantity,
+                                InnerEnvelope = innerCount.ToString(),
+                                OuterEnvelope = outerCount.ToString(),
+                                Status = 1
+                            });
+                        }
+                    }
+                    else
                     {
-                        ProjectId = ProjectId,
-                        CatchNo = mergedCatchNo,
-                        ExtraId = config.ExtraType,
-                        Quantity = calculatedQuantity,
-                        InnerEnvelope = innerCount.ToString(),
-                        OuterEnvelope = outerCount.ToString(),
-                        Status = 1
-                    });
+                        // EXISTING: Catch-based calculation (preserved)
+                        Console.WriteLine($"⚪ Using catch-based calculation for ExtraType {config.ExtraType}");
+                        
+                        var calculatedQuantity = perCatchTotals.Any()
+                            ? perCatchTotals
+                                .Select(qty => CalculateExtraQuantity(config, qty))
+                                .DefaultIfEmpty(0)
+                                .Sum()
+                            : CalculateExtraQuantity(config, totalQuantity);
+                            
+                        if (extraOverrides.TryGetValue(config.ExtraType, out var overrideQuantity))
+                        {
+                            var roundedOverride = RoundUpToMinimumCapacity(
+                                Math.Max(overrideQuantity, 0),
+                                innerCapacity,
+                                outerCapacity);
+                            calculatedQuantity = roundedOverride;
+                        }
+                        
+                        var innerCount = innerCapacity > 0
+                            ? (int)Math.Ceiling((double)calculatedQuantity / innerCapacity)
+                            : 0;
+                        var outerCount = outerCapacity > 0
+                            ? (int)Math.Ceiling((double)calculatedQuantity / outerCapacity)
+                            : 0;
+
+                        extrasToAdd.Add(new ExtraEnvelopes
+                        {
+                            ProjectId = ProjectId,
+                            CatchNo = mergedCatchNo,
+                            NrDataId = null, // EXISTING: No NrDataId for catch-based
+                            ExtraId = config.ExtraType,
+                            Quantity = calculatedQuantity,
+                            InnerEnvelope = innerCount.ToString(),
+                            OuterEnvelope = outerCount.ToString(),
+                            Status = 1
+                        });
+                    }
                 }
+
+                Console.WriteLine($" Total extras to add: {extrasToAdd.Count}");
 
                 if (extrasToAdd.Any())
                 {
@@ -699,7 +755,7 @@ namespace Tools.Controllers
                         .ExecuteUpdateAsync(setters => setters
                             .SetProperty(x => x.Status, 0)
                         );*/
-                }
+               /* }
 
                 // 👉 2. Lot changed
                 if (oldLot != existingRecord.LotNo)
@@ -1838,6 +1894,19 @@ namespace Tools.Controllers
             public int value { get; set; }
         }
 
+        // NEW: Helper class for deserializing nodalValue JSON
+        private class NodalValueConfig
+        {
+            public string NodalCodes { get; set; }
+            public string Value { get; set; }
+        }
+
+        // NEW: Determine if we should use nodal-based calculation
+        private static bool UseNodalCalculation(ExtrasConfiguration config)
+        {
+            return !string.IsNullOrWhiteSpace(config.nodalValue);
+        }
+
         private static (int innerCapacity, int outerCapacity) GetEnvelopeCapacities(string? envelopeTypeJson)
         {
             if (string.IsNullOrWhiteSpace(envelopeTypeJson))
@@ -1915,6 +1984,90 @@ namespace Tools.Controllers
                 default:
                     return 0;
             }
+        }
+
+        // NEW: Calculate extra quantity with nodal code support
+        // This method checks if nodalValue exists and uses nodal-specific calculation
+        // Falls back to standard CalculateExtraQuantity if no nodal configuration
+        private static int CalculateExtraQuantityWithNodal(
+            ExtrasConfiguration config, 
+            int totalQuantity, 
+            string nodalCode)
+        {
+            if (config == null)
+            {
+                return 0;
+            }
+
+            // Check if nodal configuration exists
+            if (!string.IsNullOrWhiteSpace(config.nodalValue))
+            {
+                try
+                {
+                    var nodalConfigs = JsonSerializer.Deserialize<List<NodalValueConfig>>(config.nodalValue);
+                    if (nodalConfigs != null && nodalConfigs.Any())
+                    {
+                        // Find matching nodal configuration
+                        NodalValueConfig matchingConfig = null;
+                        
+                        if (!string.IsNullOrWhiteSpace(nodalCode))
+                        {
+                            matchingConfig = nodalConfigs.FirstOrDefault(nc =>
+                                nc.NodalCodes?.Split(',')
+                                    .Select(c => c.Trim())
+                                    .Contains(nodalCode, StringComparer.OrdinalIgnoreCase) == true
+                            );
+                        }
+
+                        // If no match found, check for "Default" configuration
+                        if (matchingConfig == null)
+                        {
+                            matchingConfig = nodalConfigs.FirstOrDefault(nc =>
+                                nc.NodalCodes?.Split(',')
+                                    .Select(c => c.Trim())
+                                    .Contains("Default", StringComparer.OrdinalIgnoreCase) == true
+                            );
+                        }
+
+                        // If matching config found, calculate based on mode
+                        if (matchingConfig != null)
+                        {
+                            var mode = NormalizeText(config.Mode).ToLowerInvariant();
+                            
+                            if (mode == "fixed")
+                            {
+                                return int.TryParse(matchingConfig.Value, out var fixedQty) ? fixedQty : 0;
+                            }
+                            else if (mode == "percentage")
+                            {
+                                if (double.TryParse(matchingConfig.Value, out var percentage))
+                                {
+                                    var rawQuantity = (double)(totalQuantity * percentage) / 100;
+                                    var (innerCapacity, outerCapacity) = GetEnvelopeCapacities(config.EnvelopeType);
+                                    
+                                    if (innerCapacity > 10)
+                                    {
+                                        return innerCapacity > 0
+                                            ? (int)Math.Ceiling(rawQuantity / innerCapacity) * innerCapacity
+                                            : (int)Math.Ceiling(rawQuantity);
+                                    }
+                                    return outerCapacity > 0
+                                        ? (int)Math.Ceiling(rawQuantity / outerCapacity) * outerCapacity
+                                        : (int)Math.Ceiling(rawQuantity);
+                                }
+                            }
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // Log error and fallback to standard calculation
+                    Console.WriteLine($"Error parsing nodalValue: {ex.Message}");
+                }
+            }
+
+            // Fallback to standard calculation if no nodal config or error
+            return CalculateExtraQuantity(config, totalQuantity);
         }
 
         private static int RoundUpToMinimumCapacity(int quantity, int innerCapacity, int outerCapacity)

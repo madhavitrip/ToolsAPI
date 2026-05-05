@@ -98,6 +98,7 @@ namespace Tools.Controllers
                 projectConfig.Modules,
                 projectConfig.BoxCapacity,
                 projectConfig.Enhancement,
+                projectConfig.RoundOffBeforeEnhancement,
                 projectConfig.BoxNumber,
                 projectConfig.OmrSerialNumber,
                 projectConfig.BookletSerialNumber,
@@ -105,6 +106,8 @@ namespace Tools.Controllers
                 projectConfig.ResetOnSymbolChange,
                 projectConfig.ResetOmrSerialOnCatchChange,
                 projectConfig.ResetBookletSerialOnCatchChange,
+                projectConfig.MssTypes,
+                projectConfig.MssAttached,
 
                 EnvelopeMakingCriteria = new
                 {

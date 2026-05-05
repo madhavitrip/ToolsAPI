@@ -1,4 +1,4 @@
-﻿using System.ComponentModel.DataAnnotations.Schema;
+using System.ComponentModel.DataAnnotations.Schema;
 using System.ComponentModel.DataAnnotations;
 
 namespace Tools.Models
@@ -28,5 +28,6 @@ namespace Tools.Models
         public bool? ResetBookletSerialOnCatchChange { get; set; }
         public List<int> MssTypes { get; set; } = new List<int>();
         public string MssAttached {  get; set; }
+        public bool RoundOffBeforeEnhancement { get; set; }
     }
 }

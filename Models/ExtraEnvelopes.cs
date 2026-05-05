@@ -15,5 +15,6 @@ namespace Tools.Models
         public string InnerEnvelope {  get; set; }
         public string OuterEnvelope { get; set; }
         public int Status { get; set; } = 1;
+        public int? NrDataId { get; set; } // Links to specific NRData record for nodal-based extras
     }
 }

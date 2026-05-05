@@ -1,4 +1,4 @@
-﻿using ERPToolsAPI.Data;
+using ERPToolsAPI.Data;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -369,33 +369,38 @@ WHERE ProjectId = {0};", ProjectId);
                     }
                 }
 
-                if (smallestInner > 0)
+                // Consolidated calculation logic: Round Before (Optional) -> Enhance -> Round After (Mandatory if capacity exists)
+                foreach (var d in data)
                 {
-                    if (projectconfig.Enhancement > 0)
+                    if (d.NRQuantity > 0)
                     {
-                        foreach (var d in data)
-                        {
-                            if (d.NRQuantity > 0)
-                            {
-                                d.Quantity = d.NRQuantity + (int)Math.Round((projectconfig.Enhancement * d.NRQuantity) / 100.0);
-                                d.Quantity = (int)Math.Ceiling(d.Quantity / (double)smallestInner) * smallestInner;
-                            }
-                        }
-                    }
-                    else
-                    {
-                        foreach (var d in data)
-                        {
-                            if (d.NRQuantity > 0)
-                            {
-                                d.Quantity = (int)Math.Ceiling(d.NRQuantity / (double)smallestInner) * smallestInner;
-                            }
-                        }
-                    }
-                }
+                        double initialQuantity = d.NRQuantity;
 
-              foreach (var d in data)
-                {
+                        // Phase 1: Round before enhancement (if enabled)
+                        if (projectconfig.RoundOffBeforeEnhancement && smallestInner > 0)
+                        {
+                            initialQuantity = Math.Ceiling(initialQuantity / (double)smallestInner) * smallestInner;
+                        }
+
+                        // Phase 2: Calculate enhancement value based on the initial quantity
+                        double enhancementVal = 0;
+                        if (projectconfig.Enhancement > 0)
+                        {
+                            enhancementVal = (projectconfig.Enhancement * initialQuantity) / 100.0;
+                        }
+
+                        // Phase 3: Add enhancement and apply final rounding
+                        double totalTarget = initialQuantity + enhancementVal;
+
+                        if (smallestInner > 0)
+                        {
+                            d.Quantity = (int)Math.Ceiling(totalTarget / (double)smallestInner) * smallestInner;
+                        }
+                        else
+                        {
+                            d.Quantity = (int)Math.Round(totalTarget);
+                        }
+                    }
                     d.Steps = 2;
                 }
 

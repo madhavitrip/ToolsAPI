@@ -240,36 +240,81 @@ namespace Tools.Controllers
                         {
                             int calculatedQuantity = 0;
 
-                            switch (config.Mode)
+                            List<NodalValueConfig> nodalConfigs = null;
+                            if (!string.IsNullOrWhiteSpace(config.nodalValue))
                             {
-                                case "Fixed":
-                                    calculatedQuantity = int.Parse(config.Value);
-                                    break;
+                                try { nodalConfigs = JsonSerializer.Deserialize<List<NodalValueConfig>>(config.nodalValue, new JsonSerializerOptions { PropertyNameCaseInsensitive = true }); } catch { }
+                            }
 
-                                case "Percentage":
-                                    if (decimal.TryParse(config.Value, out var percentValue))
+                            if (nodalConfigs != null && nodalConfigs.Any())
+                            {
+                                var nodalGroups = nrDataList
+                                    .Where(x => x.CatchNo == data.CatchNo)
+                                    .GroupBy(x => x.NodalCode?.Trim() ?? "")
+                                    .ToList();
+
+                                foreach (var nodalGroup in nodalGroups)
+                                {
+                                    var nodalCode = nodalGroup.Key;
+                                    var match = nodalConfigs.FirstOrDefault(nc =>
+                                        !string.IsNullOrEmpty(nc.NodalCodes) &&
+                                        nc.NodalCodes.Split(',').Select(n => n.Trim()).Contains(nodalCode, StringComparer.OrdinalIgnoreCase));
+
+                                    if (match != null)
                                     {
-                                        var rawQuantity = (double)(data.Quantity * percentValue) / 100;
+                                        double nodalExtraQty = 0;
+                                        double nodalTotalQuantity = nodalGroup.Sum(x => x.Quantity);
 
-                                        if (innerCapacity > 10)
-                                            calculatedQuantity = (int)Math.Ceiling(rawQuantity / innerCapacity) * innerCapacity;
-                                        else
-                                            calculatedQuantity = (int)Math.Ceiling(rawQuantity / outerCapacity) * outerCapacity;
+                                        switch (config.Mode)
+                                        {
+                                            case "Fixed":
+                                                if (int.TryParse(match.Value, out var fv))
+                                                    nodalExtraQty = fv;
+                                                break;
+                                            case "Percentage":
+                                                if (decimal.TryParse(match.Value, out var pv))
+                                                {
+                                                    nodalExtraQty = (double)(nodalTotalQuantity * (double)pv) / 100.0;
+                                                }
+                                                break;
+                                        }
+                                        calculatedQuantity += (int)Math.Round(nodalExtraQty);
                                     }
-                                    break;
+                                }
+                            }
+                            else
+                            {
+                                switch (config.Mode)
+                                {
+                                    case "Fixed":
+                                        if (int.TryParse(config.Value, out var fqv)) calculatedQuantity = fqv;
+                                        break;
 
-                                case "Range":
-                                    if (!string.IsNullOrEmpty(config.RangeConfig))
-                                    {
-                                        var rangeConfig = JsonSerializer.Deserialize<RangeConfigModel>(config.RangeConfig);
+                                    case "Percentage":
+                                        if (decimal.TryParse(config.Value, out var percentValue))
+                                        {
+                                            var rawQuantity = (double)(data.Quantity * percentValue) / 100;
 
-                                        var range = rangeConfig?.ranges?
-                                            .FirstOrDefault(r => data.Quantity >= r.from && data.Quantity <= r.to);
+                                            if (innerCapacity > 10)
+                                                calculatedQuantity = (int)Math.Ceiling(rawQuantity / innerCapacity) * innerCapacity;
+                                            else
+                                                calculatedQuantity = outerCapacity > 0 ? (int)Math.Ceiling(rawQuantity / outerCapacity) * outerCapacity : 0;
+                                        }
+                                        break;
 
-                                        if (range != null)
-                                            calculatedQuantity = range.value;
-                                    }
-                                    break;
+                                    case "Range":
+                                        if (!string.IsNullOrEmpty(config.RangeConfig))
+                                        {
+                                            var rangeConfig = JsonSerializer.Deserialize<RangeConfigModel>(config.RangeConfig);
+
+                                            var range = rangeConfig?.ranges?
+                                                .FirstOrDefault(r => data.Quantity >= r.from && data.Quantity <= r.to);
+
+                                            if (range != null)
+                                                calculatedQuantity = range.value;
+                                        }
+                                        break;
+                                }
                             }
 
                             int innerCount = innerCapacity > 0
@@ -431,6 +476,12 @@ namespace Tools.Controllers
             public int from { get; set; }
             public int to { get; set; }
             public int value { get; set; }
+        }
+
+        public class NodalValueConfig
+        {
+            public string NodalCodes { get; set; }
+            public string Value { get; set; }
         }
         private Dictionary<string, object> ExtraEnvelopeToDictionary(
        Tools.Models.NRData baseRow,

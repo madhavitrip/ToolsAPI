@@ -46,6 +46,13 @@ namespace Tools.Controllers
                 return NotFound(new { message = $"No configurations found for ProjectId: {projectId}" });
             }
 
+            // Log what's being returned
+            Console.WriteLine($" Returning {extras.Count} ExtrasConfiguration(s) for ProjectId {projectId}:");
+            foreach (var extra in extras)
+            {
+                Console.WriteLine($"   ID: {extra.Id}, ExtraType: {extra.ExtraType}, Mode: {extra.Mode}, nodalValue: {(string.IsNullOrEmpty(extra.nodalValue) ? "NULL/EMPTY" : "HAS DATA")}");
+            }
+
             return Ok(extras);
         }
 
@@ -62,6 +69,21 @@ namespace Tools.Controllers
             }
 
             return extrasConfiguration;
+        }
+
+        [HttpGet("DistinctNodals/{projectId}")]
+        public async Task<IActionResult> GetDistinctNodalsByProject(int projectId)
+        {
+            // Only filter by project and return distinct NodalCode from NRData where Status == true
+            var nodalCodes = await _context.NRDatas
+                .Where(n => n.ProjectId == projectId 
+                         && n.Status == true 
+                         && !string.IsNullOrEmpty(n.NodalCode))
+                .Select(n => n.NodalCode)
+                .Distinct()
+                .OrderBy(n => n)
+                .ToListAsync();
+            return Ok(nodalCodes);
         }
 
         // PUT: api/ExtrasConfigurations/5
@@ -107,6 +129,15 @@ namespace Tools.Controllers
         {
             try
             {
+                // Log incoming request for debugging
+                Console.WriteLine($" Received ExtrasConfiguration:");
+                Console.WriteLine($"   ProjectId: {extrasConfiguration.ProjectId}");
+                Console.WriteLine($"   ExtraType: {extrasConfiguration.ExtraType}");
+                Console.WriteLine($"   Mode: {extrasConfiguration.Mode}");
+                Console.WriteLine($"   Value: {extrasConfiguration.Value}");
+                Console.WriteLine($"   nodalValue: {extrasConfiguration.nodalValue ?? "NULL"}");
+                Console.WriteLine($"   EnvelopeType: {extrasConfiguration.EnvelopeType}");
+
                 var extra = await _context.ExtraConfigurations
                .Where(x => x.ProjectId == extrasConfiguration.ProjectId && extrasConfiguration.ExtraType == x.ExtraType).ToListAsync();
 
@@ -117,6 +148,7 @@ namespace Tools.Controllers
                    
                     _context.ExtraConfigurations.RemoveRange(extra);
                     await _context.SaveChangesAsync();
+                    Console.WriteLine($" Deleted {extra.Count} old ExtrasConfiguration record(s) for ProjectId {projectId}");
                     _loggerService.LogEvent($"Deleted {projectId} old ExtrasConfiguration record(s)",
                   "ExtrasConfiguration", LogHelper.GetTriggeredBy(User), extrasConfiguration.ProjectId);
                 }
@@ -124,6 +156,10 @@ namespace Tools.Controllers
 
                 _context.ExtraConfigurations.Add(extrasConfiguration);
                 await _context.SaveChangesAsync();
+                
+                Console.WriteLine($" Saved ExtrasConfiguration with ID {extrasConfiguration.Id}");
+                Console.WriteLine($"   nodalValue in DB: {extrasConfiguration.nodalValue ?? "NULL"}");
+                
                 _loggerService.LogEvent($"Created new ExtrasConfiguration with ProjectID {extrasConfiguration.ProjectId}", "ExtrasConfiguration", LogHelper.GetTriggeredBy(User), extrasConfiguration.ProjectId);
 
                 return CreatedAtAction("GetExtrasConfiguration", new { id = extrasConfiguration.Id }, extrasConfiguration);
@@ -171,5 +207,7 @@ namespace Tools.Controllers
             return _context.ExtraConfigurations.Any(e => e.Id == id);
         }
     }
+
+
 }
 
