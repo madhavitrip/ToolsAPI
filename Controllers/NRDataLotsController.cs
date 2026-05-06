@@ -85,6 +85,44 @@ namespace Tools.Controllers
             }
         }
 
+        [HttpGet("GetByProject/{projectId}")]
+        public async Task<IActionResult> GetUniqueEnvLotsByProject(int projectId)
+        {
+            if (projectId <= 0)
+                return BadRequest("ProjectId is required.");
+
+            try
+            {
+                // Get unique lots with catch counts
+                var lots = await _context.NRDatas
+                    .Where(x => x.ProjectId == projectId && x.Status == true)
+                    .GroupBy(x => x.EnvLotNo)
+                    .Select(g => new
+                    {
+                        EnvLotno = g.Key,
+                        catchCount = g.Select(x => x.CatchNo).Distinct().Count()
+                    })
+                    .OrderBy(x => x.EnvLotno)
+                    .ToListAsync();
+
+                if (lots.Count == 0)
+                {
+                    return Ok(new List<object>());
+                }
+
+                return Ok(lots);
+            }
+            catch (Exception ex)
+            {
+                _loggerService.LogError(
+                    "Error fetching unique lots",
+                    ex.Message,
+                    nameof(NRDataLotsController)
+                );
+                return StatusCode(500, new { message = "Failed to fetch lots", error = ex.Message });
+            }
+        }
+
         [HttpPut("assign")]
         public async Task<IActionResult> AssignLots([FromBody] LotAssignmentRequest request)
         {
