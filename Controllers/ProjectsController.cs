@@ -133,6 +133,7 @@ namespace Tools.Controllers
                    x.ProjectId,
                    x.GroupId,
                    x.TypeId,
+                   LoggedAt = x.LatestLoggedAt,
                    TimeAgo = GetTimeAgo(x.LatestLoggedAt),
                    x.Status,
                   })
