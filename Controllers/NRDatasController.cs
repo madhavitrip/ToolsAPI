@@ -169,6 +169,7 @@ namespace Tools.Controllers
                     d.RouteSort,
                     d.Symbol,
                     d.LotNo,
+                    d.EnvLotNo,
                     d.NRDatas,
 
                 })
