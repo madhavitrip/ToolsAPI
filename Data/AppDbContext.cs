@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using System.Linq;
 using System.Text.Json;
 using Tools.Models;
+using ToolsAPI.Models;
 
 namespace ERPToolsAPI.Data
 {
@@ -40,6 +41,7 @@ namespace ERPToolsAPI.Data
         public DbSet<RPTTemplate> RPTTemplates { get; set; }
 
         public DbSet<RPTMapping> RPTMappings { get; set; }
+        public DbSet<EnvelopeLotReport> EnvelopeLotReports { get; set; }
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);
