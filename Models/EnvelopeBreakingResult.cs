@@ -37,6 +37,7 @@ namespace Tools.Models
         public int DistrictSort { get; set; }
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
         public int UploadBatch { get; set; }
+        public bool Status { get; set; }
     }
 }
 

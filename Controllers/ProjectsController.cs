@@ -12,6 +12,7 @@ using System.IdentityModel.Tokens.Jwt;
 using Microsoft.AspNetCore.Authorization;
 using Tools.Services;
 using System.Data;
+using System.Security.Claims;
 
 namespace Tools.Controllers
 {
@@ -73,7 +74,7 @@ namespace Tools.Controllers
                 var jsonToken = handler.ReadToken(token) as JwtSecurityToken;
 
                 // Extract the userId from the correct claim (adjusting based on your token structure)
-                var userIdClaim = jsonToken?.Claims.FirstOrDefault(c => c.Type == "userid");
+                var userIdClaim = jsonToken?.Claims.FirstOrDefault(c => c.Type == ClaimTypes.Name);
                 var userId = userIdClaim?.Value;
 
                 if (string.IsNullOrEmpty(userId))
@@ -165,7 +166,7 @@ namespace Tools.Controllers
                 var jsonToken = handler.ReadToken(token) as JwtSecurityToken;
 
                 // Extract the userId from the correct claim
-                var userIdClaim = jsonToken?.Claims.FirstOrDefault(c => c.Type == "userid");
+                var userIdClaim = jsonToken?.Claims.FirstOrDefault(c => c.Type == ClaimTypes.Name);
                 var userId = userIdClaim?.Value;
 
                 if (string.IsNullOrEmpty(userId))
@@ -257,7 +258,7 @@ namespace Tools.Controllers
                 var jsonToken = handler.ReadToken(token) as JwtSecurityToken;
 
                 // Extract the userId from the correct claim (adjusting based on your token structure)
-                var userIdClaim = jsonToken?.Claims.FirstOrDefault(c => c.Type == "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name");
+                var userIdClaim = jsonToken?.Claims.FirstOrDefault(c => c.Type == ClaimTypes.Name);
                 var userId = userIdClaim?.Value;
 
                 if (string.IsNullOrEmpty(userId))

@@ -665,7 +665,7 @@ namespace Tools.Controllers
         }
 
         // PUT: api/NRDatas/UpdateSingle/{id}
-     /*   [HttpPut("UpdateSingle/{id}")]
+        [HttpPut("UpdateSingle/{id}")]
         public async Task<IActionResult> UpdateSingleNRData(int id, [FromBody] JsonElement inputData)
         {
             using var transaction = await _context.Database.BeginTransactionAsync();
@@ -751,12 +751,12 @@ namespace Tools.Controllers
                     }
 
                     // Reset EnvelopeBreakingResultTable status
-                   /* await _context.EnvelopeBreakingResults
+                    await _context.EnvelopeBreakingResults
                         .Where(x => x.NrDataId == existingRecord.Id)
                         .ExecuteUpdateAsync(setters => setters
-                            .SetProperty(x => x.Status, 0)
-                        );*/
-               /* }
+                            .SetProperty(x => x.Status,false)
+                        );
+                }
 
                 // 👉 2. Lot changed
                 if (oldLot != existingRecord.LotNo)
@@ -833,7 +833,7 @@ namespace Tools.Controllers
 
                 return StatusCode(500, ex.Message);
             }
-        }*/
+        }
         // POST: api/NRDatas
         // To protect from overposting attacks, see https://go.microsoft.com/fwlink/?linkid=2123754
         [HttpPost]
