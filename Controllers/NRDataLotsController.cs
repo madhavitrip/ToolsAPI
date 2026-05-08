@@ -11,11 +11,13 @@ namespace Tools.Controllers
     {
         private readonly ERPToolsDbContext _context;
         private readonly ILoggerService _loggerService;
+        private readonly IDispatchService _dispatchService;
 
-        public NRDataLotsController(ERPToolsDbContext context, ILoggerService loggerService)
+        public NRDataLotsController(ERPToolsDbContext context, ILoggerService loggerService, IDispatchService dispatchService)
         {
             _context = context;
             _loggerService = loggerService;
+            _dispatchService = dispatchService;
         }
 
         public class LotAssignmentItem
@@ -82,6 +84,57 @@ namespace Tools.Controllers
                     nameof(NRDataLotsController)
                 );
                 return StatusCode(500, new { message = "Failed to fetch lots", error = ex.Message });
+            }
+        }
+
+        [HttpGet("GetLotsWithDispatchInfo/{projectId}")]
+        public async Task<IActionResult> GetLotsWithDispatchInfo(int projectId)
+        {
+            if (projectId <= 0)
+                return BadRequest("ProjectId is required.");
+
+            try
+            {
+                // Get unique lots with catch counts
+                var lots = await _context.NRDatas
+                    .Where(x => x.ProjectId == projectId && x.Status == true)
+                    .GroupBy(x => x.LotNo)
+                    .Select(g => new
+                    {
+                        lotNo = g.Key,
+                        catchCount = g.Select(x => x.CatchNo).Distinct().Count()
+                    })
+                    .OrderBy(x => x.lotNo)
+                    .ToListAsync();
+
+                if (lots.Count == 0)
+                {
+                    return Ok(new List<object>());
+                }
+
+                // Fetch dispatch info for all lots in parallel
+                var lotNos = lots.Select(l => l.lotNo).ToList();
+                var dispatchInfoDict = await _dispatchService.GetDispatchDatesAsync(projectId, lotNos);
+
+                // Merge dispatch info with lot data
+                var lotsWithDispatch = lots.Select(lot => new
+                {
+                    lot.lotNo,
+                    lot.catchCount,
+                    isDispatched = dispatchInfoDict.ContainsKey(lot.lotNo) && dispatchInfoDict[lot.lotNo].IsDispatched,
+                    dispatchDate = dispatchInfoDict.ContainsKey(lot.lotNo) ? dispatchInfoDict[lot.lotNo].DispatchDate : null
+                }).ToList();
+
+                return Ok(lotsWithDispatch);
+            }
+            catch (Exception ex)
+            {
+                _loggerService.LogError(
+                    "Error fetching lots with dispatch info",
+                    ex.Message,
+                    nameof(NRDataLotsController)
+                );
+                return StatusCode(500, new { message = "Failed to fetch lots with dispatch info", error = ex.Message });
             }
         }
 

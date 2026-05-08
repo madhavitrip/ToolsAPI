@@ -1,4 +1,4 @@
-﻿using ERPToolsAPI.Data;
+﻿﻿using ERPToolsAPI.Data;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -17,18 +17,38 @@ namespace Tools.Controllers
         private readonly ERPToolsDbContext _context;
         private readonly ILoggerService _loggerService;
         private readonly ApiSettings _apiSettings;
+        private readonly IDispatchService _dispatchService;
 
-        public BoxBreakingProcessingController(ERPToolsDbContext context, ILoggerService loggerService, IOptions<ApiSettings> apiSettings)
+        public BoxBreakingProcessingController(ERPToolsDbContext context, ILoggerService loggerService, IOptions<ApiSettings> apiSettings, IDispatchService dispatchService)
         {
             _context = context;
             _loggerService = loggerService;
             _apiSettings = apiSettings.Value;
+            _dispatchService = dispatchService;
         }
         [HttpPost("ProcessBoxBreaking")]
         public async Task<IActionResult> ProcessBoxBreaking(int ProjectId, List<int> LotNo)
         {
             try
             {
+                // ✅ STEP 1: Validate dispatch status for all lots (mandatory backend validation)
+                var dispatchInfoDict = await _dispatchService.GetDispatchDatesAsync(ProjectId, LotNo);
+                var dispatchedLots = dispatchInfoDict.Where(d => d.Value.IsDispatched).ToList();
+
+                if (dispatchedLots.Any())
+                {
+                    var dispatchedLotNumbers = string.Join(", ", dispatchedLots.Select(d => d.Key));
+                    return BadRequest(new
+                    {
+                        error = $"Lot(s) {dispatchedLotNumbers} already dispatched. Processing not allowed.",
+                        dispatchedLots = dispatchedLots.Select(d => new
+                        {
+                            lotNo = d.Key,
+                            dispatchDate = d.Value.DispatchDate
+                        })
+                    });
+                }
+
                 // Read EnvelopeBreakingResults from DB (latest batch)
                 var maxBatch = await _context.EnvelopeBreakingResults
                     .Where(r => r.ProjectId == ProjectId)
@@ -596,7 +616,6 @@ namespace Tools.Controllers
                 {
                     nr.Steps = 5; // Assuming NRData has a Step property
                 }
-
 
                 await _context.SaveChangesAsync();
 

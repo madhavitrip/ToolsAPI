@@ -43,6 +43,7 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 
 // Add services to the container.
 builder.Services.AddHttpClient();
+builder.Services.AddHttpClient<IDispatchService, DispatchService>();
 builder.Services.AddControllers();
 builder.Services.Configure<FormOptions>(options =>
 {

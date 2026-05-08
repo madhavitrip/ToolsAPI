@@ -9,5 +9,6 @@ namespace Tools.Models
         public string RptParserUrl { get; set; }
         public string RptParserService { get; set; }
         public string RptServiceUrl { get; set; }
+        public string DispatchApiUrl { get; set; }
     }
 }
