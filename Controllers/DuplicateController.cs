@@ -33,16 +33,13 @@ namespace Tools.Controllers
         {
             try
             {
-                Console.WriteLine("inside");
                 var data = await _context.NRDatas
-                    .Where(p => p.ProjectId == ProjectId && p.Status == true)
+                    .Where(p => p.ProjectId == ProjectId && p.Status == true && p.Steps==0)
                     .ToListAsync();
-                Console.WriteLine(data.Count.ToString());
                 var projectconfig = await _context.ProjectConfigs
                     .FirstOrDefaultAsync(p => p.ProjectId == ProjectId);
                 if (projectconfig == null)
                     return NotFound("Project config not exists for this project");
-                Console.WriteLine(projectconfig.ToString());
 
                 var mergeFieldIds = projectconfig.DuplicateCriteria ?? new List<int>();
                 if (!mergeFieldIds.Any())
@@ -54,9 +51,6 @@ namespace Tools.Controllers
                     .ToListAsync();
                 if (!fieldNames.Any())
                     return BadRequest("Duplicate criteria fields not found.");
-
-                if (!data.Any())
-                    return NotFound("Nr data not found for this project.");
 
                 var grouped = data.GroupBy(d =>
                 {
@@ -306,7 +300,7 @@ SET Quantity = IFNULL(Quantity, 0),
 WHERE ProjectId = {0};", ProjectId);
 
                 var data = await _context.NRDatas
-                    .Where(p => p.ProjectId == ProjectId && p.Status==true)
+                    .Where(p => p.ProjectId == ProjectId && p.Status==true && p.Steps==1)
                     .ToListAsync();
 
                 if (!data.Any())
