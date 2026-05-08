@@ -17,12 +17,7 @@ namespace ToolsAPI.Controllers
             _context = context;
         }
 
-        // GET: api/EnvelopeLotReports/Test
-        [HttpGet("Test")]
-        public IActionResult Test()
-        {
-            return Ok(new { message = "EnvelopeLotReports API is working", timestamp = DateTime.UtcNow });
-        }
+       
 
         // GET: api/EnvelopeLotReports/ByProject/{projectId}
         [HttpGet("ByProject/{projectId}")]
@@ -107,7 +102,7 @@ namespace ToolsAPI.Controllers
                     Console.WriteLine($"Updating existing report with ID: {existingReport.Id}");
                     // Update existing report
                     existingReport.FileName = request.FileName;
-                    existingReport.GeneratedAt = DateTime.UtcNow;
+                    existingReport.GeneratedAt = DateTime.Now;
                     existingReport.GeneratedBy = request.GeneratedBy;
                     existingReport.FilePath = request.FilePath;
 
