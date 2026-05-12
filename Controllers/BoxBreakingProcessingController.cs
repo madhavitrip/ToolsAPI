@@ -412,11 +412,6 @@ namespace Tools.Controllers
                     return BadRequest(new { error = errorMsg });
                 }
 
-                if (envelopeSize <= 0)
-                {
-                    await _loggerService.LogErrorAsync("Invalid envelope size", $"Envelope size is {envelopeSize}, must be > 0", nameof(BoxBreakingProcessingController));
-                    return BadRequest(new { error = $"Invalid envelope size: {envelopeSize}. Must be greater than 0." });
-                }
 
                 await _loggerService.LogEventAsync($"Capacity validation passed: capacity={capacity}, envelopeSize={envelopeSize}", "BoxBreakingProcessing", 0, ProjectId);
 
