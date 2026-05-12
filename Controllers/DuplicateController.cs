@@ -36,6 +36,7 @@ namespace Tools.Controllers
                 var data = await _context.NRDatas
                     .Where(p => p.ProjectId == ProjectId && p.Status == true && p.Steps==0)
                     .ToListAsync();
+                var hasPendingDuplicateRows = data.Any();
                 var projectconfig = await _context.ProjectConfigs
                     .FirstOrDefaultAsync(p => p.ProjectId == ProjectId);
                 if (projectconfig == null)
@@ -52,21 +53,23 @@ namespace Tools.Controllers
                 if (!fieldNames.Any())
                     return BadRequest("Duplicate criteria fields not found.");
 
-                var grouped = data.GroupBy(d =>
-                {
-                    var key = new List<string>();
-
-                    foreach (var field in fieldNames)
+                var grouped = hasPendingDuplicateRows
+                    ? data.GroupBy(d =>
                     {
-                        var value = d.GetType()
-                            .GetProperty(field, BindingFlags.IgnoreCase | BindingFlags.Public | BindingFlags.Instance)
-                            ?.GetValue(d)?.ToString()?.Trim() ?? "";
+                        var key = new List<string>();
 
-                        key.Add(value);
-                    }
+                        foreach (var field in fieldNames)
+                        {
+                            var value = d.GetType()
+                                .GetProperty(field, BindingFlags.IgnoreCase | BindingFlags.Public | BindingFlags.Instance)
+                                ?.GetValue(d)?.ToString()?.Trim() ?? "";
 
-                    return string.Join("|", key);
-                });
+                            key.Add(value);
+                        }
+
+                        return string.Join("|", key);
+                    })
+                    : Enumerable.Empty<IGrouping<string, NRData>>();
 
                 int mergedCount = 0;
                 var deletedRows = new List<NRData>();
@@ -134,6 +137,13 @@ namespace Tools.Controllers
 
                 // ✅ Add new rows to report AFTER save (IDs generated)
                 reportRows.AddRange(newRows);
+
+                if (!hasPendingDuplicateRows)
+                {
+                    reportRows = await _context.NRDatas
+                        .Where(x => x.ProjectId == ProjectId && x.Status == true)
+                        .ToListAsync();
+                }
 
                 var triggeredBy = LogHelper.GetTriggeredBy(User);
 
@@ -238,8 +248,11 @@ namespace Tools.Controllers
                         rowIdx++;
                     }
 
-                    ws.Cells[ws.Dimension.Address].AutoFitColumns();
-                    ws.View.FreezePanes(2, 1);
+                    if (ws.Dimension != null)
+                    {
+                        ws.Cells[ws.Dimension.Address].AutoFitColumns();
+                        ws.View.FreezePanes(2, 1);
+                    }
 
                     // ✅ CLEAN SHEET (FINAL DATA)
                     var wsClean = package.Workbook.Worksheets.Add("Clean NRData");
@@ -267,13 +280,22 @@ namespace Tools.Controllers
                         cleanRow++;
                     }
 
-                    wsClean.Cells[wsClean.Dimension.Address].AutoFitColumns();
-                    wsClean.View.FreezePanes(2, 1);
+                    if (wsClean.Dimension != null)
+                    {
+                        wsClean.Cells[wsClean.Dimension.Address].AutoFitColumns();
+                        wsClean.View.FreezePanes(2, 1);
+                    }
 
                     package.SaveAs(new FileInfo(filePath));
                 }
 
-                return Ok(new { MergedRows = mergedCount });
+                return Ok(new
+                {
+                    MergedRows = mergedCount,
+                    message = hasPendingDuplicateRows
+                        ? "Duplicates processed successfully."
+                        : "No pending duplicate rows. Report regenerated from active data."
+                });
             }
             catch (Exception ex)
             {

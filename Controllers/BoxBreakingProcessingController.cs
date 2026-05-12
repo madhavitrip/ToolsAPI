@@ -411,8 +411,6 @@ namespace Tools.Controllers
                     await _loggerService.LogErrorAsync("Invalid box capacity", errorMsg, nameof(BoxBreakingProcessingController));
                     return BadRequest(new { error = errorMsg });
                 }
-
-               
                 // Box breaking logic
                 var finalWithBoxes = new List<dynamic>();
                 int boxNo = startBox;
