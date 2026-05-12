@@ -163,18 +163,18 @@ namespace Tools.Controllers
             try
             {
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Updated ProjectConfig for {projectConfig.ProjectId}", "ProjectConfig", LogHelper.GetTriggeredBy(User), projectConfig.ProjectId);
+                await _loggerService.LogEventAsync($"Updated ProjectConfig for {projectConfig.ProjectId}", "ProjectConfig", LogHelper.GetTriggeredBy(User), projectConfig.ProjectId);
             }
             catch (Exception ex)
             {
                 if (!ProjectConfigExists(id))
                 {
-                    _loggerService.LogEvent($"ProjectConfig with ID {id} not found", "ProjectConfig", LogHelper.GetTriggeredBy(User), projectConfig.ProjectId);
+                    await _loggerService.LogEventAsync($"ProjectConfig with ID {id} not found", "ProjectConfig", LogHelper.GetTriggeredBy(User), projectConfig.ProjectId);
                     return NotFound();
                 }
                 else
                 {
-                    _loggerService.LogError("Error updating ProjectConfigs", ex.Message, nameof(ProjectConfigsController));
+                    await _loggerService.LogErrorAsync("Error updating ProjectConfigs", ex.Message, nameof(ProjectConfigsController));
                     return StatusCode(500, "Internal server error");
 
                 }
@@ -194,19 +194,19 @@ namespace Tools.Controllers
                 
                 if (config != null)
                 {
-                    _loggerService.LogEvent($"ProjectConfig for {config.ProjectId} already exists", "ProjectConfig", LogHelper.GetTriggeredBy(User), projectConfig.ProjectId);
+                    await _loggerService.LogEventAsync($"ProjectConfig for {config.ProjectId} already exists", "ProjectConfig", LogHelper.GetTriggeredBy(User), projectConfig.ProjectId);
                    
                     _context.ProjectConfigs.Remove(config);
                     await _context.SaveChangesAsync();
                 }
                 _context.ProjectConfigs.Add(projectConfig);
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Created a new ProjectConfig with ID {projectConfig.ProjectId}", "ProjectConfig", LogHelper.GetTriggeredBy(User), projectConfig.ProjectId);
+                await _loggerService.LogEventAsync($"Created a new ProjectConfig with ID {projectConfig.ProjectId}", "ProjectConfig", LogHelper.GetTriggeredBy(User), projectConfig.ProjectId);
                 return CreatedAtAction("GetProjectConfig", new { id = projectConfig.Id }, projectConfig);
             }
             catch (Exception ex)
             {
-               _loggerService.LogError("Error creating ProjectConfigs", ex.Message, nameof(ProjectConfigsController));
+                await _loggerService.LogErrorAsync("Error creating ProjectConfigs", ex.Message, nameof(ProjectConfigsController));
                 return StatusCode(500, "Internal server error");
             }
         }
@@ -257,7 +257,7 @@ namespace Tools.Controllers
                     }
                 }
 
-                _loggerService.LogEvent(
+                await _loggerService.LogEventAsync(
                     $"Deleted reports: {string.Join(",", reportKeys)}",
                     "ModuleCleanup",
                     userId,
@@ -272,7 +272,7 @@ namespace Tools.Controllers
             }
             catch (Exception ex)
             {
-                _loggerService.LogError("Error deleting reports", ex.Message, nameof(ProjectConfigsController));
+                await _loggerService.LogErrorAsync("Error deleting reports", ex.Message, nameof(ProjectConfigsController));
                 return StatusCode(500, "Internal server error");
             }
         }
@@ -298,18 +298,18 @@ namespace Tools.Controllers
                 var projectConfig = await _context.ProjectConfigs.FindAsync(id);
                 if (projectConfig == null)
                 {
-                    _loggerService.LogEvent($"ProjectConfig with ID {id} not found during delete", "ProjectConfig", LogHelper.GetTriggeredBy(User),projectConfig.ProjectId);
+                    await _loggerService.LogEventAsync($"ProjectConfig with ID {id} not found during delete", "ProjectConfig", LogHelper.GetTriggeredBy(User), projectConfig.ProjectId);
                     return NotFound();
                 }
 
                 _context.ProjectConfigs.Remove(projectConfig);
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Deleted a ProjectConfig with ID {projectConfig.ProjectId}", "ProjectConfig", LogHelper.GetTriggeredBy(User), projectConfig.ProjectId);
+                await _loggerService.LogEventAsync($"Deleted a ProjectConfig with ID {projectConfig.ProjectId}", "ProjectConfig", LogHelper.GetTriggeredBy(User), projectConfig.ProjectId);
                 return NoContent();
             }
             catch (Exception ex)
             {
-                _loggerService.LogError("Error deleting ProjectConfigs", ex.Message, nameof(ProjectConfigsController));
+                await _loggerService.LogErrorAsync("Error deleting ProjectConfigs", ex.Message, nameof(ProjectConfigsController));
                 return StatusCode(500, "Internal server error");
             }
         }

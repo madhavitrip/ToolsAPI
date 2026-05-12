@@ -63,21 +63,21 @@ namespace Tools.Controllers
             try
             {
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Updated Field for Id {id}", "Field", LogHelper.GetTriggeredBy(User),0);
+                await _loggerService.LogEventAsync($"Updated Field for Id {id}", "Field", LogHelper.GetTriggeredBy(User), 0);
 
             }
             catch (Exception ex)
             {
                 if (!FieldExists(id))
                 {
-                    _loggerService.LogEvent($"Field with ID {id} not found during updating", "Field", LogHelper.GetTriggeredBy(User),0);
+                    await _loggerService.LogEventAsync($"Field with ID {id} not found during updating", "Field", LogHelper.GetTriggeredBy(User), 0);
 
                     return NotFound();
                 }
                 else
                 {
 
-                    _loggerService.LogError("Error updating Field", ex.Message, nameof(FieldsController));
+                    await _loggerService.LogErrorAsync("Error updating Field", ex.Message, nameof(FieldsController));
                     return StatusCode(500, "Internal server error");
                 }
             }
@@ -104,7 +104,7 @@ namespace Tools.Controllers
                 _context.Fields.Add(field);
                 await _context.SaveChangesAsync();
 
-                _loggerService.LogEvent(
+                await _loggerService.LogEventAsync(
                     $"Created a new Field with ID {field.FieldId}",
                     "Field",
                     LogHelper.GetTriggeredBy(User),
@@ -115,7 +115,7 @@ namespace Tools.Controllers
             }
             catch (Exception ex)
             {
-                _loggerService.LogError("Error creating Field", ex.Message, nameof(FieldsController));
+                await _loggerService.LogErrorAsync("Error creating Field", ex.Message, nameof(FieldsController));
                 return StatusCode(500, "Internal server error");
             }
         }
@@ -134,13 +134,13 @@ namespace Tools.Controllers
 
                 _context.Fields.Remove(@field);
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Deleted a Field with ID {id}", "Field", LogHelper.GetTriggeredBy(User),0);
+                await _loggerService.LogEventAsync($"Deleted a Field with ID {id}", "Field", LogHelper.GetTriggeredBy(User), 0);
 
                 return NoContent();
             }
             catch (Exception ex)
             {
-                _loggerService.LogError("Error deleting Field", ex.Message, nameof(FieldsController));
+                await _loggerService.LogErrorAsync("Error deleting Field", ex.Message, nameof(FieldsController));
                 return StatusCode(500, "Internal server error");
             }
         }

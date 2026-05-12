@@ -58,20 +58,20 @@ namespace Tools.Controllers
 
             try
             {
-                _loggerService.LogEvent($"Updated BoxCapacity with ID {id}", "BoxCapacity", LogHelper.GetTriggeredBy(User), 0);
+                await _loggerService.LogEventAsync($"Updated BoxCapacity with ID {id}", "BoxCapacity", LogHelper.GetTriggeredBy(User), 0);
                 await _context.SaveChangesAsync();
             }
             catch (Exception ex)
             {
                 if (!BoxCapacityExists(id))
                 {
-                    _loggerService.LogEvent($"BoxCapacity with ID {id} not found during updating", "BoxCapacity", LogHelper.GetTriggeredBy(User), 0);
+                    await _loggerService.LogEventAsync($"BoxCapacity with ID {id} not found during updating", "BoxCapacity", LogHelper.GetTriggeredBy(User), 0);
 
                     return NotFound();
                 }
                 else
                 {
-                    _loggerService.LogError("Error updating BoxCapacity", ex.Message, nameof(BoxCapacitiesController));
+                    await _loggerService.LogErrorAsync("Error updating BoxCapacity", ex.Message, nameof(BoxCapacitiesController));
                     return StatusCode(500, "Internal server error");
                 }
             }
@@ -88,12 +88,12 @@ namespace Tools.Controllers
             {
                 _context.BoxCapacity.Add(boxCapacity);
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"BoxCapacity with {boxCapacity} has been created", "BoxCapacity", LogHelper.GetTriggeredBy(User), 0);
+                await _loggerService.LogEventAsync($"BoxCapacity with {boxCapacity} has been created", "BoxCapacity", LogHelper.GetTriggeredBy(User), 0);
                 return CreatedAtAction("GetBoxCapacity", new { id = boxCapacity.BoxCapacityId }, boxCapacity);
             }
             catch (Exception ex)
             {
-                _loggerService.LogError("Error creating BoxCapacity", ex.Message, nameof(BoxCapacitiesController));
+                await _loggerService.LogErrorAsync("Error creating BoxCapacity", ex.Message, nameof(BoxCapacitiesController));
                 return StatusCode(500, "Internal server error");
 
             }
@@ -108,10 +108,10 @@ namespace Tools.Controllers
                 var boxCapacity = await _context.BoxCapacity.FindAsync(id);
                 if (boxCapacity == null)
                 {
-                    _loggerService.LogError($"BoxCapacity with ID {id} not found", "BoxCapacity",nameof(BoxCapacitiesController));
+                    await _loggerService.LogErrorAsync($"BoxCapacity with ID {id} not found", "BoxCapacity",nameof(BoxCapacitiesController));
                     return NotFound();
                 }
-                _loggerService.LogEvent($"BoxCapacity with ID {id} has been deleted", "BoxCapacity", LogHelper.GetTriggeredBy(User), 0);
+                await _loggerService.LogEventAsync($"BoxCapacity with ID {id} has been deleted", "BoxCapacity", LogHelper.GetTriggeredBy(User), 0);
 
                 _context.BoxCapacity.Remove(boxCapacity);
                 await _context.SaveChangesAsync();
@@ -121,7 +121,7 @@ namespace Tools.Controllers
             catch (Exception ex)
             {
 
-                    _loggerService.LogError($"Error deleting BoxCapacity with Id {id}", ex.Message, nameof(BoxCapacitiesController));
+                    await _loggerService.LogErrorAsync($"Error deleting BoxCapacity with Id {id}", ex.Message, nameof(BoxCapacitiesController));
                     return StatusCode(500, "Internal server error");
                 
             }

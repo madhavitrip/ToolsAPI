@@ -75,21 +75,21 @@ namespace Tools.Controllers
             try
             {
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Updated Module for id {id}", "Module", LogHelper.GetTriggeredBy(User),0);
+                await _loggerService.LogEventAsync($"Updated Module for id {id}", "Module", LogHelper.GetTriggeredBy(User), 0);
 
             }
             catch (Exception ex)
             {
                 if (!ModuleExists(id))
                 {
-                    _loggerService.LogEvent($"Module with ID {id} not found during updating", "Module", LogHelper.GetTriggeredBy(User),0);
+                    await _loggerService.LogEventAsync($"Module with ID {id} not found during updating", "Module", LogHelper.GetTriggeredBy(User), 0);
 
                     return NotFound();
                 }
                 else
                 {
 
-                    _loggerService.LogError("Error updating Module", ex.Message, nameof(ModulesController));
+                    await _loggerService.LogErrorAsync("Error updating Module", ex.Message, nameof(ModulesController));
                     return StatusCode(500, "Internal server error");
 
                 }
@@ -107,13 +107,13 @@ namespace Tools.Controllers
             {
                 _context.Modules.Add(@module);
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Created a new Module with ID {module.Id}", "Module", LogHelper.GetTriggeredBy(User),0);
+                await _loggerService.LogEventAsync($"Created a new Module with ID {module.Id}", "Module", LogHelper.GetTriggeredBy(User), 0);
 
                 return CreatedAtAction("GetModule", new { id = @module.Id }, @module);
             }
             catch (Exception ex)
             {
-                _loggerService.LogError("Error creating Module", ex.Message, nameof(ModulesController));
+                await _loggerService.LogErrorAsync("Error creating Module", ex.Message, nameof(ModulesController));
                 return StatusCode(500, "Internal server error");
             }
         }
@@ -132,13 +132,13 @@ namespace Tools.Controllers
 
                 _context.Modules.Remove(@module);
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Deleted a Module with ID {id}", "Module", LogHelper.GetTriggeredBy(User),0);
+                await _loggerService.LogEventAsync($"Deleted a Module with ID {id}", "Module", LogHelper.GetTriggeredBy(User), 0);
 
                 return NoContent();
             }
             catch (Exception ex)
             {
-                _loggerService.LogError("Error deleting Module", ex.Message, nameof(ModulesController));
+                await _loggerService.LogErrorAsync("Error deleting Module", ex.Message, nameof(ModulesController));
                 return StatusCode(500, "Internal server error");
             }
         }

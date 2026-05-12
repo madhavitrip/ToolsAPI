@@ -101,20 +101,20 @@ namespace Tools.Controllers
             try
             {
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Updated ExtrasConfiguration with ID {id}", "ExtrasConfiguration", LogHelper.GetTriggeredBy(User), extrasConfiguration.ProjectId);
+                await _loggerService.LogEventAsync($"Updated ExtrasConfiguration with ID {id}", "ExtrasConfiguration", LogHelper.GetTriggeredBy(User), extrasConfiguration.ProjectId);
 
             }
             catch (Exception ex)
             {
                 if (!ExtrasConfigurationExists(id))
                 {
-                    _loggerService.LogEvent($"ExtrasConfiguration with ID {id} not found during updating", "ExtrasConfiguration", LogHelper.GetTriggeredBy(User), extrasConfiguration.ProjectId);
+                    await _loggerService.LogEventAsync($"ExtrasConfiguration with ID {id} not found during updating", "ExtrasConfiguration", LogHelper.GetTriggeredBy(User), extrasConfiguration.ProjectId);
 
                     return NotFound();
                 }
                 else
                 {
-                    _loggerService.LogError("Error updating ExtrasConfiguration", ex.Message, nameof(ExtrasConfigurationsController));
+                    await _loggerService.LogErrorAsync("Error updating ExtrasConfiguration", ex.Message, nameof(ExtrasConfigurationsController));
                     return StatusCode(500, "Internal server error");
                 }
             }
@@ -149,7 +149,7 @@ namespace Tools.Controllers
                     _context.ExtraConfigurations.RemoveRange(extra);
                     await _context.SaveChangesAsync();
                     Console.WriteLine($" Deleted {extra.Count} old ExtrasConfiguration record(s) for ProjectId {projectId}");
-                    _loggerService.LogEvent($"Deleted {projectId} old ExtrasConfiguration record(s)",
+                    await _loggerService.LogEventAsync($"Deleted {projectId} old ExtrasConfiguration record(s)",
                   "ExtrasConfiguration", LogHelper.GetTriggeredBy(User), extrasConfiguration.ProjectId);
                 }
 
@@ -160,18 +160,18 @@ namespace Tools.Controllers
                 Console.WriteLine($" Saved ExtrasConfiguration with ID {extrasConfiguration.Id}");
                 Console.WriteLine($"   nodalValue in DB: {extrasConfiguration.nodalValue ?? "NULL"}");
                 
-                _loggerService.LogEvent($"Created new ExtrasConfiguration with ProjectID {extrasConfiguration.ProjectId}", "ExtrasConfiguration", LogHelper.GetTriggeredBy(User), extrasConfiguration.ProjectId);
+                await _loggerService.LogEventAsync($"Created new ExtrasConfiguration with ProjectID {extrasConfiguration.ProjectId}", "ExtrasConfiguration", LogHelper.GetTriggeredBy(User), extrasConfiguration.ProjectId);
 
                 return CreatedAtAction("GetExtrasConfiguration", new { id = extrasConfiguration.Id }, extrasConfiguration);
             }
             catch (DbUpdateConcurrencyException ex)
             {
-                _loggerService.LogError("Concurrency error when saving ExtrasConfiguration", ex.Message, nameof(ExtrasConfigurationsController));
+                await _loggerService.LogErrorAsync("Concurrency error when saving ExtrasConfiguration", ex.Message, nameof(ExtrasConfigurationsController));
                 return Conflict("Concurrency conflict occurred. The data may have been modified or deleted by another process.");
             }
             catch (Exception ex)
             {
-                _loggerService.LogError("Error creating ExtrasConfiguration", ex.Message, nameof(ExtrasConfigurationsController));
+                await _loggerService.LogErrorAsync("Error creating ExtrasConfiguration", ex.Message, nameof(ExtrasConfigurationsController));
                 return StatusCode(500, "Internal server error");
             }
         }
@@ -190,13 +190,13 @@ namespace Tools.Controllers
 
                 _context.ExtraConfigurations.Remove(extrasConfiguration);
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Deleted a ExtrasConfiguration with ID {id}", "ExtrasConfiguration", LogHelper.GetTriggeredBy(User), extrasConfiguration.ProjectId);
+                await _loggerService.LogEventAsync($"Deleted a ExtrasConfiguration with ID {id}", "ExtrasConfiguration", LogHelper.GetTriggeredBy(User), extrasConfiguration.ProjectId);
 
                 return NoContent();
             }
             catch (Exception ex)
             {
-                _loggerService.LogError("Error deleting ExtrasConfiguration", ex.Message, nameof(ExtrasConfigurationsController));
+                await _loggerService.LogErrorAsync("Error deleting ExtrasConfiguration", ex.Message, nameof(ExtrasConfigurationsController));
                 return StatusCode(500, "Internal server error");
             }
 

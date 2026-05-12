@@ -50,7 +50,7 @@ namespace Tools.Controllers
 
             if (!NRData.Any() || !Envelope.Any())
                 return NotFound("No data available for this project.");
-            _loggerService.LogEvent($"No data available for this project", "EnvelopeBreakage", LogHelper.GetTriggeredBy(User), ProjectId);
+            await _loggerService.LogEventAsync($"No data available for this project", "EnvelopeBreakage", LogHelper.GetTriggeredBy(User), ProjectId);
 
 
             var Consolidated = (from nr in NRData
@@ -119,7 +119,7 @@ namespace Tools.Controllers
                         }
                         catch (Exception ex)
                         {
-                            _loggerService.LogError("Error in NRDatas, not being able to serailize", ex.Message, nameof(EnvelopeBreakagesController));
+                            await _loggerService.LogErrorAsync("Error in NRDatas, not being able to serailize", ex.Message, nameof(EnvelopeBreakagesController));
                             return StatusCode(500, "Internal server error");
                         }
                     }
@@ -139,7 +139,7 @@ namespace Tools.Controllers
                         }
                         catch (Exception ex)
                         {
-                            _loggerService.LogError("Error in InnerEnvelope, not being able to serailize", ex.Message, nameof(EnvelopeBreakagesController));
+                            await _loggerService.LogErrorAsync("Error in InnerEnvelope, not being able to serailize", ex.Message, nameof(EnvelopeBreakagesController));
                             return StatusCode(500, "Internal server error");
                         }
                     }
@@ -159,7 +159,7 @@ namespace Tools.Controllers
                         }
                         catch (Exception ex)
                         {
-                            _loggerService.LogError("Error in OuterEnvelope, not being able to serailize", ex.Message, nameof(EnvelopeBreakagesController));
+                            await _loggerService.LogErrorAsync("Error in OuterEnvelope, not being able to serailize", ex.Message, nameof(EnvelopeBreakagesController));
                             return StatusCode(500, "Internal server error");
                         }
                     }
@@ -171,7 +171,7 @@ namespace Tools.Controllers
             }
             catch (Exception ex)
             {
-                _loggerService.LogError("Error in NRDatas, not being able to serailize", ex.Message, nameof(EnvelopeBreakagesController));
+                await _loggerService.LogErrorAsync("Error in NRDatas, not being able to serailize", ex.Message, nameof(EnvelopeBreakagesController));
                 return StatusCode(500, "Internal server error");
             }
 
@@ -221,13 +221,13 @@ namespace Tools.Controllers
                     ws.View.FreezePanes(2, 1);
                     package.SaveAs(new FileInfo(filePath));
                 }
-                _loggerService.LogEvent($"EnvelopeBreakage report of ProjectId {ProjectId} has been created", "EnvelopeBreakage", LogHelper.GetTriggeredBy(User), ProjectId);
+                await _loggerService.LogEventAsync($"EnvelopeBreakage report of ProjectId {ProjectId} has been created", "EnvelopeBreakage", LogHelper.GetTriggeredBy(User), ProjectId);
                 return Ok(Consolidated); // Return original data for UI (optional)
             }
             catch (Exception ex)
             {
 
-                _loggerService.LogError("Error in generating report", ex.Message, nameof(EnvelopeBreakagesController));
+                await _loggerService.LogErrorAsync("Error in generating report", ex.Message, nameof(EnvelopeBreakagesController));
                 return StatusCode(500, "Internal server error");
             }
 
@@ -262,20 +262,20 @@ namespace Tools.Controllers
 
             try
             {
-                _loggerService.LogEvent($"Updated EnvelopeBreakage with ID {id}", "EnvelopeBreakage", LogHelper.GetTriggeredBy(User), envelopeBreakage.ProjectId);
+                await _loggerService.LogEventAsync($"Updated EnvelopeBreakage with ID {id}", "EnvelopeBreakage", LogHelper.GetTriggeredBy(User), envelopeBreakage.ProjectId);
                 await _context.SaveChangesAsync();
             }
             catch (Exception ex)
             {
                 if (!EnvelopeBreakageExists(id))
                 {
-                    _loggerService.LogEvent($"EnvelopeBreakage with ID {id} not found during updating", "EnvelopeBreakage", LogHelper.GetTriggeredBy(User), envelopeBreakage.ProjectId);
+                    await _loggerService.LogEventAsync($"EnvelopeBreakage with ID {id} not found during updating", "EnvelopeBreakage", LogHelper.GetTriggeredBy(User), envelopeBreakage.ProjectId);
                     return NotFound();
 
                 }
                 else
                 {
-                    _loggerService.LogError("Error updating EnvelopeBreakage", ex.Message, nameof(EnvelopeBreakagesController));
+                    await _loggerService.LogErrorAsync("Error updating EnvelopeBreakage", ex.Message, nameof(EnvelopeBreakagesController));
                     return StatusCode(500, "Internal server error");
                 }
             }
@@ -329,7 +329,7 @@ namespace Tools.Controllers
                     _context.EnvelopeBreakages.RemoveRange(env);
                     await _context.SaveChangesAsync();
 
-                    _loggerService.LogEvent($"Successfully deleted {env.Count} Envelope Breaking entries for ProjectID {ProjectId}", "EnvelopeBreakages",
+                    await _loggerService.LogEventAsync($"Successfully deleted {env.Count} Envelope Breaking entries for ProjectID {ProjectId}", "EnvelopeBreakages",
                         LogHelper.GetTriggeredBy(User), ProjectId);
                 }
                 else
@@ -419,30 +419,53 @@ namespace Tools.Controllers
                 {
                     _context.EnvelopeBreakages.AddRange(breakagesToAdd);
                     await _context.SaveChangesAsync();
-                    _loggerService.LogEvent($"Created Envelope Breaking of ProjectID {ProjectId}", "EnvelopeBreakages", LogHelper.GetTriggeredBy(User), ProjectId);
+                    await _loggerService.LogEventAsync($"Created Envelope Breaking of ProjectID {ProjectId}", "EnvelopeBreakages", LogHelper.GetTriggeredBy(User), ProjectId);
                 }
 
 
-                            using var client = new HttpClient();
-                             var response = await client.PostAsync(
-                $"{_apiSettings.EnvelopeBreakageUrl}?ProjectId={ProjectId}&triggeredBy={LogHelper.GetTriggeredBy(User)}",
-                 new StringContent("") // required
-                 );
-                             if (!response.IsSuccessStatusCode)
-                             {
-                                var error = await response.Content.ReadAsStringAsync();
-                                Console.WriteLine($"API Failed: {response.StatusCode}, {error}");
-                             }
-                            else
+                            // ✅ Call ProcessEnvelopeBreaking directly instead of via HTTP
+                            try
                             {
-                                var data = await response.Content.ReadAsStringAsync();
-                                 Console.WriteLine($"API Success: {data}");
+                                // Create an Options wrapper for ApiSettings
+                                var apiSettingsOptions = Options.Create(_apiSettings);
+                                var envelopeBreakageProcessingController = new EnvelopeBreakageProcessingController(_context, _loggerService, apiSettingsOptions);
+                                var processResult = await envelopeBreakageProcessingController.ProcessEnvelopeBreaking(ProjectId, LogHelper.GetTriggeredBy(User));
+                                
+                                if (processResult is OkObjectResult okResult)
+                                {
+                                    Console.WriteLine($"ProcessEnvelopeBreaking Success: {okResult.Value}");
+                                }
+                                else if (processResult is BadRequestObjectResult badResult)
+                                {
+                                    Console.WriteLine($"ProcessEnvelopeBreaking Failed: {badResult.Value}");
+                                    return BadRequest(new { error = "Envelope breaking processing failed", details = badResult.Value });
+                                }
+                                else if (processResult is ObjectResult objResult && objResult.StatusCode >= 400)
+                                {
+                                    Console.WriteLine($"ProcessEnvelopeBreaking Error: {objResult.Value}");
+                                    return StatusCode(objResult.StatusCode ?? 500, new { error = "Envelope breaking processing failed", details = objResult.Value });
+                                }
+                                else
+                                {
+                                    Console.WriteLine($"ProcessEnvelopeBreaking returned: {processResult.GetType().Name}");
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                var innerError = ex.InnerException?.Message ?? ex.Message;
+                                Console.WriteLine($"ProcessEnvelopeBreaking Exception: {ex.Message} | Inner: {innerError}");
+                                return StatusCode(500, new { 
+                                    error = "Failed to process envelope breaking", 
+                                    details = ex.Message,
+                                    innerException = innerError,
+                                    stackTrace = ex.StackTrace
+                                });
                             }
                 return Ok("Envelope breakdown report has been successfully created.");
             }
             catch (Exception ex)
             {
-                _loggerService.LogError("Error creating EnvelopeBreakage", ex.Message, nameof(EnvelopeBreakagesController));
+                await _loggerService.LogErrorAsync("Error creating EnvelopeBreakage", ex.Message, nameof(EnvelopeBreakagesController));
                 return StatusCode(500, "Internal Server Error");
             }
         }
@@ -730,7 +753,7 @@ namespace Tools.Controllers
             }
             catch (Exception ex)
             {
-                _loggerService.LogError("Error generating EnvelopeSummaryReport", ex.ToString(), nameof(EnvelopeBreakagesController));
+                await _loggerService.LogErrorAsync("Error generating EnvelopeSummaryReport", ex.ToString(), nameof(EnvelopeBreakagesController));
                 return StatusCode(500, $"Internal Server Error: {ex.Message}");
             }
         }
@@ -1011,13 +1034,13 @@ namespace Tools.Controllers
 
                 package.SaveAs(new FileInfo(filePath));
 
-                _loggerService.LogEvent("CatchSummary report created", "CatchSummary", LogHelper.GetTriggeredBy(User), ProjectId);
+                await _loggerService.LogEventAsync("CatchSummary report created", "CatchSummary", LogHelper.GetTriggeredBy(User), ProjectId);
 
                 return Ok($"CatchSummary.xlsx generated at: {filePath}");
             }
             catch (Exception ex)
             {
-                _loggerService.LogError("Error generating CatchEnvelopeSummaryWithExtras", ex.ToString(), nameof(EnvelopeBreakagesController));
+                await _loggerService.LogErrorAsync("Error generating CatchEnvelopeSummaryWithExtras", ex.ToString(), nameof(EnvelopeBreakagesController));
                 return StatusCode(500, $"Internal Server Error: {ex.Message}");
             }
         }
@@ -1035,14 +1058,14 @@ namespace Tools.Controllers
                 }
 
                 _context.EnvelopeBreakages.Remove(envelopeBreakage);
-                _loggerService.LogEvent($"Deleted Envelope Breaking of Id {id}", "EnvelopeBreakages", LogHelper.GetTriggeredBy(User), envelopeBreakage.ProjectId);
+                await _loggerService.LogEventAsync($"Deleted Envelope Breaking of Id {id}", "EnvelopeBreakages", LogHelper.GetTriggeredBy(User), envelopeBreakage.ProjectId);
                 await _context.SaveChangesAsync();
 
                 return NoContent();
             }
             catch (Exception ex)
             {
-                _loggerService.LogError("Error deleting EnvelopeBreakage", ex.Message, nameof(EnvelopeBreakagesController));
+                await _loggerService.LogErrorAsync("Error deleting EnvelopeBreakage", ex.Message, nameof(EnvelopeBreakagesController));
                 return StatusCode(500, "Internal Server Error");
             }
 

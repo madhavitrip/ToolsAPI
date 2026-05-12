@@ -62,19 +62,19 @@ namespace Tools.Controllers
             {
 
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Updated EnvelopeType with {id}", "EnvelopeType", LogHelper.GetTriggeredBy(User),0);
+                await _loggerService.LogEventAsync($"Updated EnvelopeType with {id}", "EnvelopeType", LogHelper.GetTriggeredBy(User), 0);
 
             }
             catch (Exception ex)
             {
                 if (!EnvelopeTypeExists(id))
                 {
-                    _loggerService.LogEvent($"EnvelopeType with ID {id} not found during updating", "EnvelopeType", LogHelper.GetTriggeredBy(User),0);
+                    await _loggerService.LogEventAsync($"EnvelopeType with ID {id} not found during updating", "EnvelopeType", LogHelper.GetTriggeredBy(User), 0);
                     return NotFound();
                 }
                 else
                 {
-                    _loggerService.LogError("Error updating EnvelopeType", ex.Message, nameof(EnvelopeTypesController));
+                    await _loggerService.LogErrorAsync("Error updating EnvelopeType", ex.Message, nameof(EnvelopeTypesController));
                     return StatusCode(500, "Internal Server Error");
                 }
             }
@@ -91,12 +91,12 @@ namespace Tools.Controllers
             {
                 _context.EnvelopesTypes.Add(envelopeType);
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Created a new EnvelopeType with ID {envelopeType.EnvelopeId}", "EnvelopeType", LogHelper.GetTriggeredBy(User),0);
+                await _loggerService.LogEventAsync($"Created a new EnvelopeType with ID {envelopeType.EnvelopeId}", "EnvelopeType", LogHelper.GetTriggeredBy(User), 0);
                 return CreatedAtAction("GetEnvelopeType", new { id = envelopeType.EnvelopeId }, envelopeType);
             }
             catch (Exception ex)
             {
-                _loggerService.LogError("Error creating EnvelopeType", ex.Message, nameof(EnvelopeTypesController));
+                await _loggerService.LogErrorAsync("Error creating EnvelopeType", ex.Message, nameof(EnvelopeTypesController));
                 return StatusCode(500, "Internal Server Error");
             }
         }
@@ -115,12 +115,12 @@ namespace Tools.Controllers
 
                 _context.EnvelopesTypes.Remove(envelopeType);
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Deleted a EnvelopeType with ID {id}", "EnvelopeType", LogHelper.GetTriggeredBy(User),0);
+                await _loggerService.LogEventAsync($"Deleted a EnvelopeType with ID {id}", "EnvelopeType", LogHelper.GetTriggeredBy(User), 0);
                 return NoContent();
             }
             catch (Exception ex)
             {
-                _loggerService.LogError($"Error deleting EnvelopeType with Id{id}", ex.Message, nameof(EnvelopeTypesController));
+                await _loggerService.LogErrorAsync($"Error deleting EnvelopeType with Id{id}", ex.Message, nameof(EnvelopeTypesController));
                 return StatusCode(500, "Internal Server Error");
             }
         }

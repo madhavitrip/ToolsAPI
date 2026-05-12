@@ -137,7 +137,7 @@ namespace Tools.Controllers
 
                 var triggeredBy = LogHelper.GetTriggeredBy(User);
 
-                _logger.LogEvent(
+                await _logger.LogEventAsync(
                     "Duplicates merged and new rows created",
                     "Duplicates",
                     triggeredBy,
@@ -277,7 +277,7 @@ namespace Tools.Controllers
             }
             catch (Exception ex)
             {
-                _logger.LogError("Error solving duplicates", ex.Message, nameof(DuplicateController));
+                await _logger.LogErrorAsync("Error solving duplicates", ex.Message, nameof(DuplicateController));
                 return StatusCode(500, "Internal server error");
             }
         }
@@ -357,7 +357,7 @@ WHERE ProjectId = {0};", ProjectId);
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogError("Error in serializing Envelope", ex.Message, nameof(DuplicateController));
+                        await _logger.LogErrorAsync("Error in serializing Envelope", ex.Message, nameof(DuplicateController));
                         // Fallback: proceed without envelope-based rounding
                         smallestInner = 0;
                     }
@@ -395,7 +395,7 @@ WHERE ProjectId = {0};", ProjectId);
                             d.Quantity = (int)Math.Round(totalTarget);
                         }
                     }
-                    d.Steps = 2;
+                    d.Steps = Tools.Models.PipelineNavigator.GetNextStep(Tools.Models.PipelineNavigator.STEP_DUP_PARTIAL, projectconfig?.Modules);
                 }
 
                 await _context.SaveChangesAsync();
@@ -446,7 +446,7 @@ WHERE ProjectId = {0};", ProjectId);
                 // Logging
                 var triggeredBy = LogHelper.GetTriggeredBy(User);
 
-                _logger.LogEvent(
+                await _logger.LogEventAsync(
                     "Enhancement applied with report",
                     "Enhancement",
                     triggeredBy,
@@ -463,7 +463,7 @@ WHERE ProjectId = {0};", ProjectId);
             }
             catch (Exception ex)
             {
-                _logger.LogError("Error applying enhancement", ex.Message, nameof(DuplicateController));
+                await _logger.LogErrorAsync("Error applying enhancement", ex.Message, nameof(DuplicateController));
                 return StatusCode(500, "Internal server error");
             }
         }

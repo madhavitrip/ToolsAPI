@@ -78,7 +78,7 @@ namespace Tools.Controllers
             }
             catch (Exception ex)
             {
-                _loggerService.LogError(
+                await _loggerService.LogErrorAsync(
                     "Error fetching unique lots",
                     ex.Message,
                     nameof(NRDataLotsController)
@@ -129,7 +129,7 @@ namespace Tools.Controllers
             }
             catch (Exception ex)
             {
-                _loggerService.LogError(
+                await _loggerService.LogErrorAsync(
                     "Error fetching lots with dispatch info",
                     ex.Message,
                     nameof(NRDataLotsController)
@@ -167,7 +167,7 @@ namespace Tools.Controllers
             }
             catch (Exception ex)
             {
-                _loggerService.LogError(
+                await _loggerService.LogErrorAsync(
                     "Error fetching unique lots",
                     ex.Message,
                     nameof(NRDataLotsController)
@@ -219,7 +219,7 @@ namespace Tools.Controllers
             }
 
             await _context.SaveChangesAsync();
-            _loggerService.LogEvent(
+            await _loggerService.LogEventAsync(
                 $"Updated LotNo for {rows.Count} NRData rows (ProjectId {request.ProjectId})",
                 "NRDataLots",
                 LogHelper.GetTriggeredBy(User),

@@ -49,7 +49,7 @@ namespace Tools.Controllers
                     _context.MExtraConfigurations.RemoveRange(extra);
                     await _context.SaveChangesAsync();
 
-                    _loggerService.LogEvent(
+                    await _loggerService.LogEventAsync(
                         $"Deleted old MExtrasConfiguration record(s) for TypeId {extrasConfiguration.TypeId} and GroupId {extrasConfiguration.GroupId}",
                         "MExtraConfigurations",
                         LogHelper.GetTriggeredBy(User),
@@ -60,7 +60,7 @@ namespace Tools.Controllers
                 _context.MExtraConfigurations.Add(extrasConfiguration);
                 await _context.SaveChangesAsync();
 
-                _loggerService.LogEvent(
+                await _loggerService.LogEventAsync(
                     $"Created new MExtrasConfiguration with TypeId {extrasConfiguration.TypeId} and GroupId {extrasConfiguration.GroupId}",
                     "MExtraConfigurations",
                     LogHelper.GetTriggeredBy(User),
@@ -71,7 +71,7 @@ namespace Tools.Controllers
             }
             catch (DbUpdateConcurrencyException ex)
             {
-                _loggerService.LogError(
+                await _loggerService.LogErrorAsync(
                     "Concurrency error when saving MExtrasConfiguration",
                     ex.Message,
                     nameof(MExtraConfigsController)
@@ -81,7 +81,7 @@ namespace Tools.Controllers
             }
             catch (Exception ex)
             {
-                _loggerService.LogError(
+                await _loggerService.LogErrorAsync(
                     "Error creating MExtrasConfiguration",
                     ex.Message,
                     nameof(MExtraConfigsController)

@@ -31,7 +31,7 @@ namespace Tools.Controllers
 
                 if (config != null)
                 {
-                    _loggerService.LogEvent(
+                    await _loggerService.LogEventAsync(
                         $"MProjectConfig for TypeId {config.TypeId} and GroupId {config.GroupId} already exists",
                         "MProjectConfigs",
                         LogHelper.GetTriggeredBy(User),
@@ -56,7 +56,7 @@ namespace Tools.Controllers
                 _context.MProjectConfigs.Add(projectConfig);
                 await _context.SaveChangesAsync();
 
-                _loggerService.LogEvent(
+                await _loggerService.LogEventAsync(
                     $"Created a new MProjectConfig with TypeId {projectConfig.TypeId} and GroupId {projectConfig.GroupId}",
                     "MProjectConfigs",
                     LogHelper.GetTriggeredBy(User),
@@ -67,7 +67,7 @@ namespace Tools.Controllers
             }
             catch (Exception ex)
             {
-                _loggerService.LogError("Error creating MProjectConfigs", ex.Message, nameof(MProjectConfigsController));
+                await _loggerService.LogErrorAsync("Error creating MProjectConfigs", ex.Message, nameof(MProjectConfigsController));
                 return StatusCode(500, "Internal server error");
             }
         }

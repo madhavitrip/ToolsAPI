@@ -125,19 +125,19 @@ namespace Tools.Controllers
 
             try
             {
-                _loggerService.LogEvent($"Updated ExtraEnvelope with id {id}", "ExtraEnvelopes", LogHelper.GetTriggeredBy(User), extraEnvelopes.ProjectId);
+                await _loggerService.LogEventAsync($"Updated ExtraEnvelope with id {id}", "ExtraEnvelopes", LogHelper.GetTriggeredBy(User), extraEnvelopes.ProjectId);
                 await _context.SaveChangesAsync();
             }
             catch (Exception ex)
             {
                 if (!ExtraEnvelopesExists(id))
                 {
-                    _loggerService.LogEvent($"ExtraEnvelopes with ID {id} not found during updating", "ExtraEnvelopes", LogHelper.GetTriggeredBy(User), extraEnvelopes.ProjectId);
+                    await _loggerService.LogEventAsync($"ExtraEnvelopes with ID {id} not found during updating", "ExtraEnvelopes", LogHelper.GetTriggeredBy(User), extraEnvelopes.ProjectId);
                     return NotFound();
                 }
                 else
                 {
-                    _loggerService.LogError("Error updating ExtraEnvelopes", ex.Message, nameof(ExtraEnvelopesController));
+                    await _loggerService.LogErrorAsync("Error saving extra envelopes", ex.Message, nameof(ExtraEnvelopesController));
                     throw;
                 }
             }
@@ -159,8 +159,13 @@ namespace Tools.Controllers
         {
             try
             {
+                var projectConfig = await _context.ProjectConfigs
+                    .FirstOrDefaultAsync(p => p.ProjectId == ProjectId);
+
+                var eligibleSteps = Tools.Models.PipelineNavigator.GetEligiblePickupSteps(Tools.Models.PipelineNavigator.STEP_AWAITING_EXTRA);
+
                 var nrDataList = await _context.NRDatas
-                    .Where(d => d.ProjectId == ProjectId && d.Status == true && d.Steps == 2)
+                    .Where(d => d.ProjectId == ProjectId && d.Status == true && eligibleSteps.Contains(d.Steps))
                     .ToListAsync();
 
                 var project = await _context.Projects
@@ -345,7 +350,7 @@ namespace Tools.Controllers
                     await _context.ExtrasEnvelope.AddRangeAsync(envelopesToAdd);
 
                     foreach (var nr in nrDataList)
-                        nr.Steps = 3;
+                        nr.Steps = Tools.Models.PipelineNavigator.GetNextStep(Tools.Models.PipelineNavigator.STEP_AWAITING_EXTRA, projectConfig?.Modules);
 
                     await _context.SaveChangesAsync();
 
@@ -428,7 +433,7 @@ namespace Tools.Controllers
             }
             catch (Exception ex)
             {
-                _loggerService.LogError("Error creating ExtraEnvelope", ex.Message, nameof(ExtraEnvelopesController));
+                await _loggerService.LogErrorAsync("Error creating ExtraEnvelope", ex.Message, nameof(ExtraEnvelopesController));
                 return StatusCode(500, "Internal server error");
             }
         }
@@ -573,12 +578,12 @@ namespace Tools.Controllers
 
                 _context.ExtrasEnvelope.Remove(extraEnvelopes);
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"ExtraEnvelope with ID {id} is deleted", "ExtraEnvelope", LogHelper.GetTriggeredBy(User), extraEnvelopes.ProjectId);
+                await _loggerService.LogEventAsync("Extra Envelopes configuration saved", "ExtraEnvelopes", LogHelper.GetTriggeredBy(User), extraEnvelopes.ProjectId);
                 return NoContent();
             }
             catch (Exception ex)
             {
-                _loggerService.LogError($"Error deleting ExtraEnvelope with ID {id}", ex.Message, nameof(ExtraEnvelopesController));
+                await _loggerService.LogErrorAsync($"Error deleting ExtraEnvelope with ID {id}", ex.Message, nameof(ExtraEnvelopesController));
                 return StatusCode(500, "Internal Server Error");
             }
         }

@@ -1,8 +1,11 @@
-﻿namespace Tools.Services
+using System.Threading.Tasks;
+
+namespace Tools.Services
 {
     public interface ILoggerService
     {
-        void LogEvent(string message, string category, int triggeredBy,int ProjectId, string oldValue = null, string newValue = null);
-        void LogError(string error, string errorMsg, string controller);
+        Task LogEventAsync(string message, string category, int triggeredBy, int ProjectId, string oldValue = null, string newValue = null);
+        Task LogErrorAsync(string error, string errorMsg, string controller);
     }
 }
+

@@ -60,19 +60,19 @@ namespace Tools.Controllers
             try
             {
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Updated ExtraType for {id} ", "NRData", LogHelper.GetTriggeredBy(User),0);
+                await _loggerService.LogEventAsync($"Updated ExtraType for {id} ", "NRData", LogHelper.GetTriggeredBy(User), 0);
 
             }
             catch (Exception ex)
             {
                 if (!ExtraTypeExists(id))
                 {
-                    _loggerService.LogEvent($"ExtraType with ID {id} not found during updating", "ExtraType", LogHelper.GetTriggeredBy(User),0);
+                    await _loggerService.LogEventAsync($"ExtraType with ID {id} not found during updating", "ExtraType", LogHelper.GetTriggeredBy(User), 0);
                     return NotFound();
                 }
                 else
                 {
-                    _loggerService.LogError("Error updating ExtraType", ex.Message, nameof(ExtraTypesController));
+                    await _loggerService.LogErrorAsync("Error updating ExtraType", ex.Message, nameof(ExtraTypesController));
                     return StatusCode(500, "Internal server error");
                 }
             }
@@ -89,12 +89,12 @@ namespace Tools.Controllers
             {
                 _context.ExtraType.Add(extraType);
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Created a new ExtraType with ID {extraType.ExtraTypeId}", "ExtraType", LogHelper.GetTriggeredBy(User),0);
+                await _loggerService.LogEventAsync($"Created a new ExtraType with ID {extraType.ExtraTypeId}", "ExtraType", LogHelper.GetTriggeredBy(User), 0);
                 return CreatedAtAction("GetExtraType", new { id = extraType.ExtraTypeId }, extraType);
             }
             catch (Exception ex)
             {
-                _loggerService.LogError("Error creating ExtraTypes", ex.Message, nameof(ExtraTypesController));
+                await _loggerService.LogErrorAsync("Error creating ExtraTypes", ex.Message, nameof(ExtraTypesController));
                 return StatusCode(500, "Internal server error");
             }
         }
@@ -113,13 +113,13 @@ namespace Tools.Controllers
 
                 _context.ExtraType.Remove(extraType);
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Deleted a ExtraTypes with ID {id}", "ExtraTypes", LogHelper.GetTriggeredBy(User),0);
+                await _loggerService.LogEventAsync($"Deleted a ExtraTypes with ID {id}", "ExtraTypes", LogHelper.GetTriggeredBy(User), 0);
 
                 return NoContent();
             }
             catch (Exception ex)
             {
-                _loggerService.LogError("Error creating ExtraTypes", ex.Message, nameof(ExtraTypesController));
+                await _loggerService.LogErrorAsync("Error creating ExtraTypes", ex.Message, nameof(ExtraTypesController));
                 return StatusCode(500, "Internal server error");
             }
         }

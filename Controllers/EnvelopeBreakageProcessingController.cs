@@ -42,17 +42,50 @@ namespace Tools.Controllers
                     .Select(e => new { e.EnvelopeName, e.Capacity })
                     .ToListAsync();
 
+                var eligibleSteps = Tools.Models.PipelineNavigator.GetEligiblePickupSteps(Tools.Models.PipelineNavigator.STEP_AWAITING_ENV);
+
                 var nrData = await _context.NRDatas
-                    .Where(p => p.ProjectId == ProjectId && p.Status == true &&p.Steps==3)
+                    .Where(p => p.ProjectId == ProjectId && p.Status == true && eligibleSteps.Contains(p.Steps))
                     .OrderBy(p => p.CatchNo)
                     .ThenBy(p => p.RouteSort)
                     .ThenBy(p => p.NodalSort)
                     .ThenBy(p => p.CenterSort)
                     .ToListAsync();
 
+                // ✅ Clean up results for deactivated catches (Status = false)
+                var deactivatedCatches = await _context.NRDatas
+                    .Where(p => p.ProjectId == ProjectId && p.Status == false)
+                    .Select(p => p.CatchNo)
+                    .Distinct()
+                    .ToListAsync();
+
+                if (deactivatedCatches.Any())
+                {
+                    var resultsToDelete = await _context.EnvelopeBreakingResults
+                        .Where(r => r.ProjectId == ProjectId && deactivatedCatches.Contains(r.CatchNo))
+                        .ToListAsync();
+
+                    if (resultsToDelete.Any())
+                    {
+                        _context.EnvelopeBreakingResults.RemoveRange(resultsToDelete);
+                        await _context.SaveChangesAsync();
+                        await _loggerService.LogEventAsync(
+                            $"Cleaned up {resultsToDelete.Count} envelope breaking results for {deactivatedCatches.Count} deactivated catches",
+                            "EnvelopeBreakageProcessing",
+                            triggeredBy,
+                            ProjectId);
+                    }
+                }
+
                 var envBreaking = await _context.EnvelopeBreakages
                     .Where(p => p.ProjectId == ProjectId)
                     .ToListAsync();
+                
+                if (!envBreaking.Any())
+                    return BadRequest("No Envelope Breakdown configuration found. Please run the Envelope Breakages (Inner/Outer) configuration first.");
+
+                if (!nrData.Any())
+                    return BadRequest("No valid NR Data found for Envelope Breaking processing.");
 
                 var extras = await _context.ExtrasEnvelope
                     .Where(p => p.ProjectId == ProjectId)
@@ -423,6 +456,40 @@ namespace Tools.Controllers
                             if (remainingQty <= 0) break;
                         }
                     }
+                    else
+                    {
+                        centerEnvCounter++;
+                        var nrRow = new System.Dynamic.ExpandoObject();
+                        var nrDict = (IDictionary<string, object>)nrRow;
+
+                        nrDict["isMss"] = false;
+                        nrDict["ExtraAttached"] = false;
+                        nrDict["CatchNo"] = current.CatchNo;
+                        nrDict["CenterCode"] = current.CenterCode;
+                        nrDict["CourseName"] = current.CourseName;
+                        nrDict["ExamTime"] = current.ExamTime;
+                        nrDict["ExamDate"] = current.ExamDate;
+                        nrDict["Quantity"] = current.Quantity;
+                        nrDict["EnvQuantity"] = current.Quantity;
+                        nrDict["NodalCode"] = current.NodalCode;
+                        nrDict["CenterEnv"] = centerEnvCounter;
+                        nrDict["TotalEnv"] = 1;
+                        nrDict["Env"] = "1/1";
+                        nrDict["NRQuantity"] = current.NRQuantity;
+                        nrDict["CenterSort"] = current.CenterSort;
+                        nrDict["NodalSort"] = current.NodalSort;
+                        nrDict["Route"] = current.Route;
+                        nrDict["RouteSort"] = current.RouteSort;
+                        nrDict["District"] = current.District;
+                        nrDict["DistrictSort"] = current.DistrictSort;
+                        nrDict["NrDataId"] = current.Id;
+                        nrDict["ExtraId"] = (int?)null;
+
+                        // ✅ Fill any sorting fields from NRDatas JSON
+                        FillDynamicFields(nrDict, current.Id);
+
+                        resultList.Add(nrRow);
+                    }
 
                     prevNodalCode = current.NodalCode;
                     prevNodalSort = current.NodalSort;
@@ -721,11 +788,11 @@ namespace Tools.Controllers
 
                 _context.EnvelopeBreakingResults.AddRange(envelopeResults);
                 foreach (var nr in nrData)
-                    nr.Steps = 3;
+                    nr.Steps = Tools.Models.PipelineNavigator.GetNextStep(Tools.Models.PipelineNavigator.STEP_AWAITING_ENV, projectconfig?.Modules);
 
                 await _context.SaveChangesAsync();
 
-                _loggerService.LogEvent(
+                await _loggerService.LogEventAsync(
                     $"Saved {envelopeResults.Count} envelope breaking results for ProjectId {ProjectId}, Batch {currentBatch}",
                     "EnvelopeBreakageProcessing",
                     triggeredBy,
@@ -735,7 +802,7 @@ namespace Tools.Controllers
                 var response = await client.GetAsync($"{_apiSettings.EnvelopeBreaking}?ProjectId={ProjectId}");
                 if (!response.IsSuccessStatusCode)
                 {
-                    _loggerService.LogError("Failed to generate report", "", nameof(EnvelopeBreakageProcessingController));
+                    await _loggerService.LogErrorAsync("Error during Excel report generation", "Failed to get envelope breakages after configuration.", nameof(EnvelopeBreakageProcessingController));
                     return StatusCode((int)response.StatusCode, "Failed to get envelope breakages after configuration.");
                 }
 
@@ -748,8 +815,14 @@ namespace Tools.Controllers
             }
             catch (Exception ex)
             {
-                _loggerService.LogError("Error processing envelope breaking", ex.Message, nameof(EnvelopeBreakageProcessingController));
-                return StatusCode(500, new { error = ex.Message });
+                var innerException = ex.InnerException?.Message ?? "No inner exception";
+                var fullError = $"{ex.Message} | Inner: {innerException}";
+                await _loggerService.LogErrorAsync("Error processing envelope breaking", fullError, nameof(EnvelopeBreakageProcessingController));
+                return StatusCode(500, new { 
+                    error = ex.Message,
+                    innerException = innerException,
+                    stackTrace = ex.StackTrace
+                });
             }
         }
 

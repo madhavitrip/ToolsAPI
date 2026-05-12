@@ -33,7 +33,7 @@ namespace Tools.Services
 
                 if (!response.IsSuccessStatusCode)
                 {
-                    _loggerService.LogError(
+                    await _loggerService.LogErrorAsync(
                         $"Dispatch API call failed for Project {projectId}, Lot {lotNo}",
                         $"Status: {response.StatusCode}",
                         nameof(DispatchService)
@@ -51,7 +51,7 @@ namespace Tools.Services
             }
             catch (Exception ex)
             {
-                _loggerService.LogError(
+                await _loggerService.LogErrorAsync(
                     $"Exception calling dispatch API for Project {projectId}, Lot {lotNo}",
                     ex.Message,
                     nameof(DispatchService)

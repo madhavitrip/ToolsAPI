@@ -457,7 +457,7 @@ namespace Tools.Controllers
             }
 
             await _context.SaveChangesAsync();
-            _loggerService.LogEvent($"Updated template {id} (applyToAll={updateAll})", "RPTTemplate", LogHelper.GetTriggeredBy(User), 0);
+            await _loggerService.LogEventAsync($"Updated template {id} (applyToAll={updateAll})", "RPTTemplate", LogHelper.GetTriggeredBy(User), 0);
             return Ok(new { templateId = template.TemplateId, message = "Template updated." });
         }
 
@@ -694,7 +694,7 @@ namespace Tools.Controllers
                 }
             }
 
-            _loggerService.LogEvent($"Uploaded template '{template.TemplateName}' v{template.Version} (id={template.TemplateId})", "RPTTemplate", LogHelper.GetTriggeredBy(User), 0);
+            await _loggerService.LogEventAsync($"Uploaded template '{template.TemplateName}' v{template.Version} (id={template.TemplateId})", "RPTTemplate", LogHelper.GetTriggeredBy(User), 0);
             return Ok(new
             {
                 template.TemplateId,
@@ -774,7 +774,7 @@ namespace Tools.Controllers
             }
 
             await _context.SaveChangesAsync();
-            _loggerService.LogEvent(
+            await _loggerService.LogEventAsync(
                 $"Soft-deleted template '{template.TemplateName}' scope={effectiveScope} (id={id})",
                 "RPTTemplate", LogHelper.GetTriggeredBy(User), 0);
 
@@ -809,7 +809,7 @@ namespace Tools.Controllers
             }
 
             await _context.SaveChangesAsync();
-            _loggerService.LogEvent($"Activated template {id}", "RPTTemplate", LogHelper.GetTriggeredBy(User), 0);
+            await _loggerService.LogEventAsync($"Activated template {id}", "RPTTemplate", LogHelper.GetTriggeredBy(User), 0);
             return Ok(new { templateId = template.TemplateId, message = "Template activated." });
         }
 
@@ -967,7 +967,7 @@ namespace Tools.Controllers
                 imported.Add(new { newTemplate.TemplateId, newTemplate.TemplateName, newTemplate.Version });
             }
 
-            _loggerService.LogEvent($"Imported {imported.Count} template(s) from group {req.SourceGroupId} to group {targetGroupId}", "RPTTemplate", LogHelper.GetTriggeredBy(User), 0);
+            await _loggerService.LogEventAsync($"Imported {imported.Count} template(s) from group {req.SourceGroupId} to group {targetGroupId}", "RPTTemplate", LogHelper.GetTriggeredBy(User), 0);
             return Ok(new { imported });
         }
 
@@ -1012,7 +1012,7 @@ namespace Tools.Controllers
             }
 
             await _context.SaveChangesAsync();
-            _loggerService.LogEvent($"Saved mapping for templateId {id}", "RPTMapping", LogHelper.GetTriggeredBy(User), 0);
+            await _loggerService.LogEventAsync($"Saved mapping for templateId {id}", "RPTMapping", LogHelper.GetTriggeredBy(User), 0);
             return Ok(new { templateId = id, message = "Mapping saved." });
         }
 
@@ -1146,7 +1146,7 @@ namespace Tools.Controllers
 
             t.UpdatedDate = DateTime.Now;
             await _context.SaveChangesAsync();
-            _loggerService.LogEvent($"Parsed fields for templateId {id}", "RPTTemplate", LogHelper.GetTriggeredBy(User), 0);
+            await _loggerService.LogEventAsync($"Parsed fields for templateId {id}", "RPTTemplate", LogHelper.GetTriggeredBy(User), 0);
             return Ok(new { templateId = id, parsedFields });
         }
 

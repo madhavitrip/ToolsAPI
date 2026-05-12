@@ -235,7 +235,7 @@ namespace Tools.Controllers
             }
             catch (Exception ex)
             {
-                _loggerService.LogError("Error fetching archived projects", ex.Message, nameof(ProjectsController));
+                await _loggerService.LogErrorAsync("Error fetching archived projects", ex.Message, nameof(ProjectsController));
                 return BadRequest($"Error fetching archived projects: {ex.Message}");
             }
         }
@@ -263,14 +263,14 @@ namespace Tools.Controllers
 
                 if (string.IsNullOrEmpty(userId))
                 {
-                    _loggerService.LogEvent($"User with ID not found in token. ", "Projects", LogHelper.GetTriggeredBy(User),0);
+                    await _loggerService.LogEventAsync($"User with ID not found in token. ", "Projects", LogHelper.GetTriggeredBy(User), 0);
                     return Unauthorized("User ID not found in token.");
                 }
 
                 // Convert userId to integer (if necessary)
                 if (!int.TryParse(userId, out int userIntId))
                 {
-                    _loggerService.LogEvent($"Invalid User ID format. ", "Projects", LogHelper.GetTriggeredBy(User), 0);
+                    await _loggerService.LogEventAsync($"Invalid User ID format. ", "Projects", LogHelper.GetTriggeredBy(User), 0);
 
                     return Unauthorized("Invalid User ID format.");
                 }
@@ -303,7 +303,7 @@ namespace Tools.Controllers
             }
             catch (Exception ex)
             {
-                _loggerService.LogError("Error decoding token",ex.Message,nameof(ProjectsController));
+                await _loggerService.LogErrorAsync("Error decoding token", ex.Message, nameof(ProjectsController));
                 return BadRequest($"Error decoding token: {ex.Message}");
             }
 
@@ -371,18 +371,18 @@ namespace Tools.Controllers
             try
             {
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Updated Project with ID {project.ProjectId}", "Projects", LogHelper.GetTriggeredBy(User),project.ProjectId);
+                await _loggerService.LogEventAsync($"Updated Project with ID {project.ProjectId}", "Projects", LogHelper.GetTriggeredBy(User), project.ProjectId);
             }
             catch (Exception ex)
             {
                 if (!ProjectExists(id))
                 {
-                    _loggerService.LogEvent($"Project with ID {id} not found during updating", "Projects", LogHelper.GetTriggeredBy(User), project.ProjectId);
+                    await _loggerService.LogEventAsync($"Project with ID {id} not found during updating", "Projects", LogHelper.GetTriggeredBy(User), project.ProjectId);
                     return NotFound();
                 }
                 else
                 {
-                    _loggerService.LogError("Error creating Project", ex.Message, nameof(ProjectsController));
+                    await _loggerService.LogErrorAsync("Error creating Project", ex.Message, nameof(ProjectsController));
                     throw;
                 }
             }
@@ -407,7 +407,7 @@ namespace Tools.Controllers
                 _context.Projects.Add(project);
                 await _context.SaveChangesAsync();
 
-                _loggerService.LogEvent(
+                await _loggerService.LogEventAsync(
                     $"Created a new Project with ID {project.ProjectId}",
                     "Projects",
                     LogHelper.GetTriggeredBy(User),
@@ -418,7 +418,7 @@ namespace Tools.Controllers
             }
             catch (Exception ex)
             {
-                _loggerService.LogError("Error creating Project", ex.Message, nameof(ProjectsController));
+                await _loggerService.LogErrorAsync("Error creating Project", ex.Message, nameof(ProjectsController));
                 return StatusCode(500, "Internal server error");
             }
         }
@@ -432,18 +432,18 @@ namespace Tools.Controllers
                 var project = await _context.Projects.FindAsync(id);
                 if (project == null)
                 {
-                    _loggerService.LogEvent($"Project with ID {id} not found during delete", "Projects", LogHelper.GetTriggeredBy(User), project.ProjectId);
+                    await _loggerService.LogEventAsync($"Project with ID {id} not found during delete", "Projects", LogHelper.GetTriggeredBy(User), project.ProjectId);
                     return NotFound();
                 }
 
                 _context.Projects.Remove(project);
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Deleted a Project with ID {project.ProjectId}", "Projects", LogHelper.GetTriggeredBy(User), project.ProjectId);
+                await _loggerService.LogEventAsync($"Deleted a Project with ID {project.ProjectId}", "Projects", LogHelper.GetTriggeredBy(User), project.ProjectId);
                 return NoContent();
             }
             catch (Exception ex)
             {
-                _loggerService.LogError("Error deleting Project", ex.Message, nameof(ProjectsController));
+                await _loggerService.LogErrorAsync("Error deleting Project", ex.Message, nameof(ProjectsController));
                 return StatusCode(500, "Internal server error");
             }
         }

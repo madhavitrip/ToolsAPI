@@ -614,7 +614,7 @@ namespace Tools.Controllers
                 ? $"Catch numbers merged. Collapsed {centersCollapsed} center(s) (soft updated {rowsUpdated} row(s)) and added quantities where centers matched."
                 : "Catch numbers merged. No centers had multiple catch numbers, so quantities were unchanged.";
 
-            _loggerService.LogEvent(
+            await _loggerService.LogEventAsync(
                 $"Merged catch numbers for ProjectId {ProjectId}: {string.Join(",", requestedCatchNos)}",
                 "NRData",
                 LogHelper.GetTriggeredBy(User),
@@ -645,18 +645,18 @@ namespace Tools.Controllers
             try
             {
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Updated NrData for {id}", "NRData", LogHelper.GetTriggeredBy(User), nRData.ProjectId);
+                await _loggerService.LogEventAsync($"Updated NrData for {id}", "NRData", LogHelper.GetTriggeredBy(User), nRData.ProjectId);
             }
             catch (Exception ex)
             {
                 if (!NRDataExists(id))
                 {
-                    _loggerService.LogEvent($"Nrdata with ID {id} not found", "NRData", LogHelper.GetTriggeredBy(User), nRData.ProjectId);
+                    await _loggerService.LogEventAsync($"Nrdata with ID {id} not found", "NRData", LogHelper.GetTriggeredBy(User), nRData.ProjectId);
                     return NotFound();
                 }
                 else
                 {
-                    _loggerService.LogError("Error updating NRData", ex.Message, nameof(NRDatasController));
+                    await _loggerService.LogErrorAsync("Error updating NRData", ex.Message, nameof(NRDatasController));
                     return StatusCode(500, "Internal server error");
                 }
             }
@@ -738,8 +738,11 @@ namespace Tools.Controllers
                 // 🎯 BUSINESS LOGIC STARTS HERE
                 // =====================================================
 
-                // Default: set current record to Step 0
-                existingRecord.Steps = 0;
+                var projectConfigForUpdate = await _context.ProjectConfigs
+                    .FirstOrDefaultAsync(x => x.ProjectId == existingRecord.ProjectId);
+
+                // Default: set current record to initial dynamic step
+                existingRecord.Steps = Tools.Models.PipelineNavigator.GetInitialStep(projectConfigForUpdate?.Modules);
 
                 // 👉 1. CentreCode changed
                 if (oldCentreCode != existingRecord.CenterCode)
@@ -754,7 +757,7 @@ namespace Tools.Controllers
                     await _context.EnvelopeBreakingResults
                         .Where(x => x.NrDataId == existingRecord.Id)
                         .ExecuteUpdateAsync(setters => setters
-                            .SetProperty(x => x.Status,false)
+                            .SetProperty(x => x.Status, false)
                         );
                 }
 
@@ -803,7 +806,7 @@ namespace Tools.Controllers
                 await transaction.CommitAsync();
 
                 // 👉 Logging
-                _loggerService.LogEvent(
+                await _loggerService.LogEventAsync(
                     $"Updated NRData with ID {id}",
                     "NRData",
                     LogHelper.GetTriggeredBy(User),
@@ -821,7 +824,7 @@ namespace Tools.Controllers
                 await transaction.RollbackAsync();
 
                 var error = dbEx.InnerException?.Message ?? dbEx.Message;
-                _loggerService.LogError("Database update error", error, nameof(NRDatasController));
+                await _loggerService.LogErrorAsync("Database update error", error, nameof(NRDatasController));
 
                 return StatusCode(500, error);
             }
@@ -829,13 +832,11 @@ namespace Tools.Controllers
             {
                 await transaction.RollbackAsync();
 
-                _loggerService.LogError("NRData update error", ex.ToString(), nameof(NRDatasController));
+                await _loggerService.LogErrorAsync("NRData update error", ex.ToString(), nameof(NRDatasController));
 
                 return StatusCode(500, ex.Message);
             }
         }
-        // POST: api/NRDatas
-        // To protect from overposting attacks, see https://go.microsoft.com/fwlink/?linkid=2123754
         [HttpPost]
         public async Task<IActionResult> PostNRData([FromBody] JsonElement inputData)
         {
@@ -845,40 +846,68 @@ namespace Tools.Controllers
             try
             {
                 int projectId = inputData.GetProperty("projectId").GetInt32();
-                var dataArray = inputData.GetProperty("data").EnumerateArray();
+                var incomingData = inputData.GetProperty("data");
+                // 1. Fetch project-specific configurations & fields
+                var projectConfig = await _context.ProjectConfigs.FirstOrDefaultAsync(x => x.ProjectId == projectId);
+                var extraConfigs = await _context.ExtraConfigurations.Where(x => x.ProjectId == projectId).ToListAsync();
 
-                var extraConfigs = await _context.ExtraConfigurations
-                    .Where(x => x.ProjectId == projectId)
+                // 2. Resolve Dynamic Matching Fields
+                var duplicateFieldIds = projectConfig?.DuplicateCriteria ?? new List<int>();
+                var matchingFields = await _context.Fields
+                    .Where(f => duplicateFieldIds.Contains(f.FieldId))
+                    .Select(f => f.Name.Trim())
                     .ToListAsync();
 
-                // ✅ FIX 1: Load full entities first (avoid EF translation error)
+                if (!matchingFields.Any()) matchingFields = new List<string> { "CatchNo", "CenterCode" };
+
+                // 3. Load existing project data for matching
                 var existingNRDataList = await _context.NRDatas
                     .Where(x => x.ProjectId == projectId)
                     .ToListAsync();
 
-                // ✅ FIX 2: Safe batch calculation
-                int currentBatch = existingNRDataList
-                    .Where(x => x.UploadList != null)
+                // 4. Determine next Batch ID
+                int nextBatchId = existingNRDataList
                     .SelectMany(x => x.UploadList ?? new List<int>())
                     .DefaultIfEmpty(0)
                     .Max() + 1;
 
                 var nrDatasToAdd = new List<NRData>();
                 var extraEnvelopesToAdd = new List<ExtraEnvelopes>();
+                int deactivatedCount = 0;
 
-                var properties = typeof(NRData)
-                    .GetProperties()
-                    .ToDictionary(p => p.Name.ToLower(), p => p);
+                var properties = typeof(NRData).GetProperties().ToDictionary(p => p.Name.ToLower(), p => p);
 
-                foreach (var item in dataArray)
+                // Helper to compare strings safely
+                Func<string?, string?, bool> IsDifferent = (s1, s2) => 
+                    !string.Equals((s1 ?? "").Trim(), (s2 ?? "").Trim(), StringComparison.OrdinalIgnoreCase);
+
+                int currentMaxBatch = nextBatchId - 1;
+
+                var lastOccurrenceMap = new Dictionary<string, int>();
+                for (int i = 0; i < incomingData.GetArrayLength(); i++)
                 {
-                    var nRData = new NRData
+                    string cNo = "", cCode = "";
+                    foreach (var prop in incomingData[i].EnumerateObject())
                     {
-                        ProjectId = projectId
-                    };
+                        string k = prop.Name.Replace(" ", "").ToLower();
+                        if (k == "catchno") cNo = prop.Value.ToString().Trim().ToLower();
+                        if (k == "centercode") cCode = prop.Value.ToString().Trim().ToLower();
+                    }
+                    lastOccurrenceMap[cNo + "|" + cCode] = i;
+                }
 
+                var parentLookup = existingNRDataList
+                    .Where(db => db.Status == true && (db.UploadList != null && db.UploadList.Contains(currentMaxBatch)))
+                    .GroupBy(db => new { Catch = db.CatchNo?.ToLower().Trim(), Center = db.CenterCode?.ToLower().Trim() })
+                    .ToDictionary(g => g.Key, g => g.ToList());
+
+                for (int i = 0; i < incomingData.GetArrayLength(); i++)
+                {
+                    var item = incomingData[i];
+                    var nRData = new NRData { ProjectId = projectId, Status = true };
                     var extraData = new Dictionary<string, string>();
 
+                    // --- [LEGACY MAPPING LOGIC START] ---
                     foreach (var prop in item.EnumerateObject())
                     {
                         string key = prop.Name.Replace(" ", "").ToLower();
@@ -886,35 +915,27 @@ namespace Tools.Controllers
 
                         if (properties.TryGetValue(key, out var propInfo))
                         {
+                            if (key == "catchno") nRData.CatchNo = value;
+                            if (key == "centercode") nRData.CenterCode = value;
+                            if (propInfo.Name.Equals("NRDataId", StringComparison.OrdinalIgnoreCase)) continue;
+                            
                             try
                             {
                                 var targetType = Nullable.GetUnderlyingType(propInfo.PropertyType) ?? propInfo.PropertyType;
-
                                 object convertedValue;
-
-                                // ✅ Custom handling for IsNep
                                 if (propInfo.Name.Equals("IsNep", StringComparison.OrdinalIgnoreCase))
                                 {
-                                    if (value.Equals("nep", StringComparison.OrdinalIgnoreCase))
-                                        convertedValue = true;
-                                    else if (value.Equals("non-nep", StringComparison.OrdinalIgnoreCase))
-                                        convertedValue = false;
-                                    else
-                                        convertedValue = null; // or false depending on your requirement
+                                    if (value.Equals("nep", StringComparison.OrdinalIgnoreCase)) convertedValue = true;
+                                    else if (value.Equals("non-nep", StringComparison.OrdinalIgnoreCase)) convertedValue = false;
+                                    else convertedValue = null;
                                 }
                                 else
                                 {
-                                    convertedValue = string.IsNullOrWhiteSpace(value)
-                                        ? null
-                                        : Convert.ChangeType(value, targetType);
+                                    convertedValue = string.IsNullOrWhiteSpace(value) ? null : Convert.ChangeType(value, targetType);
                                 }
-
                                 propInfo.SetValue(nRData, convertedValue);
                             }
-                            catch (Exception e)
-                            {
-                                throw new Exception($"Error converting '{prop.Name}' value '{value}'", e);
-                            }
+                            catch { }
                         }
                         else if (prop.Name != "projectId" && prop.Name != "isCorrectedNrdataReport")
                         {
@@ -922,43 +943,96 @@ namespace Tools.Controllers
                         }
                     }
 
-                    // ✅ Day calculation
-                    if (!string.IsNullOrWhiteSpace(nRData.ExamDate) &&
-                        DateTime.TryParse(nRData.ExamDate, out DateTime examDate))
+                    if (!string.IsNullOrWhiteSpace(nRData.ExamDate) && DateTime.TryParse(nRData.ExamDate, out DateTime examDate))
                     {
                         nRData.Day = examDate.DayOfWeek.ToString();
                     }
+                    if (extraData.Any()) nRData.NRDatas = JsonSerializer.Serialize(extraData);
 
-                    if (extraData.Any())
-                        nRData.NRDatas = JsonSerializer.Serialize(extraData);
+                    // Status remains true for all batch records to allow Duplicate Tool processing
 
-                    // ✅ FIX 3: Use in-memory duplicate check (no DB call inside loop)
-                    var existingRecord = existingNRDataList.FirstOrDefault(x =>
-                        x.ProjectId == projectId &&
-                        x.CatchNo == nRData.CatchNo &&
-                        x.CenterCode == nRData.CenterCode &&
-                        x.ExamDate == nRData.ExamDate &&
-                        x.Status == true
-                    );
+                    // 5. [ROW VERSIONING & BATCH TRACKING]
+                    var lookupKey = new { Catch = nRData.CatchNo?.ToLower().Trim(), Center = nRData.CenterCode?.ToLower().Trim() };
+                    var activeMatches = parentLookup.TryGetValue(lookupKey, out var matches) ? matches : new List<NRData>();
 
-                    if (existingRecord != null)
+                    if (activeMatches.Any())
                     {
-                        if (existingRecord.UploadList == null)
-                            existingRecord.UploadList = new List<int>();
+                        var primaryMatch = activeMatches.First();
+                        nRData.NRDataId = primaryMatch.Id;
 
-                        if (!existingRecord.UploadList.Contains(currentBatch))
+                        if (nRData.Status) // Only the active row in the batch triggers versioning
                         {
-                            existingRecord.UploadList.Add(currentBatch);
-                        }
+                            bool isAnyFieldChanged = false;
+                            foreach (var prop in properties.Values)
+                            {
+                                if (prop.Name == "Id" || prop.Name == "ProjectId" || prop.Name == "UploadList" || 
+                                    prop.Name == "Status" || prop.Name == "NRDataId" || prop.Name == "CenterSort" || prop.Name == "NodalSort" || prop.Name == "RouteSort" || prop.Name == "NRDatas" ||
+                                    prop.Name == "Day") continue;
+                                var existingValue = prop.GetValue(primaryMatch);
+                                var incomingValue = prop.GetValue(nRData);
 
-                        continue;
+                                if (prop.PropertyType == typeof(string))
+                                {
+                                    if (IsDifferent((string)existingValue, (string)incomingValue)) { isAnyFieldChanged = true; break; }
+                                }
+                                else
+                                {
+                                    if (!Equals(existingValue, incomingValue)) { isAnyFieldChanged = true; break; }
+                                }
+                            }
+                            if (!isAnyFieldChanged && IsDifferent(primaryMatch.NRDatas, nRData.NRDatas)) isAnyFieldChanged = true;
+
+                            if (!isAnyFieldChanged)
+                            {
+                                foreach (var match in activeMatches)
+                                {
+                                    if (match.UploadList == null) match.UploadList = new List<int>();
+                                    if (!match.UploadList.Contains(nextBatchId)) match.UploadList.Add(nextBatchId);
+                                    foreach (var p in properties.Values)
+                                    {
+                                        if (p.Name == "Id" || p.Name == "ProjectId" || p.Name == "UploadList" || p.Name == "Status" || p.Name == "NRDataId") continue;
+                                        if (p.CanWrite) p.SetValue(match, p.GetValue(nRData));
+                                    }
+                                    _context.NRDatas.Update(match);
+                                }
+                                nRData.Steps = primaryMatch.Steps;
+                                continue; 
+                            }
+                            else
+                            {
+                                foreach (var match in activeMatches)
+                                {
+                                    match.Status = false;
+                                    _context.NRDatas.Update(match);
+                                    deactivatedCount++;
+                                }
+                                nRData.UploadList = new List<int> { nextBatchId };
+                                
+                                int nextStep = 2; // Default to Extra Configuration (UI Step 3)
+                                if (IsDifferent(primaryMatch.NodalCode, nRData.NodalCode)) nextStep = 1; // Enhancement (UI Step 2)
+                                else if (nRData.NRQuantity != primaryMatch.NRQuantity) nextStep = nRData.NRQuantity > primaryMatch.NRQuantity ? 2 : 3;
+                                else if (IsDifferent(primaryMatch.CenterCode, nRData.CenterCode)) nextStep = 2;
+                                else if (IsDifferent(primaryMatch.ExamDate, nRData.ExamDate)) nextStep = 2;
+                                
+                                nRData.Steps = nextStep;
+                                nrDatasToAdd.Add(nRData);
+                            }
+                        }
+                        else
+                        {
+                            nRData.UploadList = new List<int> { nextBatchId };
+                            nRData.Steps = primaryMatch.Steps; 
+                            nrDatasToAdd.Add(nRData);
+                        }
                     }
                     else
                     {
-                        nRData.UploadList = new List<int> { currentBatch };
+                        nRData.UploadList = new List<int> { nextBatchId };
+                        nRData.Steps = Tools.Models.PipelineNavigator.GetInitialStep(projectConfig?.Modules); // Dynamically set Step
+                        nrDatasToAdd.Add(nRData);
                     }
 
-                    // ✅ Extra center logic
+                    // --- [LEGACY EXTRA LOGIC START] ---
                     int? extraTypeId = nRData.CenterCode switch
                     {
                         "Nodal Extra" => 1,
@@ -970,74 +1044,99 @@ namespace Tools.Controllers
                     if (extraTypeId.HasValue)
                     {
                         var config = extraConfigs.FirstOrDefault(x => x.ExtraType == extraTypeId);
-
                         if (config != null)
                         {
                             EnvelopeType envelopeType = null;
-
                             if (!string.IsNullOrWhiteSpace(config.EnvelopeType))
                             {
-                                try
-                                {
-                                    envelopeType = JsonSerializer.Deserialize<EnvelopeType>(config.EnvelopeType);
-                                }
-                                catch { }
+                                try { envelopeType = JsonSerializer.Deserialize<EnvelopeType>(config.EnvelopeType); } catch { }
                             }
-
-                            int? innerCapacity = envelopeType != null ? GetEnvelopeCapacity(envelopeType.Inner) : null;
-                            int? outerCapacity = envelopeType != null ? GetEnvelopeCapacity(envelopeType.Outer) : null;
-
+                            int innerCapacity = envelopeType != null ? GetEnvelopeCapacity(envelopeType.Inner) : 1;
+                            int outerCapacity = envelopeType != null ? GetEnvelopeCapacity(envelopeType.Outer) : 1;
+                            
                             int roundedQty = nRData.NRQuantity;
-
-                            if (innerCapacity > 0)
-                                roundedQty = (int)Math.Ceiling((double)nRData.NRQuantity / innerCapacity.Value) * innerCapacity.Value;
-                            else if (outerCapacity > 0)
-                                roundedQty = (int)Math.Ceiling((double)nRData.NRQuantity / outerCapacity.Value) * outerCapacity.Value;
-
-                            string innerEnvelope = innerCapacity > 0
-                                ? Math.Ceiling((double)roundedQty / innerCapacity.Value).ToString()
-                                : "0";
-
-                            string outerEnvelope = outerCapacity > 0
-                                ? Math.Ceiling((double)roundedQty / outerCapacity.Value).ToString()
-                                : "0";
+                            if (innerCapacity > 0) roundedQty = (int)Math.Ceiling((double)nRData.NRQuantity / innerCapacity) * innerCapacity;
+                            else if (outerCapacity > 0) roundedQty = (int)Math.Ceiling((double)nRData.NRQuantity / outerCapacity) * outerCapacity;
 
                             extraEnvelopesToAdd.Add(new ExtraEnvelopes
                             {
-                                ProjectId = projectId,
-                                CatchNo = nRData.CatchNo,
-                                ExtraId = extraTypeId.Value,
+                                ProjectId = projectId, 
+                                CatchNo = nRData.CatchNo, 
+                                ExtraId = extraTypeId.Value, 
                                 Quantity = roundedQty,
-                                InnerEnvelope = innerEnvelope,
-                                OuterEnvelope = outerEnvelope,
+                                InnerEnvelope = innerCapacity > 0 ? Math.Ceiling((double)roundedQty / innerCapacity).ToString() : "0",
+                                OuterEnvelope = outerCapacity > 0 ? Math.Ceiling((double)roundedQty / outerCapacity).ToString() : "0",
                                 Status = 1
                             });
                         }
-
-                        continue;
+                        if (activeMatches.Any()) continue; 
                     }
-
-                    nrDatasToAdd.Add(nRData);
+                    // --- [LEGACY EXTRA LOGIC END] ---
                 }
 
-                if (nrDatasToAdd.Any())
-                    await _context.NRDatas.AddRangeAsync(nrDatasToAdd);
+                // Group Extra Envelopes to avoid unique constraint violation on {CatchNo, ExtraId, ProjectId}
+                var groupedExtras = extraEnvelopesToAdd
+                    .GroupBy(e => new { e.ExtraId, e.CatchNo })
+                    .Select(g => new ExtraEnvelopes
+                    {
+                        ProjectId = projectId,
+                        ExtraId = g.Key.ExtraId,
+                        CatchNo = g.Key.CatchNo,
+                        Quantity = g.Sum(e => e.Quantity),
+                        Status = 1
+                    }).ToList();
 
-                if (extraEnvelopesToAdd.Any())
-                    await _context.ExtrasEnvelope.AddRangeAsync(extraEnvelopesToAdd);
+                // Recalculate Inner/Outer for grouped extras
+                foreach (var extra in groupedExtras)
+                {
+                    var config = extraConfigs.FirstOrDefault(x => x.ExtraType == extra.ExtraId);
+                    if (config != null)
+                    {
+                        EnvelopeType envelopeType = null;
+                        if (!string.IsNullOrWhiteSpace(config.EnvelopeType))
+                        {
+                            try { envelopeType = JsonSerializer.Deserialize<EnvelopeType>(config.EnvelopeType); } catch { }
+                        }
+                        int innerCap = envelopeType != null ? GetEnvelopeCapacity(envelopeType.Inner) : 1;
+                        int outerCap = envelopeType != null ? GetEnvelopeCapacity(envelopeType.Outer) : 1;
+                        
+                        extra.InnerEnvelope = innerCap > 0 ? Math.Ceiling((double)extra.Quantity / innerCap).ToString() : "0";
+                        extra.OuterEnvelope = outerCap > 0 ? Math.Ceiling((double)extra.Quantity / outerCap).ToString() : "0";
+                    }
+                }
+
+                // Deactivate existing extras to prevent unique constraint crash
+                var existingExtras = await _context.ExtrasEnvelope
+                    .Where(e => e.ProjectId == projectId && e.Status == 1)
+                    .ToListAsync();
+                
+                foreach (var ex in existingExtras)
+                {
+                    if (groupedExtras.Any(ge => ge.ExtraId == ex.ExtraId && ge.CatchNo == ex.CatchNo))
+                    {
+                        ex.Status = 0;
+                        _context.ExtrasEnvelope.Update(ex);
+                    }
+                }
+
+                if (nrDatasToAdd.Any()) await _context.NRDatas.AddRangeAsync(nrDatasToAdd);
+                if (groupedExtras.Any()) await _context.ExtrasEnvelope.AddRangeAsync(groupedExtras);
 
                 await _context.SaveChangesAsync();
 
+                await _loggerService.LogEventAsync($"Upload Processed (Batch {nextBatchId})", "NRData", LogHelper.GetTriggeredBy(User), projectId);
+
                 return Ok(new
                 {
-                    message = "Data inserted successfully",
-                    Batch = currentBatch,
-                    NRDataCount = nrDatasToAdd.Count,
-                    ExtraEnvelopeCount = extraEnvelopesToAdd.Count
+                    message = "Data processed successfully",
+                    Batch = nextBatchId,
+                    NewRecords = nrDatasToAdd.Count,
+                    UpdatedRecords = deactivatedCount
                 });
             }
             catch (Exception ex)
             {
+                await _loggerService.LogErrorAsync("NRData Upload Error", ex.ToString(), nameof(NRDatasController));
                 return StatusCode(500, ex.Message);
             }
         }
@@ -1144,12 +1243,12 @@ namespace Tools.Controllers
                 await _context.SaveChangesAsync();
                 await UpsertConflictStatus(ProjectId, payload, ConflictStatusResolved);
 
-                _loggerService.LogEvent($"Updated NRdata for CatchNo {payload.CatchNo} and ProjectId {ProjectId}", "NRData", LogHelper.GetTriggeredBy(User), ProjectId);
+                await _loggerService.LogEventAsync($"Updated NRdata for CatchNo {payload.CatchNo} and ProjectId {ProjectId}", "NRData", LogHelper.GetTriggeredBy(User), ProjectId);
                 return Ok("Conflict resolved successfully");
             }
             catch (Exception ex)
             {
-                _loggerService.LogError("Error saving Nrdata", ex.Message, nameof(NRDatasController));
+                await _loggerService.LogErrorAsync("Error saving Nrdata", ex.Message, nameof(NRDatasController));
                 return StatusCode(500, "Internal Server Error");
             }
         }
@@ -2236,64 +2335,55 @@ namespace Tools.Controllers
                 }
 
                 // Group by CatchNo and take first occurrence
-                var uniqueCatchData = allRows
-                    .GroupBy(x => x.CatchNo, StringComparer.OrdinalIgnoreCase)
-                    .Select(group => group.First())
-                    .OrderBy(x => x.CatchNo)
-                    .Select(row => {
-                        var result = new Dictionary<string, object>
-                        {
-                            ["catchNo"] = row.CatchNo ?? ""
-                        };
+                var uniqueCatchData = new List<Dictionary<string, object>>();
+                foreach (var row in allRows.GroupBy(x => x.CatchNo, StringComparer.OrdinalIgnoreCase).Select(group => group.First()).OrderBy(x => x.CatchNo))
+                {
+                    var result = new Dictionary<string, object>
+                    {
+                        ["catchNo"] = row.CatchNo ?? ""
+                    };
 
-                        // Parse NRDatas JSON field to get all dynamic fields
-                        if (!string.IsNullOrWhiteSpace(row.NRDatas))
+                    // Parse NRDatas JSON field to get all dynamic fields
+                    if (!string.IsNullOrWhiteSpace(row.NRDatas))
+                    {
+                        try
                         {
-                            try
+                            var nrDatasDict = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object>>(row.NRDatas);
+                            if (nrDatasDict != null)
                             {
-                                var nrDatasDict = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object>>(row.NRDatas);
-                                if (nrDatasDict != null)
+                                foreach (var kvp in nrDatasDict)
                                 {
-                                    foreach (var kvp in nrDatasDict)
-                                    {
-                                        result[kvp.Key] = kvp.Value;
-                                    }
+                                    result[kvp.Key] = kvp.Value;
                                 }
                             }
-                            catch (Exception ex)
-                            {
-                                _loggerService.LogError(
-                                    $"Failed to parse NRDatas JSON for CatchNo {row.CatchNo}",
-                                    ex.Message,
-                                    nameof(NRDatasController));
-                            }
                         }
-
-                        // Also include direct properties for backward compatibility
-                        int? pages = null;
-
-                        if (pages.HasValue)
+                        catch (Exception ex)
                         {
-                            var val = pages.Value;
+                            await _loggerService.LogErrorAsync(
+                                $"Failed to parse NRDatas JSON for CatchNo {row.CatchNo}",
+                                ex.Message,
+                                nameof(NRDatasController));
                         }
-                        if (!string.IsNullOrWhiteSpace(row.ExamDate))
-                        {
-                            result["ExamDate"] = row.ExamDate;
-                        }
-                        if (!string.IsNullOrWhiteSpace(row.ExamTime))
-                        {
-                            result["ExamTime"] = row.ExamTime;
-                        }
+                    }
 
-                        return result;
-                    })
-                    .ToList();
+                    // Also include direct properties for backward compatibility
+                    if (!string.IsNullOrWhiteSpace(row.ExamDate))
+                    {
+                        result["ExamDate"] = row.ExamDate;
+                    }
+                    if (!string.IsNullOrWhiteSpace(row.ExamTime))
+                    {
+                        result["ExamTime"] = row.ExamTime;
+                    }
+
+                    uniqueCatchData.Add(result);
+                }
 
                 return Ok(uniqueCatchData);
             }
             catch (Exception ex)
             {
-                _loggerService.LogError(
+                await _loggerService.LogErrorAsync(
                     "Failed to retrieve unique catch data",
                     ex.Message,
                     nameof(NRDatasController));
@@ -2471,7 +2561,7 @@ namespace Tools.Controllers
                         }
                         catch (Exception ex)
                         {
-                            _loggerService.LogError(
+                            await _loggerService.LogErrorAsync(
                                 $"Failed to update CatchNo {item.CatchNo}",
                                 ex.Message,
                                 nameof(NRDatasController));
@@ -2484,7 +2574,7 @@ namespace Tools.Controllers
 
                 await _context.SaveChangesAsync();
 
-                _loggerService.LogEvent(
+                await _loggerService.LogEventAsync(
                     $"Saved missing data for ProjectId {request.ProjectId}. Catches updated: {updatedCatchCount}, rows updated: {updatedRowCount}",
                     "NRData",
                     User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
@@ -2499,7 +2589,7 @@ namespace Tools.Controllers
             }
             catch (Exception ex)
             {
-                _loggerService.LogError("Error saving missing data", ex.Message, nameof(NRDatasController));
+                await _loggerService.LogErrorAsync("Error saving missing data", ex.Message, nameof(NRDatasController));
                 return StatusCode(500, "Internal Server Error");
             }
         }
@@ -3013,12 +3103,12 @@ namespace Tools.Controllers
 
                 _context.NRDatas.Remove(nRData);
                 await _context.SaveChangesAsync();
-                _loggerService.LogEvent($"Deleted NRdata of {id}", "NRData", LogHelper.GetTriggeredBy(User), nRData.ProjectId);
+                await _loggerService.LogEventAsync($"Deleted NRdata of {id}", "NRData", LogHelper.GetTriggeredBy(User), nRData.ProjectId);
                 return NoContent();
             }
             catch (Exception ex)
             {
-                _loggerService.LogError("Error deleting Nrdata", ex.Message, nameof(NRDatasController));
+                await _loggerService.LogErrorAsync("Error deleting Nrdata", ex.Message, nameof(NRDatasController));
                 return StatusCode(500, "Internal Server Error");
             }
         }
@@ -3070,7 +3160,7 @@ namespace Tools.Controllers
                 int userId = 0;
                 int.TryParse(User.Identity?.Name, out userId);
 
-                _loggerService.LogEvent(
+                await _loggerService.LogEventAsync(
                     $"Soft deleted (Status=0) all NRData and conflict records for ProjectId {ProjectId}",
                     "NRData",
                     userId,
@@ -3088,6 +3178,133 @@ namespace Tools.Controllers
                 return StatusCode(500, ex.ToString());
             }
         }
+
+        [HttpDelete("DeleteCatchNo/{projectId}/{catchNo}")]
+        public async Task<IActionResult> DeleteCatchNo(int projectId, string catchNo)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(catchNo))
+                {
+                    return BadRequest("Catch number cannot be empty");
+                }
+
+                // ✅ Check if this catch is part of an active box breaking/envelope breaking process
+                var allNrDataForCatch = await _context.NRDatas
+                    .Where(d => d.ProjectId == projectId && d.CatchNo == catchNo)
+                    .ToListAsync();
+
+                if (!allNrDataForCatch.Any())
+                {
+                    return NotFound($"Catch number {catchNo} not found for project {projectId}");
+                }
+
+                // ✅ Check if any active pipeline steps (beyond completed stages) reference this catch
+                var activeSteps = Tools.Models.PipelineNavigator.GetEligiblePickupSteps(
+                    Tools.Models.PipelineNavigator.STEP_AWAITING_BOX  // or other active stages
+                );
+
+                var activeRecords = allNrDataForCatch.Where(n => activeSteps.Contains(n.Steps)).ToList();
+
+                if (activeRecords.Any())
+                {
+                    return BadRequest(new
+                    {
+                        error = "Cannot delete catch in active processing",
+                        message = $"Catch {catchNo} has {activeRecords.Count} record(s) in active processing stages. Complete or skip these stages first.",
+                        recordDetails = activeRecords.Select(r => new { 
+                            id = r.Id, 
+                            step = r.Steps,
+                            lot = r.LotNo 
+                        })
+                    });
+                }
+
+                // ✅ Soft delete the catch being removed
+                foreach (var nrData in allNrDataForCatch)
+                {
+                    nrData.Status = false;  // Soft delete - data stays in DB but not processed
+                    nrData.Steps = Tools.Models.PipelineNavigator.STEP_AWAITING_ENV;
+                    _context.NRDatas.Update(nrData);
+
+                    // ✅ Delete associated EnvelopeBreakingResults
+                    var envelopeResults = await _context.EnvelopeBreakingResults
+                        .Where(e => e.ProjectId == projectId && e.CatchNo == catchNo)
+                        .ToListAsync();
+
+                    foreach (var env in envelopeResults)
+                    {
+                        _context.EnvelopeBreakingResults.Remove(env);
+                    }
+
+                    // ✅ Delete BoxBreakingResults that reference this catch
+                    var boxResults = await _context.BoxBreakingResults
+                        .Where(b => b.ProjectId == projectId && 
+                                   b.EnvelopeBreakingResultId.HasValue &&
+                                   envelopeResults.Select(e => e.Id).Contains(b.EnvelopeBreakingResultId.Value))
+                        .ToListAsync();
+
+                    foreach (var box in boxResults)
+                    {
+                        _context.BoxBreakingResults.Remove(box);
+                    }
+                }
+
+                // ✅ Reset steps to 3 for ALL OTHER catches that have completed envelope/box breaking
+                // This forces re-running both processes to get clean results without the deleted catch
+                var otherCatchesWithCompletedSteps = await _context.NRDatas
+                    .Where(d => d.ProjectId == projectId && 
+                           d.CatchNo != catchNo && 
+                           d.Status == true && 
+                           d.Steps >= Tools.Models.PipelineNavigator.STEP_AWAITING_ENV)
+                    .ToListAsync();
+
+                foreach (var nrData in otherCatchesWithCompletedSteps)
+                {
+                    nrData.Steps = Tools.Models.PipelineNavigator.STEP_AWAITING_ENV;
+                    _context.NRDatas.Update(nrData);
+                }
+
+                // ✅ Delete all EnvelopeBreakingResults and BoxBreakingResults for this project
+                // to ensure clean re-processing without the deleted catch
+                var allEnvelopeResults = await _context.EnvelopeBreakingResults
+                    .Where(e => e.ProjectId == projectId)
+                    .ToListAsync();
+
+                var allBoxResults = await _context.BoxBreakingResults
+                    .Where(b => b.ProjectId == projectId)
+                    .ToListAsync();
+
+                _context.EnvelopeBreakingResults.RemoveRange(allEnvelopeResults);
+                _context.BoxBreakingResults.RemoveRange(allBoxResults);
+
+                await _context.SaveChangesAsync();
+
+                await _loggerService.LogEventAsync(
+                    $"Deleted catch number {catchNo} from project {projectId}. Soft deleted {allNrDataForCatch.Count} NRData records. Reset steps to {Tools.Models.PipelineNavigator.STEP_AWAITING_ENV} for {otherCatchesWithCompletedSteps.Count} other catches. Deleted all envelope and box breaking results for re-processing.", 
+                    "NRData", 
+                    LogHelper.GetTriggeredBy(User), 
+                    projectId
+                );
+
+                return Ok(new
+                {
+                    message = $"Catch number {catchNo} deleted successfully",
+                    // note = "Soft delete applied - catch data remains in database but marked as inactive (Status = false). All envelope and box breaking results deleted. Steps reset to STEP_AWAITING_ENV (step 3) for all other catches. Please re-run envelope breaking and box breaking processes.",
+                    catchDeleted = allNrDataForCatch.Count,
+                    otherCatchesReset = otherCatchesWithCompletedSteps.Count,
+                    envelopeResultsDeleted = allEnvelopeResults.Count,
+                    boxResultsDeleted = allBoxResults.Count,
+                    action = "Please re-run envelope breaking and box breaking processes"
+                });
+            }
+            catch (Exception ex)
+            {
+                await _loggerService.LogErrorAsync("Error deactivating catch number", ex.Message, nameof(NRDatasController));
+                return StatusCode(500, "Internal Server Error");
+            }
+        }
+
         private bool NRDataExists(int id)
         {
             return _context.NRDatas.Any(e => e.Id == id);

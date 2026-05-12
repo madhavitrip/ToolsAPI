@@ -1,4 +1,4 @@
-﻿﻿using ERPToolsAPI.Data;
+using ERPToolsAPI.Data;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -27,10 +27,13 @@ namespace Tools.Controllers
             _dispatchService = dispatchService;
         }
         [HttpPost("ProcessBoxBreaking")]
-        public async Task<IActionResult> ProcessBoxBreaking(int ProjectId, List<int> LotNo)
+        public async Task<IActionResult> ProcessBoxBreaking(int ProjectId, [FromQuery]List<int> LotNo)
         {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             try
             {
+                await _loggerService.LogEventAsync($"Starting box breaking for ProjectId {ProjectId}, Lots: {string.Join(",", LotNo)}", "BoxBreakingProcessing", LogHelper.GetTriggeredBy(User), ProjectId);
+
                 // ✅ STEP 1: Validate dispatch status for all lots (mandatory backend validation)
                 var dispatchInfoDict = await _dispatchService.GetDispatchDatesAsync(ProjectId, LotNo);
                 var dispatchedLots = dispatchInfoDict.Where(d => d.Value.IsDispatched).ToList();
@@ -49,21 +52,66 @@ namespace Tools.Controllers
                     });
                 }
 
+                await _loggerService.LogEventAsync($"Dispatch validation passed in {sw.ElapsedMilliseconds}ms", "BoxBreakingProcessing", 0, ProjectId);
+
                 // Read EnvelopeBreakingResults from DB (latest batch)
                 var maxBatch = await _context.EnvelopeBreakingResults
                     .Where(r => r.ProjectId == ProjectId)
                     .MaxAsync(r => (int?)r.UploadBatch);
 
-                if (!maxBatch.HasValue)
-                    return NotFound("No envelope breaking results found. Run ProcessEnvelopeBreaking first.");
+                var envelopeResults = new List<EnvelopeBreakingResult>();
+                if (maxBatch.HasValue)
+                {
+                    envelopeResults = await _context.EnvelopeBreakingResults
+                        .Where(r => r.ProjectId == ProjectId && r.UploadBatch == maxBatch.Value && r.SerialNumber != 0)
+                        .ToListAsync();
+                }
 
-                var envelopeResults = await _context.EnvelopeBreakingResults
-                    .Where(r => r.ProjectId == ProjectId && r.UploadBatch == maxBatch.Value && r.SerialNumber != 0)
-                    .ToListAsync();
+                await _loggerService.LogEventAsync($"Loaded {envelopeResults.Count} envelope results in {sw.ElapsedMilliseconds}ms", "BoxBreakingProcessing", 0, ProjectId);
+
+                if (!maxBatch.HasValue)
+                {
+                    return BadRequest(new
+                    {
+                        error = "No EnvelopeBreakingResults found. Please run Envelope Breaking processing first."
+                    });
+                }
+
+                var eligibleSteps = Tools.Models.PipelineNavigator.GetEligiblePickupSteps(Tools.Models.PipelineNavigator.STEP_AWAITING_BOX);
 
                 var nrData = await _context.NRDatas
-                    .Where(p => p.ProjectId == ProjectId && p.Status == true && p.Steps == 4 && LotNo.Contains(p.LotNo))
+                    .Where(p => p.ProjectId == ProjectId && p.Status == true && eligibleSteps.Contains(p.Steps) && LotNo.Contains(p.LotNo))
                     .ToListAsync();
+
+                await _loggerService.LogEventAsync($"Loaded {nrData.Count} NRData records in {sw.ElapsedMilliseconds}ms", "BoxBreakingProcessing", 0, ProjectId);
+
+                // ✅ Filter envelope results to only include active catches (those with valid NRData)
+                var activeCatchNos = nrData.Select(n => n.CatchNo).ToHashSet();
+                var envelopeCountBefore = envelopeResults.Count;
+                var filteredEnvelopeResults = envelopeResults
+                    .Where(e => !string.IsNullOrWhiteSpace(e.CatchNo) && activeCatchNos.Contains(e.CatchNo))
+                    .ToList();
+
+                if (filteredEnvelopeResults.Count < envelopeResults.Count)
+                {
+                    var deletedCount = envelopeResults.Count - filteredEnvelopeResults.Count;
+                    await _loggerService.LogEventAsync(
+                        $"Filtered envelope results: {envelopeCountBefore} -> {filteredEnvelopeResults.Count} (removed {deletedCount} deleted catches)",
+                        "BoxBreakingProcessing",
+                        0,
+                        ProjectId
+                    );
+                    envelopeResults = filteredEnvelopeResults;
+                }
+                else
+                {
+                    await _loggerService.LogEventAsync(
+                        $"No envelope filtering needed: all {envelopeResults.Count} results match active catches",
+                        "BoxBreakingProcessing",
+                        0,
+                        ProjectId
+                    );
+                }
 
                 var projectconfig = await _context.ProjectConfigs
                     .Where(p => p.ProjectId == ProjectId)
@@ -108,10 +156,16 @@ namespace Tools.Controllers
                 var startBox = projectconfig.BoxNumber;
                 bool resetOnSymbolChange = projectconfig.ResetOnSymbolChange;
 
-                var capacity = await _context.BoxCapacity
-                    .Where(c => c.BoxCapacityId == projectconfig.BoxCapacity)
-                    .Select(c => c.Capacity)
-                    .FirstOrDefaultAsync();
+                var capacity = 0;
+                if (projectconfig.BoxCapacity > 0)
+                {
+                    capacity = await _context.BoxCapacity
+                        .Where(c => c.BoxCapacityId == projectconfig.BoxCapacity)
+                        .Select(c => c.Capacity)
+                        .FirstOrDefaultAsync();
+                }
+
+                await _loggerService.LogEventAsync($"Loaded all config in {sw.ElapsedMilliseconds}ms. BoxCapacityId={projectconfig.BoxCapacity}, Capacity={capacity}", "BoxBreakingProcessing", 0, ProjectId);
 
                 // ✅ Build NRDatas JSON lookup once
                 var nrDataJsonLookup = nrData.ToDictionary(
@@ -166,49 +220,87 @@ namespace Tools.Controllers
                 // ==============================
                 var breakingReportData = new List<dynamic>();
 
-                foreach (var result in envelopeResults)
+                if (envelopeResults.Any())
                 {
-                    dynamic row = new System.Dynamic.ExpandoObject();
-                    var rowDict = (IDictionary<string, object>)row;
-
-                    rowDict["CatchNo"] = result.CatchNo ?? "";
-                    rowDict["CenterCode"] = result.CenterCode ?? "";
-                    rowDict["CenterSort"] = result.CenterSort;
-                    rowDict["ExamTime"] = result.ExamTime ?? "";
-                    rowDict["ExamDate"] = result.ExamDate;
-                    rowDict["Quantity"] = result.Quantity;
-                    rowDict["TotalEnv"] = result.TotalEnv;
-                    rowDict["NodalCode"] = result.NodalCode ?? "";
-                    rowDict["NodalSort"] = result.NodalSort;
-                    rowDict["Route"] = result.Route ?? "";
-                    rowDict["RouteSort"] = result.RouteSort;
-                    rowDict["CourseName"] = result.CourseName ?? "";
-                    rowDict["BookletSerial"] = result.BookletSerial ?? "";
-                    rowDict["OmrSerial"] = result.OmrSerial;
-                    rowDict["EnvelopeBreakingResultId"] = result.Id;
-                    rowDict["NrDataId"] = result.NrDataId;
-                    rowDict["DistrictSort"] = result.DistrictSort;
-                    rowDict["District"] = result.District;
-                    // Get NRData for this catch
-                    var nrRow = nrDataByCatch.TryGetValue(result.CatchNo ?? "", out var nr) ? nr : null;
-
-                    if (nrRow != null)
+                    foreach (var result in envelopeResults)
                     {
-                        rowDict["Symbol"] = nrRow.Symbol ?? "";
-                        rowDict["Pages"] = nrRow.Pages;
-                        rowDict["NRQuantity"] = nrRow.NRQuantity;
+                        dynamic row = new System.Dynamic.ExpandoObject();
+                        var rowDict = (IDictionary<string, object>)row;
+
+                        rowDict["CatchNo"] = result.CatchNo ?? "";
+                        rowDict["CenterCode"] = result.CenterCode ?? "";
+                        rowDict["CenterSort"] = result.CenterSort;
+                        rowDict["ExamTime"] = result.ExamTime ?? "";
+                        rowDict["ExamDate"] = result.ExamDate;
+                        rowDict["Quantity"] = result.Quantity;
+                        rowDict["TotalEnv"] = result.TotalEnv;
+                        rowDict["NodalCode"] = result.NodalCode ?? "";
+                        rowDict["NodalSort"] = result.NodalSort;
+                        rowDict["Route"] = result.Route ?? "";
+                        rowDict["RouteSort"] = result.RouteSort;
+                        rowDict["CourseName"] = result.CourseName ?? "";
+                        rowDict["BookletSerial"] = result.BookletSerial ?? "";
+                        rowDict["OmrSerial"] = result.OmrSerial;
+                        rowDict["EnvelopeBreakingResultId"] = result.Id;
+                        rowDict["NrDataId"] = result.NrDataId;
+                        rowDict["DistrictSort"] = result.DistrictSort;
+                        rowDict["District"] = result.District;
+                        
+                        // Get NRData for this catch
+                        var nrRow = nrDataByCatch.TryGetValue(result.CatchNo ?? "", out var nr) ? nr : null;
+
+                        if (nrRow != null)
+                        {
+                            rowDict["Symbol"] = nrRow.Symbol ?? "";
+                            rowDict["Pages"] = nrRow.Pages;
+                            rowDict["NRQuantity"] = nrRow.NRQuantity;
+                        }
+                        else
+                        {
+                            rowDict["Symbol"] = "";
+                            rowDict["Pages"] = 0;
+                            rowDict["NRQuantity"] = 0;
+                        }
+
+                        // ✅ Fill District Sort and any other dynamic fields from NRDatas JSON
+                        FillDynamicFields(rowDict, result.CatchNo ?? "");
+
+                        breakingReportData.Add(row);
                     }
-                    else
+                }
+                else
+                {
+                    // Fallback to nrData directly if no envelopes exist (e.g. bypassed EnvBreaking module)
+                    foreach (var nr in nrData)
                     {
-                        rowDict["Symbol"] = "";
-                        rowDict["Pages"] = 0;
-                        rowDict["NRQuantity"] = 0;
+                        dynamic row = new System.Dynamic.ExpandoObject();
+                        var rowDict = (IDictionary<string, object>)row;
+
+                        rowDict["CatchNo"] = nr.CatchNo ?? "";
+                        rowDict["CenterCode"] = nr.CenterCode ?? "";
+                        rowDict["CenterSort"] = nr.CenterSort;
+                        rowDict["ExamTime"] = nr.ExamTime ?? "";
+                        rowDict["ExamDate"] = nr.ExamDate;
+                        rowDict["Quantity"] = nr.Quantity;
+                        rowDict["TotalEnv"] = 1;
+                        rowDict["NodalCode"] = nr.NodalCode ?? "";
+                        rowDict["NodalSort"] = nr.NodalSort;
+                        rowDict["Route"] = nr.Route ?? "";
+                        rowDict["RouteSort"] = nr.RouteSort;
+                        rowDict["CourseName"] = nr.CourseName ?? "";
+                        rowDict["BookletSerial"] = "";
+                        rowDict["OmrSerial"] = 0;
+                        rowDict["EnvelopeBreakingResultId"] = null;
+                        rowDict["NrDataId"] = nr.Id;
+                        rowDict["DistrictSort"] = nr.DistrictSort;
+                        rowDict["District"] = nr.District ?? "";
+                        rowDict["Symbol"] = nr.Symbol ?? "";
+                        rowDict["Pages"] = nr.Pages;
+                        rowDict["NRQuantity"] = nr.NRQuantity;
+
+                        FillDynamicFields(rowDict, nr.CatchNo ?? "");
+                        breakingReportData.Add(row);
                     }
-
-                    // ✅ Fill District Sort and any other dynamic fields from NRDatas JSON
-                    FillDynamicFields(rowDict, result.CatchNo ?? "");
-
-                    breakingReportData.Add(row);
                 }
 
                 if (!breakingReportData.Any())
@@ -289,6 +381,8 @@ namespace Tools.Controllers
 
                 var sortedList = ordered?.ToList() ?? enrichedList;
 
+                await _loggerService.LogEventAsync($"Enriched and sorted {sortedList.Count} rows in {sw.ElapsedMilliseconds}ms", "BoxBreakingProcessing", 0, ProjectId);
+
                 // Get envelope size from config
                 var envelopeObj = JsonSerializer.Deserialize<Dictionary<string, string>>(projectconfig.Envelope);
                 int envelopeSize = 0;
@@ -305,6 +399,27 @@ namespace Tools.Controllers
                     }
                 }
 
+                await _loggerService.LogEventAsync($"Starting main box breaking loop with envelope size {envelopeSize} in {sw.ElapsedMilliseconds}ms", "BoxBreakingProcessing", 0, ProjectId);
+
+                // Safety check: ensure capacity is valid
+                if (capacity <= 0)
+                {
+                    var errorMsg = projectconfig.BoxCapacity <= 0 
+                        ? $"BoxCapacity ID not configured in ProjectConfig (ProjectId: {ProjectId}). Please set a valid BoxCapacity ID."
+                        : $"BoxCapacity record not found (BoxCapacityId: {projectconfig.BoxCapacity}). Please verify the BoxCapacity exists in the database.";
+                    
+                    await _loggerService.LogErrorAsync("Invalid box capacity", errorMsg, nameof(BoxBreakingProcessingController));
+                    return BadRequest(new { error = errorMsg });
+                }
+
+                if (envelopeSize <= 0)
+                {
+                    await _loggerService.LogErrorAsync("Invalid envelope size", $"Envelope size is {envelopeSize}, must be > 0", nameof(BoxBreakingProcessingController));
+                    return BadRequest(new { error = $"Invalid envelope size: {envelopeSize}. Must be greater than 0." });
+                }
+
+                await _loggerService.LogEventAsync($"Capacity validation passed: capacity={capacity}, envelopeSize={envelopeSize}", "BoxBreakingProcessing", 0, ProjectId);
+
                 // Box breaking logic
                 var finalWithBoxes = new List<dynamic>();
                 int boxNo = startBox;
@@ -316,9 +431,23 @@ namespace Tools.Controllers
                 string previousCourse = null;
                 int innerBundlingSerial = 0;
                 string prevInnerBundlingKey = null;
+                int loopIterations = 0;
 
                 foreach (var item in sortedList)
                 {
+                    loopIterations++;
+                    
+                    // Log progress every 100 iterations (more frequent for debugging)
+                    if (loopIterations % 100 == 0)
+                    {
+                        var progressPercent = (loopIterations * 100) / sortedList.Count;
+                        await _loggerService.LogEventAsync(
+                            $"Box breaking loop progress: {loopIterations}/{sortedList.Count} ({progressPercent}%) in {sw.ElapsedMilliseconds}ms, Boxes: {finalWithBoxes.Count}",
+                            "BoxBreakingProcessing",
+                            0,
+                            ProjectId);
+                    }
+
                     var itemDict = (IDictionary<string, object>)item;
 
                     string catchNo = itemDict["CatchNo"]?.ToString();
@@ -327,6 +456,16 @@ namespace Tools.Controllers
                     int totalPages = ((int)itemDict["Quantity"]) * pages;
                     string currentSymbol = resetOnSymbolChange ? (nrRow?.Symbol ?? "") : "";
                     string currentCourseName = itemDict["CourseName"]?.ToString() ?? "";
+                    
+                    // Log first iteration details for debugging
+                    if (loopIterations == 1)
+                    {
+                        await _loggerService.LogEventAsync(
+                            $"First iteration: CatchNo={catchNo}, Pages={pages}, Quantity={(int)itemDict["Quantity"]}, TotalPages={totalPages}, Symbol={currentSymbol}",
+                            "BoxBreakingProcessing",
+                            0,
+                            ProjectId);
+                    }
 
                     string bookletSerial = itemDict["BookletSerial"]?.ToString() ?? "";
                     string omrSerial = itemDict["OmrSerial"]?.ToString();
@@ -396,6 +535,16 @@ namespace Tools.Controllers
 
                     try
                     {
+                        // Log first iteration after mergeKey calculation
+                        if (loopIterations == 1)
+                        {
+                            await _loggerService.LogEventAsync(
+                                $"First iteration after mergeKey: mergeKey={mergeKey}, courseChanged={courseChanged}, mergeChanged={mergeChanged}, capacity={capacity}",
+                                "BoxBreakingProcessing",
+                                0,
+                                ProjectId);
+                        }
+
                         if (mergeChanged)
                         {
                             boxNo++;
@@ -403,6 +552,16 @@ namespace Tools.Controllers
                         }
 
                         bool overflow = (runningPages + totalPages > capacity);
+
+                        // Log first iteration after overflow check
+                        if (loopIterations == 1)
+                        {
+                            await _loggerService.LogEventAsync(
+                                $"First iteration overflow check: runningPages={runningPages}, totalPages={totalPages}, overflow={overflow}",
+                                "BoxBreakingProcessing",
+                                0,
+                                ProjectId);
+                        }
 
                         if (overflow)
                         {
@@ -434,23 +593,35 @@ namespace Tools.Controllers
                                     int maxFittingQty = (int)Math.Floor((double)remainingCapacity / pagesPerUnit);
                                     maxFittingQty = (maxFittingQty / envelopeSize) * envelopeSize;
 
+                                    int chunkQty = 0;
                                     if (maxFittingQty <= 0)
                                     {
-                                        boxNo++;
-                                        runningPages = 0;
-                                        if (InnerBundling) { innerBundlingSerial++; currentInnerBundlingSerial = innerBundlingSerial; }
-                                        continue;
+                                        // If even a fresh box can't fit at least one 'envelopeSize' chunk, we must force it or we loop forever
+                                        if (runningPages == 0)
+                                        {
+                                            // Force at least one chunk if even a fresh box is too small (capacity < pagesPerUnit * envelopeSize)
+                                            chunkQty = Math.Min(envelopeSize, remainingQty); 
+                                        }
+                                        else
+                                        {
+                                            boxNo++;
+                                            runningPages = 0;
+                                            if (InnerBundling) { innerBundlingSerial++; currentInnerBundlingSerial = innerBundlingSerial; }
+                                            continue;
+                                        }
                                     }
-
-                                    int chunkQty = Math.Min(maxFittingQty, remainingQty);
-                                    chunkQty = (chunkQty / envelopeSize) * envelopeSize;
-
-                                    if (chunkQty <= 0)
+                                    else
                                     {
-                                        boxNo++;
-                                        runningPages = 0;
-                                        if (InnerBundling) { innerBundlingSerial++; currentInnerBundlingSerial = innerBundlingSerial; }
-                                        continue;
+                                        chunkQty = Math.Min(maxFittingQty, remainingQty);
+                                        chunkQty = (chunkQty / envelopeSize) * envelopeSize;
+                                        
+                                        // Safety: if after rounding it becomes 0, move to next box
+                                        if (chunkQty <= 0)
+                                        {
+                                            boxNo++;
+                                            runningPages = 0;
+                                            continue;
+                                        }
                                     }
 
                                     int chunkPages = chunkQty * pagesPerUnit;
@@ -576,10 +747,12 @@ namespace Tools.Controllers
                     }
                     catch (Exception ex)
                     {
-                        _loggerService.LogError("Error in box breaking logic", ex.Message, nameof(BoxBreakingProcessingController));
+                        await _loggerService.LogErrorAsync("Error in box breaking logic", ex.Message, nameof(BoxBreakingProcessingController));
                         throw;
                     }
                 }
+
+                await _loggerService.LogEventAsync($"Completed box breaking loop: {loopIterations} envelopes processed, {finalWithBoxes.Count} boxes created in {sw.ElapsedMilliseconds}ms", "BoxBreakingProcessing", 0, ProjectId);
 
                 var maxBoxBatch = await _context.BoxBreakingResults
                     .Where(r => r.ProjectId == ProjectId)
@@ -613,41 +786,68 @@ namespace Tools.Controllers
 
                 _context.BoxBreakingResults.AddRange(boxResults);
                 foreach (var nr in nrData)
-                {
-                    nr.Steps = 5; // Assuming NRData has a Step property
+                                {
+                    nr.Steps = Tools.Models.PipelineNavigator.GetNextStep(Tools.Models.PipelineNavigator.STEP_AWAITING_BOX, projectconfig?.Modules);
                 }
+
+                await _loggerService.LogEventAsync($"Preparing to save {boxResults.Count} box results in {sw.ElapsedMilliseconds}ms", "BoxBreakingProcessing", 0, ProjectId);
 
                 await _context.SaveChangesAsync();
 
-                _loggerService.LogEvent(
-                    $"Saved {boxResults.Count} box breaking results for ProjectId {ProjectId}, Batch {currentBatch}",
+                await _loggerService.LogEventAsync(
+                    $"Database save completed: {boxResults.Count} box breaking results for ProjectId {ProjectId}, Batch {currentBatch} in {sw.ElapsedMilliseconds}ms",
                     "BoxBreakingProcessing",
                     LogHelper.GetTriggeredBy(User),
                     ProjectId);
 
-                using var client = new HttpClient();
-                var query = string.Join("&", LotNo.Select(l => $"LotNo={Uri.EscapeDataString(l.ToString())}"));
-                var url = $"{_apiSettings.BoxBreaking}?ProjectId={ProjectId}&{query}";
-                var response = await client.GetAsync(url);
+                sw.Stop();
+                await _loggerService.LogEventAsync(
+                    $"Box breaking completed successfully in {sw.ElapsedMilliseconds}ms. Created {boxResults.Count} records.",
+                    "BoxBreakingProcessing",
+                    0,
+                    ProjectId);
 
-                _loggerService.LogError("Calling URL", url, nameof(BoxBreakingProcessingController));
-                if (!response.IsSuccessStatusCode)
-                {
-                    _loggerService.LogError("Failed to generate report", "", nameof(BoxBreakingProcessingController));
-                    return StatusCode((int)response.StatusCode, "Failed to get envelope breakages after configuration.");
-                }
+                // Await report generation to avoid DbContext concurrency issues
+                await GenerateBoxBreakingReportAsync(ProjectId, LotNo);
 
                 return Ok(new
                 {
                     message = "Box breaking data saved to database",
                     recordsCount = boxResults.Count,
-                    uploadBatch = currentBatch
+                    uploadBatch = currentBatch,
+                    processingTimeMs = sw.ElapsedMilliseconds,
+                    note = "Report generation is in progress in the background"
                 });
             }
             catch (Exception ex)
             {
-                _loggerService.LogError("Error processing box breaking", ex.Message, nameof(BoxBreakingProcessingController));
-                return StatusCode(500, new { error = ex.Message });
+                sw.Stop();
+                await _loggerService.LogErrorAsync($"Error processing box breaking after {sw.ElapsedMilliseconds}ms", ex.Message, nameof(BoxBreakingProcessingController));
+                return StatusCode(500, new { error = ex.Message, processingTimeMs = sw.ElapsedMilliseconds });
+            }
+        }
+
+        private async Task GenerateBoxBreakingReportAsync(int projectId, List<int> lotNumbers)
+        {
+            try
+            {
+                using var client = new HttpClient();
+                var query = string.Join("&", lotNumbers.Select(l => $"LotNo={Uri.EscapeDataString(l.ToString())}"));
+                var url = $"{_apiSettings.BoxBreaking}?ProjectId={projectId}&{query}";
+                var response = await client.GetAsync(url);
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    await _loggerService.LogErrorAsync("Failed to generate box breaking report", $"Status: {response.StatusCode}", nameof(BoxBreakingProcessingController));
+                }
+                else
+                {
+                    await _loggerService.LogEventAsync("Box breaking report generated successfully", "BoxBreakingProcessing", 0, projectId);
+                }
+            }
+            catch (Exception ex)
+            {
+                await _loggerService.LogErrorAsync("Error generating box breaking report", ex.Message, nameof(BoxBreakingProcessingController));
             }
         }
 

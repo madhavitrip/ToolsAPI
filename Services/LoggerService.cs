@@ -1,5 +1,7 @@
-﻿using ERPToolsAPI.Data;
+using ERPToolsAPI.Data;
 using System;
+using System.Threading;
+using System.Threading.Tasks;
 using Tools.Models;
 
 namespace Tools.Services
@@ -7,38 +9,56 @@ namespace Tools.Services
     public class LoggerService : ILoggerService
     {
         private readonly ERPToolsDbContext _context;
+        private static readonly SemaphoreSlim _lock = new SemaphoreSlim(1, 1);
 
         public LoggerService(ERPToolsDbContext context)
         {
             _context = context;
         }
 
-        public void LogEvent(string message, string category, int triggeredBy,int ProjectId, string oldValue = null, string newValue = null)
+        public async Task LogEventAsync(string message, string category, int triggeredBy, int ProjectId, string oldValue = null, string newValue = null)
         {
-            var log = new EventLog
+            await _lock.WaitAsync();
+            try
             {
-                Event = message,
-                EventTriggeredBy = triggeredBy,
-                ProjectId = ProjectId,
-                Category = category,
-                OldValue = oldValue,  // Log the old value if available
-                NewValue = newValue   // Log the new value if available
-            };
-            _context.EventLogs.Add(log);
-            _context.SaveChanges();
+                var log = new EventLog
+                {
+                    Event = message,
+                    EventTriggeredBy = triggeredBy,
+                    ProjectId = ProjectId,
+                    Category = category,
+                    OldValue = oldValue,
+                    NewValue = newValue
+                };
+                _context.EventLogs.Add(log);
+                await _context.SaveChangesAsync();
+            }
+            finally
+            {
+                _lock.Release();
+            }
         }
 
-        public void LogError(string error, string errormessage, string controller)
+        public async Task LogErrorAsync(string error, string errormessage, string controller)
         {
-            var log = new ErrorLog
+            await _lock.WaitAsync();
+            try
             {
-                Error = error,
-                Message = errormessage,
-                Occurance = controller,
-            };
+                var log = new ErrorLog
+                {
+                    Error = error,
+                    Message = errormessage,
+                    Occurance = controller,
+                };
 
-            _context.ErrorLogs.Add(log);
-            _context.SaveChanges();
+                _context.ErrorLogs.Add(log);
+                await _context.SaveChangesAsync();
+            }
+            finally
+            {
+                _lock.Release();
+            }
         }
     }
 }
+
