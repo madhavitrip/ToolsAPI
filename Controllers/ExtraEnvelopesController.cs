@@ -155,7 +155,7 @@ namespace Tools.Controllers
         // POST: api/ExtraEnvelopes
         // To protect from overposting attacks, see https://go.microsoft.com/fwlink/?linkid=2123754
         [HttpPost]
-        public async Task<ActionResult> PostExtraEnvelopes(int ProjectId)
+        public async Task<ActionResult> PostExtraEnvelopes(int ProjectId, int? uploadId = null)
         {
             try
             {
@@ -164,9 +164,18 @@ namespace Tools.Controllers
 
                 var eligibleSteps = Tools.Models.PipelineNavigator.GetEligiblePickupSteps(Tools.Models.PipelineNavigator.STEP_AWAITING_EXTRA);
 
-                var nrDataList = await _context.NRDatas
-                    .Where(d => d.ProjectId == ProjectId && d.Status == true && eligibleSteps.Contains(d.Steps))
-                    .ToListAsync();
+                List<NRData> nrDataList;
+                if (uploadId.HasValue)
+                {
+                    var all = await _context.NRDatas.Where(p => p.ProjectId == ProjectId).ToListAsync();
+                    nrDataList = all.Where(x => x.UploadList != null && x.UploadList.Contains(uploadId.Value)).ToList();
+                }
+                else
+                {
+                    nrDataList = await _context.NRDatas
+                        .Where(d => d.ProjectId == ProjectId && d.Status == true && eligibleSteps.Contains(d.Steps))
+                        .ToListAsync();
+                }
 
                 var project = await _context.Projects
                     .Where(p => p.ProjectId == ProjectId)
@@ -397,7 +406,8 @@ namespace Tools.Controllers
                 var path = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
                 if (!Directory.Exists(path)) Directory.CreateDirectory(path);
 
-                var filePath = Path.Combine(path, "ExtrasCalculation.xlsx");
+                var fileName = uploadId.HasValue ? $"ExtrasCalculation_v{uploadId}.xlsx" : "ExtrasCalculation.xlsx";
+                var filePath = Path.Combine(path, fileName);
                 if (System.IO.File.Exists(filePath)) System.IO.File.Delete(filePath);
 
                 using (var package = new ExcelPackage())
@@ -428,7 +438,8 @@ namespace Tools.Controllers
                     message = isOnlyReport
                         ? "Report generated from existing data"
                         : "Calculated and report generated",
-                    data = envelopesToUse
+                    data = envelopesToUse,
+                    fileName = fileName
                 });
             }
             catch (Exception ex)

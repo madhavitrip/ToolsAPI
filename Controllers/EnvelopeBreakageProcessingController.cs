@@ -828,7 +828,7 @@ namespace Tools.Controllers
 
 
         [HttpGet("GetEnvelopeBreakingReport")]
-        public async Task<IActionResult> GetEnvelopeBreakingReport(int ProjectId)
+        public async Task<IActionResult> GetEnvelopeBreakingReport(int ProjectId, int? uploadId = null)
         {
             try
             {
@@ -860,12 +860,22 @@ namespace Tools.Controllers
                 IQueryable<EnvelopeBreakingResult> query = _context.EnvelopeBreakingResults
                     .Where(r => r.ProjectId == ProjectId);
 
-                var maxBatch = await _context.EnvelopeBreakingResults
-                    .Where(r => r.ProjectId == ProjectId)
-                    .MaxAsync(r => (int?)r.UploadBatch);
+                if (uploadId.HasValue)
+                {
+                    // Filter results by those belonging to NRDatas in this uploadId
+                    var allNr = await _context.NRDatas.Where(p => p.ProjectId == ProjectId).ToListAsync();
+                    var validIds = allNr.Where(x => x.UploadList != null && x.UploadList.Contains(uploadId.Value)).Select(x => x.Id).ToList();
+                    query = query.Where(r => validIds.Contains(r.NrDataId));
+                }
+                else
+                {
+                    var maxBatch = await _context.EnvelopeBreakingResults
+                        .Where(r => r.ProjectId == ProjectId)
+                        .MaxAsync(r => (int?)r.UploadBatch);
 
-                if (maxBatch.HasValue)
-                    query = query.Where(r => r.UploadBatch == maxBatch.Value);
+                    if (maxBatch.HasValue)
+                        query = query.Where(r => r.UploadBatch == maxBatch.Value);
+                }
 
                 var results = await query.OrderBy(r => r.Id).ToListAsync();
 
@@ -1061,7 +1071,8 @@ namespace Tools.Controllers
                 var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
                 Directory.CreateDirectory(reportPath);
 
-                var filePath = Path.Combine(reportPath, "EnvelopeBreaking.xlsx");
+                var fileName = uploadId.HasValue ? $"EnvelopeBreaking_v{uploadId}.xlsx" : "EnvelopeBreaking.xlsx";
+                var filePath = Path.Combine(reportPath, fileName);
                 if (System.IO.File.Exists(filePath))
                     System.IO.File.Delete(filePath);
 
@@ -1103,6 +1114,7 @@ namespace Tools.Controllers
                 {
                     message = "Report generated successfully",
                     filePath,
+                    fileName,
                     recordsCount = finalSortedList.Count
                 });
             }
@@ -1118,14 +1130,31 @@ namespace Tools.Controllers
 
 
         [HttpGet("CatchWithOmrSerialing")]
-        public async Task<IActionResult> ProcessSerialingReport(int ProjectId)
+        public async Task<IActionResult> ProcessSerialingReport(int ProjectId, int? uploadId = null)
         {
             try
             {
-                var data = await _context.EnvelopeBreakingResults
-                    .Where(x => x.ProjectId == ProjectId && (x.BookletSerial != null || x.OmrSerial != null))
-                    .OrderBy(x => x.Id)
-                    .ToListAsync();
+                var query = _context.EnvelopeBreakingResults.Where(x => x.ProjectId == ProjectId);
+                
+                if (uploadId.HasValue)
+                {
+                    // Filter by uploadId via NRData relationship
+                    var nrDatas = await _context.NRDatas
+                        .Where(n => n.ProjectId == ProjectId)
+                        .ToListAsync();
+                    var validNrDataIds = nrDatas
+                        .Where(n => n.UploadList != null && n.UploadList.Contains(uploadId.Value))
+                        .Select(n => n.Id)
+                        .ToList();
+                    
+                    query = query.Where(x => validNrDataIds.Contains(x.NrDataId));
+                }
+                else
+                {
+                    query = query.Where(x => x.BookletSerial != null || x.OmrSerial != null);
+                }
+
+                var data = await query.OrderBy(x => x.Id).ToListAsync();
 
                 var grouped = data
                     .GroupBy(x => x.CatchNo)
@@ -1153,7 +1182,8 @@ namespace Tools.Controllers
                 var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
                 Directory.CreateDirectory(reportPath);
 
-                var filePath = Path.Combine(reportPath, "CatchWiseBookletAndOmrSerialing.xlsx");
+                var fileName = uploadId.HasValue ? $"CatchWiseBookletAndOmrSerialing_v{uploadId}.xlsx" : "CatchWiseBookletAndOmrSerialing.xlsx";
+                var filePath = Path.Combine(reportPath, fileName);
                 if (System.IO.File.Exists(filePath))
                 {
                     System.IO.File.Delete(filePath);

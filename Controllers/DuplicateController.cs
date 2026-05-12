@@ -595,5 +595,99 @@ WHERE ProjectId = {0};", ProjectId);
 
 
 
+        [HttpGet("DuplicateReport")]
+        public async Task<IActionResult> DuplicateReport(int ProjectId, int? uploadId = null)
+        {
+            try
+            {
+                List<NRData> reportRows;
+                if (uploadId.HasValue)
+                {
+                    var all = await _context.NRDatas.Where(p => p.ProjectId == ProjectId).ToListAsync();
+                    reportRows = all.Where(x => x.UploadList != null && x.UploadList.Contains(uploadId.Value)).ToList();
+                }
+                else
+                {
+                    reportRows = await _context.NRDatas
+                        .Where(p => p.ProjectId == ProjectId && p.Status == true)
+                        .ToListAsync();
+                }
+
+                if (!reportRows.Any())
+                    return NotFound("No NRData found for this version.");
+
+                var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
+                if (!Directory.Exists(reportPath))
+                    Directory.CreateDirectory(reportPath);
+
+                var fileName = uploadId.HasValue ? $"DuplicateTool_v{uploadId}.xlsx" : "DuplicateTool.xlsx";
+                var filePath = Path.Combine(reportPath, fileName);
+                
+                if (System.IO.File.Exists(filePath))
+                    System.IO.File.Delete(filePath);
+
+                var baseProperties = typeof(NRData).GetProperties(BindingFlags.Public | BindingFlags.Instance)
+                    .Where(p => p.Name != "NRDatas" && p.Name != "Id" && p.Name != "ProjectId")
+                    .ToList();
+
+                var extraHeaders = new HashSet<string>();
+                var parsedRows = new List<(NRData row, Dictionary<string, string> extras)>();
+
+                foreach (var row in reportRows)
+                {
+                    var extras = new Dictionary<string, string>();
+                    if (!string.IsNullOrEmpty(row.NRDatas))
+                    {
+                        try { extras = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(row.NRDatas); } catch { }
+                    }
+                    if (extras != null) foreach (var key in extras.Keys) extraHeaders.Add(key);
+                    parsedRows.Add((row, extras));
+                }
+
+                using (var package = new ExcelPackage())
+                {
+                    var ws = package.Workbook.Worksheets.Add("Duplicate Report");
+                    int col = 1;
+                    foreach (var prop in baseProperties)
+                    {
+                        ws.Cells[1, col].Value = prop.Name;
+                        ws.Cells[1, col].Style.Font.Bold = true;
+                        col++;
+                    }
+                    var extraHeaderList = extraHeaders.OrderBy(x => x).ToList();
+                    foreach (var key in extraHeaderList)
+                    {
+                        ws.Cells[1, col].Value = key;
+                        ws.Cells[1, col].Style.Font.Bold = true;
+                        col++;
+                    }
+
+                    int rowIdx = 2;
+                    foreach (var (item, extras) in parsedRows)
+                    {
+                        col = 1;
+                        foreach (var prop in baseProperties)
+                            ws.Cells[rowIdx, col++].Value = prop.GetValue(item)?.ToString() ?? "";
+                        foreach (var key in extraHeaderList)
+                        {
+                            extras.TryGetValue(key, out var val);
+                            ws.Cells[rowIdx, col++].Value = val ?? "";
+                        }
+                        rowIdx++;
+                    }
+
+                    ws.Cells[ws.Dimension.Address].AutoFitColumns();
+                    ws.View.FreezePanes(2, 1);
+                    package.SaveAs(new FileInfo(filePath));
+                }
+
+                return Ok(new { message = "Report generated successfully", fileName });
+            }
+            catch (Exception ex)
+            {
+                await _logger.LogErrorAsync("Error generating duplicate report", ex.Message, nameof(DuplicateController));
+                return StatusCode(500, "Internal server error");
+            }
+        }
     }
 }

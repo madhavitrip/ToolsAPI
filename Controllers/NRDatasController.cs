@@ -213,6 +213,32 @@ namespace Tools.Controllers
             });
         }
 
+        [HttpGet("UploadVersions/{projectId}")]
+        public async Task<IActionResult> GetUploadVersions(int projectId)
+        {
+            try
+            {
+                var allData = await _context.NRDatas
+                    .Where(n => n.ProjectId == projectId)
+                    .Select(n => new { n.UploadList })
+                    .ToListAsync();
+
+                var uploadIds = allData
+                    .Where(d => d.UploadList != null)
+                    .SelectMany(d => d.UploadList)
+                    .Distinct()
+                    .OrderByDescending(u => u)
+                    .ToList();
+
+                return Ok(uploadIds);
+            }
+            catch (Exception ex)
+            {
+                await _loggerService.LogErrorAsync("Error fetching upload versions", ex.Message, nameof(NRDatasController));
+                return StatusCode(500, "Internal Server Error");
+            }
+        }
+
         [HttpPost("merge-catchnos")]
         public async Task<ActionResult> MergeCatchNos(int ProjectId, [FromBody] MergeCatchNoRequest request)
         {

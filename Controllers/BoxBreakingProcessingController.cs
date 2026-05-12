@@ -852,17 +852,30 @@ namespace Tools.Controllers
         }
 
         [HttpGet("GetBoxBreakingReport")]
-        public async Task<IActionResult> GetBoxBreakingReport(int ProjectId, [FromQuery] int LotNo)
+        public async Task<IActionResult> GetBoxBreakingReport(int ProjectId, [FromQuery] int? LotNo, [FromQuery] int? uploadId = null)
         {
             try
             {
-                // ✅ Get NRData for this lot to know which CatchNos belong to it
-                var nrData = await _context.NRDatas
-                    .Where(p => p.ProjectId == ProjectId && p.Status == true && p.LotNo == LotNo)
-                    .ToListAsync();
+                // ✅ Get NRData for this lot or upload version
+                List<NRData> nrData;
+                var nrDataQuery = _context.NRDatas.Where(p => p.ProjectId == ProjectId);
+
+                if (uploadId.HasValue)
+                {
+                    var all = await nrDataQuery.ToListAsync();
+                    nrData = all.Where(x => x.UploadList != null && x.UploadList.Contains(uploadId.Value)).ToList();
+                }
+                else if (LotNo.HasValue)
+                {
+                    nrData = await nrDataQuery.Where(p => p.Status == true && p.LotNo == LotNo.Value).ToListAsync();
+                }
+                else
+                {
+                    return BadRequest("Either LotNo or uploadId must be provided.");
+                }
 
                 if (!nrData.Any())
-                    return NotFound($"No NRData found for Lot {LotNo}");
+                    return NotFound(uploadId.HasValue ? $"No NRData found for version {uploadId}" : $"No NRData found for Lot {LotNo}");
 
                 var nrCatchNos = nrData.Select(n => n.CatchNo).ToHashSet();
 
@@ -931,8 +944,8 @@ namespace Tools.Controllers
 
                 if (!Directory.Exists(reportPath)) Directory.CreateDirectory(reportPath);
 
-                // ✅ One file per lot
-                var fileName = $"BoxBreaking_{LotNo}.xlsx";
+                // ✅ One file per lot or version
+                var fileName = uploadId.HasValue ? $"BoxBreaking_v{uploadId}.xlsx" : $"BoxBreaking_{LotNo}.xlsx";
                 var filePath = Path.Combine(reportPath, fileName);
                 if (System.IO.File.Exists(filePath)) System.IO.File.Delete(filePath);
 

@@ -36,13 +36,21 @@ namespace Tools.Controllers
             _apiSettings = apiSettings.Value;
         }
 
-        // GET: api/EnvelopeBreakages
         [HttpGet]
-        public async Task<ActionResult> GetEnvelopeBreakages(int ProjectId)
+        public async Task<ActionResult> GetEnvelopeBreakages(int ProjectId, int? uploadId = null)
         {
-            var NRData = await _context.NRDatas
-                .Where(p => p.ProjectId == ProjectId && p.Status == true)
-                .ToListAsync();
+            List<NRData> NRData;
+            if (uploadId.HasValue)
+            {
+                var allData = await _context.NRDatas.Where(p => p.ProjectId == ProjectId).ToListAsync();
+                NRData = allData.Where(p => p.UploadList != null && p.UploadList.Contains(uploadId.Value)).ToList();
+            }
+            else
+            {
+                NRData = await _context.NRDatas
+                    .Where(p => p.ProjectId == ProjectId && p.Status == true)
+                    .ToListAsync();
+            }
 
             var Envelope = await _context.EnvelopeBreakages
                 .Where(p => p.ProjectId == ProjectId)
@@ -75,7 +83,7 @@ namespace Tools.Controllers
             var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
             Directory.CreateDirectory(reportPath);
 
-            var filename = $"EnvelopeBreaking.xlsx";
+            var filename = uploadId.HasValue ? $"EnvelopeBreaking_v{uploadId}.xlsx" : $"EnvelopeBreaking.xlsx";
             var filePath = Path.Combine(reportPath, filename);
 
             // ?? Skip generation if file already exists
@@ -471,25 +479,47 @@ namespace Tools.Controllers
         }
 
         [HttpGet("Reports/Exists")]
-        public IActionResult CheckReportExists(int projectId, string fileName)
+        public IActionResult CheckReportExists(int projectId, string fileName, int? uploadId = null)
         {
             var rootFolder = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", projectId.ToString());
-            Console.WriteLine(rootFolder);
-            var filePath = Path.Combine(rootFolder, fileName);  // Add the file name to the path
-            Console.WriteLine(filePath);
-            // Check if the file exists and return the result
+
+            // If uploadId is provided and fileName doesn't already have a version, inject it
+            string finalFileName = fileName;
+            if (uploadId.HasValue)
+            {
+                string extension = Path.GetExtension(fileName);
+                string nameWithoutExt = Path.GetFileNameWithoutExtension(fileName);
+                if (!nameWithoutExt.Contains("_v"))
+                {
+                    finalFileName = $"{nameWithoutExt}_v{uploadId}{extension}";
+                }
+            }
+
+            var filePath = Path.Combine(rootFolder, finalFileName);
             bool fileExists = System.IO.File.Exists(filePath);
-            return Ok(new { exists = fileExists });
+            return Ok(new { exists = fileExists, fileName = finalFileName });
         }
 
         [HttpGet("EnvelopeSummaryReport")]
-        public async Task<IActionResult> EnvelopeSummaryReport(int ProjectId)
+        public async Task<IActionResult> EnvelopeSummaryReport(int ProjectId, int? uploadId = null)
         {
             try
             {
-                var nrDataList = await _context.NRDatas
-                    .Where(x => x.ProjectId == ProjectId && x.Status == true)
-                    .ToListAsync();
+                List<NRData> nrDataList;
+                if (uploadId.HasValue)
+                {
+                    var allData = await _context.NRDatas.Where(p => p.ProjectId == ProjectId).ToListAsync();
+                    nrDataList = allData.Where(p => p.UploadList != null && p.UploadList.Contains(uploadId.Value)).ToList();
+                }
+                else
+                {
+                    nrDataList = await _context.NRDatas
+                        .Where(x => x.ProjectId == ProjectId && x.Status == true)
+                        .ToListAsync();
+                }
+
+                if (!nrDataList.Any())
+                    return NotFound("No NRData found.");
 
                 if (!nrDataList.Any())
                     return NotFound("No NRData found.");
@@ -740,7 +770,8 @@ namespace Tools.Controllers
                 // Save in application root folder
                 var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
                 Directory.CreateDirectory(reportPath);
-                var filePath = Path.Combine(reportPath, "EnvelopeSummary.xlsx");
+                var fileName = uploadId.HasValue ? $"EnvelopeSummary_v{uploadId}.xlsx" : "EnvelopeSummary.xlsx";
+                var filePath = Path.Combine(reportPath, fileName);
                 if (System.IO.File.Exists(filePath))
                 {
                     System.IO.File.Delete(filePath);
@@ -748,7 +779,7 @@ namespace Tools.Controllers
 
                 package.SaveAs(new FileInfo(filePath));
 
-                return Ok($"Envelope summary report saved at root folder: {filePath}");
+                return Ok(new { message = $"Envelope summary report saved at root folder: {filePath}", fileName });
 
             }
             catch (Exception ex)
@@ -760,16 +791,25 @@ namespace Tools.Controllers
 
 
         [HttpGet("CatchEnvelopeSummaryWithExtras")]
-        public async Task<IActionResult> CatchEnvelopeSummaryWithExtras(int ProjectId)
+        public async Task<IActionResult> CatchEnvelopeSummaryWithExtras(int ProjectId, int? uploadId = null)
         {
             try
             {
                 // ==============================
                 // 1️⃣ Get NRData
                 // ==============================
-                var nrDataList = await _context.NRDatas
-                    .Where(x => x.ProjectId == ProjectId && x.Status == true)
-                    .ToListAsync();
+                List<NRData> nrDataList;
+                if (uploadId.HasValue)
+                {
+                    var allData = await _context.NRDatas.Where(p => p.ProjectId == ProjectId).ToListAsync();
+                    nrDataList = allData.Where(p => p.UploadList != null && p.UploadList.Contains(uploadId.Value)).ToList();
+                }
+                else
+                {
+                    nrDataList = await _context.NRDatas
+                        .Where(x => x.ProjectId == ProjectId && x.Status == true)
+                        .ToListAsync();
+                }
 
                 if (!nrDataList.Any())
                     return NotFound("No NRData found.");
@@ -1027,7 +1067,8 @@ namespace Tools.Controllers
                 var folderPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
                 Directory.CreateDirectory(folderPath);
 
-                var filePath = Path.Combine(folderPath, "CatchSummary.xlsx");
+                var fileName = uploadId.HasValue ? $"CatchSummary_v{uploadId}.xlsx" : "CatchSummary.xlsx";
+                var filePath = Path.Combine(folderPath, fileName);
 
                 if (System.IO.File.Exists(filePath))
                     System.IO.File.Delete(filePath);
@@ -1036,7 +1077,7 @@ namespace Tools.Controllers
 
                 await _loggerService.LogEventAsync("CatchSummary report created", "CatchSummary", LogHelper.GetTriggeredBy(User), ProjectId);
 
-                return Ok($"CatchSummary.xlsx generated at: {filePath}");
+                return Ok(new { message = $"CatchSummary.xlsx generated at: {filePath}", fileName });
             }
             catch (Exception ex)
             {
