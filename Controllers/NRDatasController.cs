@@ -912,9 +912,9 @@ namespace Tools.Controllers
 
                     foreach (var r in relatedRows)
                     {
-                        if (r.Steps > Tools.Models.PipelineNavigator.STEP_AWAITING_BOX)
+                        if (r.Steps > Tools.Models.PipelineNavigator.STEP_AWAITING_ENV)
                         {
-                            r.Steps = Tools.Models.PipelineNavigator.STEP_AWAITING_BOX;
+                            r.Steps = Tools.Models.PipelineNavigator.STEP_AWAITING_ENV;
                         }
                     }
                 }
@@ -3468,7 +3468,7 @@ namespace Tools.Controllers
 
                     foreach (var r in relatedRows)
                     {
-                        if (r.Steps > 4) r.Steps = 4;
+                        if (r.Steps > 4) r.Steps = 3;
                     }
                 }
 
