@@ -83,9 +83,6 @@ namespace Tools.Controllers
                     .Where(p => p.ProjectId == ProjectId && p.Status == true && eligibleSteps.Contains(p.Steps) && LotNo.Contains(p.LotNo))
                     .ToListAsync();
 
-                if (!nrData.Any())
-                    return BadRequest("No suitable data found for Box Breaking in the selected lots. Please ensure data is at the correct step.");
-
                 await _loggerService.LogEventAsync($"Loaded {nrData.Count} NRData records in {sw.ElapsedMilliseconds}ms", "BoxBreakingProcessing", 0, ProjectId);
 
                 // ✅ Filter envelope results to only include active catches (those with valid NRData)
@@ -414,6 +411,10 @@ namespace Tools.Controllers
                     await _loggerService.LogErrorAsync("Invalid box capacity", errorMsg, nameof(BoxBreakingProcessingController));
                     return BadRequest(new { error = errorMsg });
                 }
+
+
+                await _loggerService.LogEventAsync($"Capacity validation passed: capacity={capacity}, envelopeSize={envelopeSize}", "BoxBreakingProcessing", 0, ProjectId);
+
                 // Box breaking logic
                 var finalWithBoxes = new List<dynamic>();
                 int boxNo = startBox;

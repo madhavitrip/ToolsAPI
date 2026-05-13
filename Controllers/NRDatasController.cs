@@ -1434,13 +1434,39 @@ namespace Tools.Controllers
         [HttpGet("PipelineRerunStatus")]
         public async Task<ActionResult> GetPipelineRerunStatus(int ProjectId)
         {
-            var hasPendingPipelineChanges = await _context.NRDatas
-                .AnyAsync(p =>
-                    p.ProjectId == ProjectId &&
-                    p.Status == true &&
-                    p.Steps < Tools.Models.PipelineNavigator.STEP_DONE);
+            var activeSteps = await _context.NRDatas
+                .Where(p => p.ProjectId == ProjectId && p.Status == true)
+                .Select(p => p.Steps)
+                .ToListAsync();
 
-            return Ok(new { hasPendingPipelineChanges });
+            if (!activeSteps.Any())
+            {
+                return Ok(new
+                {
+                    hasPendingPipelineChanges = false,
+                    minStep = 5,
+                    maxStep = 5,
+                    totalActive = 0
+                });
+            }
+
+            int minStep = activeSteps.Min();
+            int maxStep = activeSteps.Max();
+            bool hasPendingPipelineChanges = minStep < Tools.Models.PipelineNavigator.STEP_DONE;
+
+            return Ok(new
+            {
+                hasPendingPipelineChanges,
+                minStep,
+                maxStep,
+                totalActive = activeSteps.Count,
+                // Helpful flags for the UI to disable/enable specific rerun buttons
+                duplicatePending = activeSteps.Any(s => s < 2),
+                enhancementPending = activeSteps.Any(s => s == 1),
+                extraPending = activeSteps.Any(s => s == 2),
+                envelopePending = activeSteps.Any(s => s == 3),
+                boxPending = activeSteps.Any(s => s == 4)
+            });
         }
 
         [HttpGet("DuplicateRerunStatus")]
