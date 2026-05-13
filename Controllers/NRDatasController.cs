@@ -709,14 +709,20 @@ namespace Tools.Controllers
             try
             {
                 var existingRecord = await _context.NRDatas.FindAsync(id);
+
                 if (existingRecord == null)
                     return NotFound($"NRData with ID {id} not found");
 
+                // =====================
+                // 🔹 OLD VALUES
+                // =====================
                 var oldCentreCode = existingRecord.CenterCode;
                 var oldLot = existingRecord.LotNo;
                 var oldSteps = existingRecord.Steps;
                 var oldExamDate = existingRecord.ExamDate;
                 var oldNodalCode = existingRecord.NodalCode;
+                var oldPageNo = existingRecord.Pages;
+
                 var catchNo = existingRecord.CatchNo;
 
                 var properties = typeof(NRData)
@@ -728,7 +734,9 @@ namespace Tools.Controllers
                         ? string.Empty
                         : key.Replace(" ", "").ToLowerInvariant();
 
-                // ✅ FIX: Proper normalization from DB
+                // =====================
+                // 🔹 UNIQUE FIELDS
+                // =====================
                 var uniqueFieldsFromDb = await _context.Fields
                     .Where(f => f.IsUnique)
                     .Select(f => f.Name)
@@ -744,12 +752,14 @@ namespace Tools.Controllers
                 var changedFields = new List<string>();
 
                 Dictionary<string, string> existingExtraData = new();
+
                 if (!string.IsNullOrWhiteSpace(existingRecord.NRDatas))
                 {
                     try
                     {
-                        existingExtraData = JsonSerializer.Deserialize<Dictionary<string, string>>(existingRecord.NRDatas)
-                                             ?? new Dictionary<string, string>();
+                        existingExtraData =
+                            JsonSerializer.Deserialize<Dictionary<string, string>>(existingRecord.NRDatas)
+                            ?? new Dictionary<string, string>();
                     }
                     catch { }
                 }
@@ -772,7 +782,9 @@ namespace Tools.Controllers
                         if (currentValue != value)
                             changedFields.Add(key);
 
-                        var targetType = Nullable.GetUnderlyingType(propInfo.PropertyType) ?? propInfo.PropertyType;
+                        var targetType =
+                            Nullable.GetUnderlyingType(propInfo.PropertyType)
+                            ?? propInfo.PropertyType;
 
                         object convertedValue = string.IsNullOrWhiteSpace(value)
                             ? null
@@ -793,7 +805,8 @@ namespace Tools.Controllers
                 foreach (var kv in extraData)
                 {
                     var matchedKey = existingExtraData.Keys
-                        .FirstOrDefault(k => NormalizeKey(k) == NormalizeKey(kv.Key)) ?? kv.Key;
+                        .FirstOrDefault(k => NormalizeKey(k) == NormalizeKey(kv.Key))
+                        ?? kv.Key;
 
                     existingExtraData[matchedKey] = kv.Value;
                 }
@@ -802,26 +815,28 @@ namespace Tools.Controllers
                     existingRecord.NRDatas = JsonSerializer.Serialize(existingExtraData);
 
                 // =====================
-                // 🔹 UNIQUE CHECK (FIXED)
+                // 🔹 UNIQUE CHECK
                 // =====================
                 bool hasUniqueFieldsEdited = changedFields
-                    .Any(f => normalizedUniqueFields.Contains(f)); // ✅ no double normalize
+                    .Any(f => normalizedUniqueFields.Contains(f));
 
                 // =====================
-                // 🔹 PROPAGATE IF UNIQUE
+                // 🔹 PROPAGATE UNIQUE FIELD CHANGES
                 // =====================
                 if (hasUniqueFieldsEdited && !string.IsNullOrWhiteSpace(catchNo))
                 {
                     var rows = await _context.NRDatas
-                        .Where(x => x.ProjectId == existingRecord.ProjectId &&
-                                    x.CatchNo == catchNo &&
-                                    x.Id != existingRecord.Id &&
-                                    x.Status)
+                        .Where(x =>
+                            x.ProjectId == existingRecord.ProjectId &&
+                            x.CatchNo == catchNo &&
+                            x.Id != existingRecord.Id &&
+                            x.Status)
                         .ToListAsync();
 
                     foreach (var row in rows)
                     {
-                        foreach (var field in changedFields.Where(f => normalizedUniqueFields.Contains(f)))
+                        foreach (var field in changedFields
+                            .Where(f => normalizedUniqueFields.Contains(f)))
                         {
                             if (properties.TryGetValue(field, out var propInfo))
                             {
@@ -838,7 +853,8 @@ namespace Tools.Controllers
                         foreach (var kv in existingExtraData)
                         {
                             var key = rowExtra.Keys
-                                .FirstOrDefault(k => NormalizeKey(k) == NormalizeKey(kv.Key)) ?? kv.Key;
+                                .FirstOrDefault(k => NormalizeKey(k) == NormalizeKey(kv.Key))
+                                ?? kv.Key;
 
                             rowExtra[key] = kv.Value;
                         }
@@ -850,76 +866,145 @@ namespace Tools.Controllers
                 }
 
                 // =====================
-                // 🔹 STEP LOGIC (MATCHING USER RULES)
+                // 🔹 CHANGE DETECTION
                 // =====================
-                bool nodalChanged = string.Compare((oldNodalCode ?? "").Trim(), (existingRecord.NodalCode ?? "").Trim(), StringComparison.OrdinalIgnoreCase) != 0;
-                bool centerChanged = string.Compare((oldCentreCode ?? "").Trim(), (existingRecord.CenterCode ?? "").Trim(), StringComparison.OrdinalIgnoreCase) != 0;
-                bool dateOrUniqueChanged = string.Compare((oldExamDate ?? "").Trim(), (existingRecord.ExamDate ?? "").Trim(), StringComparison.OrdinalIgnoreCase) != 0 || 
-                                          hasUniqueFieldsEdited;
+                bool nodalChanged =
+                    string.Compare(
+                        (oldNodalCode ?? "").Trim(),
+                        (existingRecord.NodalCode ?? "").Trim(),
+                        StringComparison.OrdinalIgnoreCase) != 0;
 
-                // Load Sorting Fields for Step 4 Reset Check
-                var config = await _context.ProjectConfigs.FirstOrDefaultAsync(c => c.ProjectId == existingRecord.ProjectId);
-                var boxSortingFieldIds = config?.SortingBoxReport ?? new List<int>();
-                var sortingFieldNamesProjectRaw = await _context.Fields
-                    .Where(f => boxSortingFieldIds.Contains(f.FieldId))
-                    .Select(f => f.Name)
-                    .ToListAsync();
-                var sortingFieldNamesProject = sortingFieldNamesProjectRaw
-                    .Select(n => NormalizeKey(n))
-                    .ToList();
-                
-                bool sortingFieldChanged = changedFields.Any(f => sortingFieldNamesProject.Contains(f)) ||
-                                           string.Compare((oldExamDate ?? "").Trim(), (existingRecord.ExamDate ?? "").Trim(), StringComparison.OrdinalIgnoreCase) != 0;
+                bool centerChanged =
+                    string.Compare(
+                        (oldCentreCode ?? "").Trim(),
+                        (existingRecord.CenterCode ?? "").Trim(),
+                        StringComparison.OrdinalIgnoreCase) != 0;
 
-                bool needsLotReset = false;
+                bool lotChanged = oldLot != existingRecord.LotNo;
 
+                bool pageChanged = oldPageNo != existingRecord.Pages;
+
+                // =====================
+                // 🔹 LOAD PROJECT CONFIG
+                // =====================
+                var config = await _context.ProjectConfigs
+                    .FirstOrDefaultAsync(c => c.ProjectId == existingRecord.ProjectId);
+
+                var allFields = await _context.Fields.ToListAsync();
+
+                // Envelope related fields
+                var envelopeFieldNames = allFields
+                    .Where(f =>
+                        (config.EnvelopeMakingCriteria ?? new List<int>())
+                        .Contains(f.FieldId))
+                    .Select(f => NormalizeKey(f.Name))
+                    .ToHashSet();
+
+                // Box related fields
+                var boxFieldIds = new List<int>();
+
+                boxFieldIds.AddRange(config.BoxBreakingCriteria ?? new List<int>());
+                boxFieldIds.AddRange(config.SortingBoxReport ?? new List<int>());
+                boxFieldIds.AddRange(config.InnerBundlingCriteria ?? new List<int>());
+                boxFieldIds.AddRange(config.DuplicateRemoveFields ?? new List<int>());
+                var boxFieldNames = allFields
+                    .Where(f => boxFieldIds.Contains(f.FieldId))
+                    .Select(f => NormalizeKey(f.Name))
+                    .ToHashSet();
+
+                // =====================
+                // 🔹 FIELD IMPACT CHECK
+                // =====================
+                bool envelopeFieldAffected =
+                    changedFields.Any(f => envelopeFieldNames.Contains(f));
+
+                bool boxFieldAffected =
+                    changedFields.Any(f => boxFieldNames.Contains(f));
+
+                // =====================
+                // 🔹 STEP DECISION
+                // =====================
+                int? resetStep = null;
+
+                // Step 2 → Nodal Changed
                 if (nodalChanged)
                 {
-                    existingRecord.Steps = Tools.Models.PipelineNavigator.STEP_AWAITING_EXTRA; // Step 2
-                    needsLotReset = true;
-                }
-                else if (centerChanged)
-                {
-                    existingRecord.Steps = Tools.Models.PipelineNavigator.STEP_AWAITING_ENV; // Step 3
-                    needsLotReset = true;
-                }
-                else if (dateOrUniqueChanged)
-                {
-                    existingRecord.Steps = Tools.Models.PipelineNavigator.STEP_AWAITING_ENV; // Step 3
-                    if (sortingFieldChanged) needsLotReset = true;
+                    resetStep = Tools.Models.PipelineNavigator.STEP_AWAITING_EXTRA;
                 }
 
-                // Propagate steps to other records in the same Catch (if unique fields edited)
+                // Step 3 → Center or Envelope
+                else if (centerChanged || envelopeFieldAffected)
+                {
+                    resetStep = Tools.Models.PipelineNavigator.STEP_AWAITING_ENV;
+                }
+
+                // Step 4 → Box fields / lot / page
+                else if (boxFieldAffected || lotChanged || pageChanged)
+                {
+                    resetStep = Tools.Models.PipelineNavigator.STEP_AWAITING_BOX;
+                }
+
+                // Apply to current record
+                if (resetStep.HasValue)
+                {
+                    existingRecord.Steps = resetStep.Value;
+                }
+
+                // =====================
+                // 🔹 PROPAGATE STEP TO SAME CATCH
+                // =====================
                 if (hasUniqueFieldsEdited && !string.IsNullOrWhiteSpace(catchNo))
                 {
                     await _context.NRDatas
-                        .Where(x => x.ProjectId == existingRecord.ProjectId &&
-                                    x.CatchNo == catchNo &&
-                                    x.Id != existingRecord.Id &&
-                                    x.Status)
-                        .ExecuteUpdateAsync(s => s.SetProperty(x => x.Steps, existingRecord.Steps));
+                        .Where(x =>
+                            x.ProjectId == existingRecord.ProjectId &&
+                            x.CatchNo == catchNo &&
+                            x.Id != existingRecord.Id &&
+                            x.Status)
+                        .ExecuteUpdateAsync(s =>
+                            s.SetProperty(x => x.Steps, existingRecord.Steps));
                 }
 
-                // 🔹 LOT LEVEL RESET TO STEP 4
-                if (needsLotReset)
+                // =====================
+                // 🔹 LOT RESET LOGIC
+                // =====================
+                if (resetStep.HasValue)
                 {
-                    var relatedRows = await _context.NRDatas
-                        .Where(r => r.ProjectId == existingRecord.ProjectId && 
-                                    r.LotNo == existingRecord.LotNo && 
-                                    r.Status == true && 
-                                    r.Id != existingRecord.Id)
-                        .ToListAsync();
+                    var affectedLots = new List<int?>();
 
-                    foreach (var r in relatedRows)
+                    // Lot changed → old + new lot
+                    if (lotChanged)
                     {
-                        if (r.Steps > Tools.Models.PipelineNavigator.STEP_AWAITING_ENV)
+                        if (oldLot != null)
+                            affectedLots.Add(oldLot);
+
+                        if (existingRecord.LotNo != null &&
+                            !affectedLots.Contains(existingRecord.LotNo))
                         {
-                            r.Steps = Tools.Models.PipelineNavigator.STEP_AWAITING_ENV;
+                            affectedLots.Add(existingRecord.LotNo);
                         }
                     }
+                    else
+                    {
+                        // page / envelope / box change → existing lot only
+                        if (oldLot != null)
+                            affectedLots.Add(oldLot);
+                    }
+
+                    await _context.NRDatas
+                        .Where(r =>
+                            r.ProjectId == existingRecord.ProjectId &&
+                            r.Status == true &&
+                            affectedLots.Contains(r.LotNo) &&
+                            r.Steps > resetStep.Value)
+                        .ExecuteUpdateAsync(setters => setters
+                            .SetProperty(x => x.Steps, resetStep.Value));
                 }
 
+                _context.NRDatas.Update(existingRecord);
+
                 await _context.SaveChangesAsync();
+
                 await transaction.CommitAsync();
 
                 return Ok(new
@@ -934,6 +1019,7 @@ namespace Tools.Controllers
                 return StatusCode(500, ex.Message);
             }
         }
+
         [HttpPost]
         public async Task<IActionResult> PostNRData([FromBody] JsonElement inputData)
         {
