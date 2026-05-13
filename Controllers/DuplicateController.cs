@@ -34,8 +34,12 @@ namespace Tools.Controllers
             try
             {
                 var data = await _context.NRDatas
-                    .Where(p => p.ProjectId == ProjectId && p.Status == true && p.Steps==0)
+                    .Where(p => p.ProjectId == ProjectId && p.Status == true && p.Steps == Tools.Models.PipelineNavigator.STEP_UPLOADED)
                     .ToListAsync();
+
+                if (!data.Any())
+                    return BadRequest("No new data found to process duplication. All data is already processed or no new data added.");
+
                 var hasPendingDuplicateRows = data.Any();
                 var projectconfig = await _context.ProjectConfigs
                     .FirstOrDefaultAsync(p => p.ProjectId == ProjectId);

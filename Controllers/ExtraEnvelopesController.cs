@@ -177,6 +177,9 @@ namespace Tools.Controllers
                         .ToListAsync();
                 }
 
+                if (!nrDataList.Any())
+                    return BadRequest("No suitable data found for Extra Configuration. Either no data is at the required step or all data is already processed.");
+
                 var project = await _context.Projects
                     .Where(p => p.ProjectId == ProjectId)
                     .Select(p => new { p.GroupId })
