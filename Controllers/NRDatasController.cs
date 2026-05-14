@@ -1063,7 +1063,7 @@ namespace Tools.Controllers
                 var properties = typeof(NRData).GetProperties().ToDictionary(p => p.Name.ToLower(), p => p);
 
                 // Helper to compare strings safely
-                Func<string?, string?, bool> IsDifferent = (s1, s2) => 
+                Func<string?, string?, bool> IsDifferent = (s1, s2) =>
                     !string.Equals((s1 ?? "").Trim(), (s2 ?? "").Trim(), StringComparison.OrdinalIgnoreCase);
 
                 int currentMaxBatch = nextBatchId - 1;
@@ -1098,7 +1098,7 @@ namespace Tools.Controllers
                     var activeMatches = parentLookup.TryGetValue(lookupKey, out var matches) ? matches : new List<NRData>();
 
                     var versioningResult = await ApplyVersioningAndSteps(nRData, activeMatches, nextBatchId, projectId, projectConfig, properties, allFields);
-                    
+
                     if (versioningResult.ActionTaken == "NoChange") continue;
 
                     nrDatasToAdd.AddRange(versioningResult.NewRecords);
@@ -1177,33 +1177,69 @@ namespace Tools.Controllers
                 var item = incomingDataArray[0];
 
                 // 1. Fetch config
-                var projectConfig = await _context.ProjectConfigs.AsNoTracking().FirstOrDefaultAsync(x => x.ProjectId == projectId);
-                var extraConfigs = await _context.ExtraConfigurations.AsNoTracking().Where(x => x.ProjectId == projectId).ToListAsync();
+                var projectConfig = await _context.ProjectConfigs
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(x => x.ProjectId == projectId);
 
-                // 2. Resolve Batch ID
-                var uploadLists = await _context.NRDatas.Where(x => x.ProjectId == projectId && x.UploadList != null).Select(x => x.UploadList).ToListAsync();
-                int currentMaxBatch = uploadLists.SelectMany(x => x).DefaultIfEmpty(0).Max();
-                int batchId = currentMaxBatch > 0 ? currentMaxBatch : 1;
+                var extraConfigs = await _context.ExtraConfigurations
+                    .AsNoTracking()
+                    .Where(x => x.ProjectId == projectId)
+                    .ToListAsync();
+
+                // 2. Resolve Batch ID (increment properly)
+                var uploadLists = await _context.NRDatas
+                    .Where(x => x.ProjectId == projectId && x.UploadList != null)
+                    .Select(x => x.UploadList)
+                    .ToListAsync();
+
+                int currentMaxBatch = uploadLists
+                    .SelectMany(x => x)
+                    .DefaultIfEmpty(0)
+                    .Max();
+
+                int batchId = currentMaxBatch + 1;
 
                 // 3. Map JSON to NRData
-                var properties = typeof(NRData).GetProperties().ToDictionary(p => p.Name.ToLower(), p => p);
+                var properties = typeof(NRData)
+                    .GetProperties()
+                    .ToDictionary(p => p.Name.ToLower(), p => p);
+
                 var nRData = MapJsonToNRData(item, projectId, properties);
 
-                // 4. Duplicate check
+                // 🚨 4. STRICT DUPLICATE CHECK (STOP HERE)
                 var activeMatches = await GetActiveMatches(nRData, projectId, currentMaxBatch, projectConfig);
 
+                if (activeMatches.Any())
+                {
+                    return Ok(new
+                    {
+                        message = "Duplicate record found. No data inserted.",
+                        duplicateCount = activeMatches.Count,
+                        catchNo = nRData.CatchNo
+                    });
+                }
+
+                // 5. Continue only if NO duplicates
                 var nrDatasToAdd = new List<NRData>();
                 var catchesToReset = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 var extraEnvelopesToAdd = new List<ExtraEnvelopes>();
                 var lotsToReset = new HashSet<int>();
                 int deactivatedCount = 0;
 
-                // 5. Versioning & Steps
                 var allFields = await _context.Fields.AsNoTracking().ToListAsync();
-                var result = await ApplyVersioningAndSteps(nRData, activeMatches, batchId, projectId, projectConfig, properties, allFields);
+
+                var result = await ApplyVersioningAndSteps(
+                    nRData,
+                    activeMatches,
+                    batchId,
+                    projectId,
+                    projectConfig,
+                    properties,
+                    allFields
+                );
+
                 if (result.ActionTaken == "NoChange")
                 {
-                    await _context.SaveChangesAsync();
                     return Ok(result.Response);
                 }
 
@@ -1212,32 +1248,44 @@ namespace Tools.Controllers
                 deactivatedCount = result.DeactivatedCount;
                 lotsToReset.UnionWith(result.LotsToReset);
 
-                // 6. Process & Group Extra Envelopes
+                // 6. Process Extra Envelopes
                 var extraEnvelopes = ProcessExtraEnvelopes(nRData, projectId, extraConfigs);
                 var groupedExtras = GroupAndProcessExtras(extraEnvelopes, projectId, extraConfigs);
 
-                // 7. Deactivate overlapping existing extras
+                // 7. Deactivate overlapping extras
                 if (groupedExtras.Any())
                 {
-                    var existingExtras = await _context.ExtrasEnvelope.Where(e => e.ProjectId == projectId && e.Status == 1).ToListAsync();
+                    var existingExtras = await _context.ExtrasEnvelope
+                        .Where(e => e.ProjectId == projectId && e.Status == 1)
+                        .ToListAsync();
+
                     foreach (var ex in existingExtras)
                     {
                         if (groupedExtras.Any(ge => ge.ExtraId == ex.ExtraId && ge.CatchNo == ex.CatchNo))
                         {
                             ex.Status = 0;
-                            _context.ExtrasEnvelope.Update(ex);
                         }
                     }
                 }
 
                 // 8. Save
-                if (nrDatasToAdd.Any()) await _context.NRDatas.AddRangeAsync(nrDatasToAdd);
-                if (groupedExtras.Any()) await _context.ExtrasEnvelope.AddRangeAsync(groupedExtras);
+                if (nrDatasToAdd.Any())
+                    await _context.NRDatas.AddRangeAsync(nrDatasToAdd);
+
+                if (groupedExtras.Any())
+                    await _context.ExtrasEnvelope.AddRangeAsync(groupedExtras);
 
                 if (lotsToReset.Any())
                 {
-                    await _context.NRDatas.Where(r => r.ProjectId == projectId && r.Status == true && lotsToReset.Contains(r.LotNo))
-                        .ExecuteUpdateAsync(setters => setters.SetProperty(x => x.Steps, x => x.Steps > PipelineNavigator.STEP_AWAITING_BOX ? PipelineNavigator.STEP_AWAITING_BOX : x.Steps));
+                    await _context.NRDatas
+                        .Where(r => r.ProjectId == projectId && r.Status == true && lotsToReset.Contains(r.LotNo))
+                        .ExecuteUpdateAsync(setters =>
+                            setters.SetProperty(
+                                x => x.Steps,
+                                x => x.Steps > PipelineNavigator.STEP_AWAITING_BOX
+                                    ? PipelineNavigator.STEP_AWAITING_BOX
+                                    : x.Steps
+                            ));
                 }
 
                 await _context.SaveChangesAsync();
@@ -1245,15 +1293,33 @@ namespace Tools.Controllers
                 // 9. Reset steps & cleanup
                 if (catchesToReset.Any())
                 {
-                    await _context.NRDatas.Where(x => x.ProjectId == projectId && x.Status == true && x.CatchNo != null && catchesToReset.Contains(x.CatchNo))
-                        .ExecuteUpdateAsync(setters => setters.SetProperty(x => x.Steps, x => x.Steps == 2 || x.Steps == 3 ? x.Steps : PipelineNavigator.STEP_UPLOADED));
+                    await _context.NRDatas
+                        .Where(x => x.ProjectId == projectId && x.Status == true && x.CatchNo != null && catchesToReset.Contains(x.CatchNo))
+                        .ExecuteUpdateAsync(setters =>
+                            setters.SetProperty(
+                                x => x.Steps,
+                                x => x.Steps == 2 || x.Steps == 3
+                                    ? x.Steps
+                                    : PipelineNavigator.STEP_UPLOADED
+                            ));
 
                     await CleanupStaleReports(projectId);
                 }
 
-                await _loggerService.LogEventAsync($"Single Catch Processed (Batch {batchId})", "NRData", LogHelper.GetTriggeredBy(User), projectId);
+                await _loggerService.LogEventAsync(
+                    $"Single Catch Processed (Batch {batchId})",
+                    "NRData",
+                    LogHelper.GetTriggeredBy(User),
+                    projectId
+                );
 
-                return Ok(new { message = "Data processed successfully", Batch = batchId, NewRecords = nrDatasToAdd.Count, UpdatedRecords = deactivatedCount });
+                return Ok(new
+                {
+                    message = "Data processed successfully",
+                    Batch = batchId,
+                    NewRecords = nrDatasToAdd.Count,
+                    UpdatedRecords = deactivatedCount
+                });
             }
             catch (Exception ex)
             {
