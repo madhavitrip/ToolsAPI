@@ -1086,351 +1086,72 @@ namespace Tools.Controllers
                     .GroupBy(db => new { Catch = db.CatchNo?.ToLower().Trim(), Center = db.CenterCode?.ToLower().Trim() })
                     .ToDictionary(g => g.Key, g => g.ToList());
 
+                var allFields = await _context.Fields.AsNoTracking().ToListAsync();
+
                 for (int i = 0; i < incomingData.GetArrayLength(); i++)
                 {
                     var item = incomingData[i];
-                    var nRData = new NRData { ProjectId = projectId, Status = true };
-                    var extraData = new Dictionary<string, string>();
+                    var nRData = MapJsonToNRData(item, projectId, properties);
 
-                    // --- [LEGACY MAPPING LOGIC START] ---
-                    foreach (var prop in item.EnumerateObject())
-                    {
-                        string key = prop.Name.Replace(" ", "").ToLower();
-                        string value = prop.Value.ToString().Trim();
-
-                        if (properties.TryGetValue(key, out var propInfo))
-                        {
-                            if (key == "catchno") nRData.CatchNo = value;
-                            if (key == "centercode") nRData.CenterCode = value;
-                            if (propInfo.Name.Equals("NRDataId", StringComparison.OrdinalIgnoreCase)) continue;
-                            
-                            try
-                            {
-                                var targetType = Nullable.GetUnderlyingType(propInfo.PropertyType) ?? propInfo.PropertyType;
-                                object convertedValue;
-                                if (propInfo.Name.Equals("IsNep", StringComparison.OrdinalIgnoreCase))
-                                {
-                                    if (value.Equals("nep", StringComparison.OrdinalIgnoreCase)) convertedValue = true;
-                                    else if (value.Equals("non-nep", StringComparison.OrdinalIgnoreCase)) convertedValue = false;
-                                    else convertedValue = null;
-                                }
-                                else
-                                {
-                                    convertedValue = string.IsNullOrWhiteSpace(value) ? null : Convert.ChangeType(value, targetType);
-                                }
-                                propInfo.SetValue(nRData, convertedValue);
-                            }
-                            catch { }
-                        }
-                        else if (prop.Name != "projectId" && prop.Name != "isCorrectedNrdataReport")
-                        {
-                            extraData[prop.Name] = value;
-                        }
-                    }
-
-                    if (!string.IsNullOrWhiteSpace(nRData.ExamDate) && DateTime.TryParse(nRData.ExamDate, out DateTime examDate))
-                    {
-                        nRData.Day = examDate.DayOfWeek.ToString();
-                    }
-                    if (extraData.Any()) nRData.NRDatas = JsonSerializer.Serialize(extraData);
-
-                    // Status remains true for all batch records to allow Duplicate Tool processing
-
-                    // 5. [ROW VERSIONING & BATCH TRACKING]
+                    // 5. Versioning & Steps
                     var lookupKey = new { Catch = nRData.CatchNo?.ToLower().Trim(), Center = nRData.CenterCode?.ToLower().Trim() };
                     var activeMatches = parentLookup.TryGetValue(lookupKey, out var matches) ? matches : new List<NRData>();
 
-                    if (activeMatches.Any())
-                    {
-                        var primaryMatch = activeMatches.First();
-                        nRData.NRDataId = primaryMatch.Id;
+                    var versioningResult = await ApplyVersioningAndSteps(nRData, activeMatches, nextBatchId, projectId, projectConfig, properties, allFields);
+                    
+                    if (versioningResult.ActionTaken == "NoChange") continue;
 
-                        if (nRData.Status) // Only the active row in the batch triggers versioning
-                        {
-                            bool isAnyFieldChanged = false;
-                            foreach (var prop in properties.Values)
-                            {
-                                if (prop.Name == "Id" || prop.Name == "ProjectId" || prop.Name == "UploadList" || 
-                                    prop.Name == "Status" || prop.Name == "NRDataId" || prop.Name == "CenterSort" || prop.Name == "NodalSort" || prop.Name == "RouteSort" || prop.Name == "NRDatas" ||
-                                    prop.Name == "Day") continue;
-                                var existingValue = prop.GetValue(primaryMatch);
-                                var incomingValue = prop.GetValue(nRData);
+                    nrDatasToAdd.AddRange(versioningResult.NewRecords);
+                    catchesToResetToDuplicate.UnionWith(versioningResult.CatchesToReset);
+                    deactivatedCount += versioningResult.DeactivatedCount;
+                    lotsToReset.UnionWith(versioningResult.LotsToReset);
 
-                                if (prop.PropertyType == typeof(string))
-                                {
-                                    if (IsDifferent((string)existingValue, (string)incomingValue)) { isAnyFieldChanged = true; break; }
-                                }
-                                else
-                                {
-                                    if (!Equals(existingValue, incomingValue)) { isAnyFieldChanged = true; break; }
-                                }
-                            }
-                            if (!isAnyFieldChanged && IsDifferent(primaryMatch.NRDatas, nRData.NRDatas)) isAnyFieldChanged = true;
-
-                            if (!isAnyFieldChanged)
-                            {
-                                foreach (var match in activeMatches)
-                                {
-                                    if (match.UploadList == null) match.UploadList = new List<int>();
-                                    if (!match.UploadList.Contains(nextBatchId)) match.UploadList.Add(nextBatchId);
-                                    foreach (var p in properties.Values)
-                                    {
-                                        if (p.Name == "Id" || p.Name == "ProjectId" || p.Name == "UploadList" || p.Name == "Status" || p.Name == "NRDataId") continue;
-                                        if (p.CanWrite) p.SetValue(match, p.GetValue(nRData));
-                                    }
-                                    _context.NRDatas.Update(match);
-                                }
-                                nRData.Steps = primaryMatch.Steps;
-                                continue; 
-                            }
-                            else
-                            {
-                                foreach (var match in activeMatches)
-                                {
-                                    match.Status = false;
-                                    _context.NRDatas.Update(match);
-                                    deactivatedCount++;
-                                }
-                                nRData.UploadList = new List<int> { nextBatchId };
-
-                                
-                                // 🔹 NEW NODAL LOGIC
-                                bool centerChanged = IsDifferent(primaryMatch.CenterCode, nRData.CenterCode);
-                                bool dateOrUniqueChanged = IsDifferent(primaryMatch.ExamDate, nRData.ExamDate);
-                                bool sortingFieldChanged = IsDifferent(primaryMatch.ExamDate, nRData.ExamDate);
-
-                                // Check Unique/Sorting fields
-                                var allF = await _context.Fields.ToListAsync();
-                                var uniqueF = allF.Where(f => f.IsUnique).Select(f => f.Name).ToList();
-                                var sortingFIds = projectConfig?.SortingBoxReport ?? new List<int>();
-                                var sortingF = allF.Where(f => sortingFIds.Contains(f.FieldId)).Select(f => f.Name).ToList();
-
-                                if (!dateOrUniqueChanged)
-                                {
-                                    foreach (var f in uniqueF)
-                                    {
-                                        if (IsDifferent(GetFieldValue(primaryMatch, f), GetFieldValue(nRData, f)))
-                                        {
-                                            dateOrUniqueChanged = true;
-                                            break;
-                                        }
-                                    }
-                                }
-                                foreach (var f in sortingF)
-                                {
-                                    if (IsDifferent(GetFieldValue(primaryMatch, f), GetFieldValue(nRData, f)))
-                                    {
-                                        sortingFieldChanged = true;
-                                        break;
-                                    }
-                                }
-
-                                if (centerChanged)
-                                {
-                                    bool nodalChanged = IsDifferent(primaryMatch.NodalCode, nRData.NodalCode);
-                                    if (nodalChanged) { nRData.Steps = 2; } else
-                                    nRData.Steps = 3;
-                                    lotsToReset.Add(nRData.LotNo);
-                                }
-                                else if (dateOrUniqueChanged)
-                                {
-                                    nRData.Steps = 3;
-                                    if (sortingFieldChanged) lotsToReset.Add(nRData.LotNo);
-                                }
-                                else
-                                {
-                                    nRData.Steps = 3; // default for any change
-                                }
-
-                                nrDatasToAdd.Add(nRData);
-                                if (!string.IsNullOrWhiteSpace(nRData.CatchNo))
-                                    catchesToResetToDuplicate.Add(nRData.CatchNo.Trim());
-                            }
-                        }
-                        else
-                        {
-                            nRData.UploadList = new List<int> { nextBatchId };
-                            nRData.Steps = primaryMatch.Steps; 
-                            nrDatasToAdd.Add(nRData);
-                            if (!string.IsNullOrWhiteSpace(nRData.CatchNo))
-                                catchesToResetToDuplicate.Add(nRData.CatchNo.Trim());
-                        }
-                    }
-                    else
-                    {
-                        nRData.UploadList = new List<int> { nextBatchId };
-                        nRData.Steps = 0; // Scenario 1: New Catch
-                        nrDatasToAdd.Add(nRData);
-                        lotsToReset.Add(nRData.LotNo);
-                        if (!string.IsNullOrWhiteSpace(nRData.CatchNo))
-                            catchesToResetToDuplicate.Add(nRData.CatchNo.Trim());
-                    }
-
-                    // --- [LEGACY EXTRA LOGIC START] ---
-                    int? extraTypeId = nRData.CenterCode switch
-                    {
-                        "Nodal Extra" => 1,
-                        "University Extra" => 2,
-                        "Office Extra" => 3,
-                        _ => null
-                    };
-
-                    if (extraTypeId.HasValue)
-                    {
-                        var config = extraConfigs.FirstOrDefault(x => x.ExtraType == extraTypeId);
-                        if (config != null)
-                        {
-                            EnvelopeType envelopeType = null;
-                            if (!string.IsNullOrWhiteSpace(config.EnvelopeType))
-                            {
-                                try { envelopeType = JsonSerializer.Deserialize<EnvelopeType>(config.EnvelopeType); } catch { }
-                            }
-                            int innerCapacity = envelopeType != null ? GetEnvelopeCapacity(envelopeType.Inner) : 1;
-                            int outerCapacity = envelopeType != null ? GetEnvelopeCapacity(envelopeType.Outer) : 1;
-                            
-                            int roundedQty = nRData.NRQuantity;
-                            if (innerCapacity > 0) roundedQty = (int)Math.Ceiling((double)nRData.NRQuantity / innerCapacity) * innerCapacity;
-                            else if (outerCapacity > 0) roundedQty = (int)Math.Ceiling((double)nRData.NRQuantity / outerCapacity) * outerCapacity;
-
-                            extraEnvelopesToAdd.Add(new ExtraEnvelopes
-                            {
-                                ProjectId = projectId, 
-                                CatchNo = nRData.CatchNo, 
-                                ExtraId = extraTypeId.Value, 
-                                Quantity = roundedQty,
-                                InnerEnvelope = innerCapacity > 0 ? Math.Ceiling((double)roundedQty / innerCapacity).ToString() : "0",
-                                OuterEnvelope = outerCapacity > 0 ? Math.Ceiling((double)roundedQty / outerCapacity).ToString() : "0",
-                                Status = 1
-                            });
-                        }
-                        if (activeMatches.Any()) continue; 
-                    }
-                    // --- [LEGACY EXTRA LOGIC END] ---
+                    // 6. Extra Envelopes
+                    var extraEnvelopes = ProcessExtraEnvelopes(nRData, projectId, extraConfigs);
+                    extraEnvelopesToAdd.AddRange(extraEnvelopes);
                 }
 
-                // Group Extra Envelopes to avoid unique constraint violation on {CatchNo, ExtraId, ProjectId}
-                var groupedExtras = extraEnvelopesToAdd
-                    .GroupBy(e => new { e.ExtraId, e.CatchNo })
-                    .Select(g => new ExtraEnvelopes
-                    {
-                        ProjectId = projectId,
-                        ExtraId = g.Key.ExtraId,
-                        CatchNo = g.Key.CatchNo,
-                        Quantity = g.Sum(e => e.Quantity),
-                        Status = 1
-                    }).ToList();
+                // 6. Process & Group Extra Envelopes
+                var groupedExtras = GroupAndProcessExtras(extraEnvelopesToAdd, projectId, extraConfigs);
 
-                // Recalculate Inner/Outer for grouped extras
-                foreach (var extra in groupedExtras)
+                // 7. Deactivate overlapping existing extras
+                if (groupedExtras.Any())
                 {
-                    var config = extraConfigs.FirstOrDefault(x => x.ExtraType == extra.ExtraId);
-                    if (config != null)
+                    var existingExtras = await _context.ExtrasEnvelope.Where(e => e.ProjectId == projectId && e.Status == 1).ToListAsync();
+                    foreach (var ex in existingExtras)
                     {
-                        EnvelopeType envelopeType = null;
-                        if (!string.IsNullOrWhiteSpace(config.EnvelopeType))
+                        if (groupedExtras.Any(ge => ge.ExtraId == ex.ExtraId && ge.CatchNo == ex.CatchNo))
                         {
-                            try { envelopeType = JsonSerializer.Deserialize<EnvelopeType>(config.EnvelopeType); } catch { }
+                            ex.Status = 0;
+                            _context.ExtrasEnvelope.Update(ex);
                         }
-                        int innerCap = envelopeType != null ? GetEnvelopeCapacity(envelopeType.Inner) : 1;
-                        int outerCap = envelopeType != null ? GetEnvelopeCapacity(envelopeType.Outer) : 1;
-                        
-                        extra.InnerEnvelope = innerCap > 0 ? Math.Ceiling((double)extra.Quantity / innerCap).ToString() : "0";
-                        extra.OuterEnvelope = outerCap > 0 ? Math.Ceiling((double)extra.Quantity / outerCap).ToString() : "0";
                     }
                 }
 
-                // Deactivate existing extras to prevent unique constraint crash
-                var existingExtras = await _context.ExtrasEnvelope
-                    .Where(e => e.ProjectId == projectId && e.Status == 1)
-                    .ToListAsync();
-                
-                foreach (var ex in existingExtras)
-                {
-                    if (groupedExtras.Any(ge => ge.ExtraId == ex.ExtraId && ge.CatchNo == ex.CatchNo))
-                    {
-                        ex.Status = 0;
-                        _context.ExtrasEnvelope.Update(ex);
-                    }
-                }
-
+                // 8. Save
                 if (nrDatasToAdd.Any()) await _context.NRDatas.AddRangeAsync(nrDatasToAdd);
                 if (groupedExtras.Any()) await _context.ExtrasEnvelope.AddRangeAsync(groupedExtras);
 
                 if (lotsToReset.Any())
                 {
-                    await _context.NRDatas
-                        .Where(r => r.ProjectId == projectId && r.Status == true && lotsToReset.Contains(r.LotNo))
-                        .ExecuteUpdateAsync(setters => setters
-                           .SetProperty(x => x.Steps,
-                                x => x.Steps > Tools.Models.PipelineNavigator.STEP_AWAITING_BOX
-                                    ? Tools.Models.PipelineNavigator.STEP_AWAITING_BOX   
-                                    : x.Steps
-                            )
-                        );
+                    await _context.NRDatas.Where(r => r.ProjectId == projectId && r.Status == true && lotsToReset.Contains(r.LotNo))
+                        .ExecuteUpdateAsync(setters => setters.SetProperty(x => x.Steps, x => x.Steps > PipelineNavigator.STEP_AWAITING_BOX ? PipelineNavigator.STEP_AWAITING_BOX : x.Steps));
                 }
 
                 await _context.SaveChangesAsync();
 
-                // For newly added/changed catches in this upload, force rerun from duplicate step.
+                // 9. Reset steps & cleanup
                 if (catchesToResetToDuplicate.Any())
                 {
-                    await _context.NRDatas
-                        .Where(x =>
-                            x.ProjectId == projectId &&
-                            x.Status == true &&
-                            x.CatchNo != null &&
-                            catchesToResetToDuplicate.Contains(x.CatchNo))
-                        .ExecuteUpdateAsync(setters => setters
-                           .SetProperty(x => x.Steps,
-    x => x.Steps == 2 || x.Steps == 3
-        ? x.Steps   
-        : Tools.Models.PipelineNavigator.STEP_UPLOADED
-)
-                        );
+                    await _context.NRDatas.Where(x => x.ProjectId == projectId && x.Status == true && x.CatchNo != null && catchesToResetToDuplicate.Contains(x.CatchNo))
+                        .ExecuteUpdateAsync(setters => setters.SetProperty(x => x.Steps, x => x.Steps == 2 || x.Steps == 3 ? x.Steps : PipelineNavigator.STEP_UPLOADED));
 
-                    // Delete stale pipeline reports so UI does not show completed from old files.
-                    try
-                    {
-                        var reportDir = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", projectId.ToString());
-                        if (Directory.Exists(reportDir))
-                        {
-                            var reportFilesToDelete = new[]
-                            {
-                                "DuplicateTool.xlsx",
-                                "EnhancementReport.xlsx",
-                                "ExtrasCalculation.xlsx",
-                                "EnvelopeBreaking.xlsx",
-                                "BoxBreaking.xlsx",
-                                "EnvelopeSummary.xlsx",
-                                "CatchSummary.xlsx",
-                                "CatchWiseBookletAndOmrSerialing.xlsx"
-                            };
-
-                            foreach (var file in reportFilesToDelete)
-                            {
-                                var fullPath = Path.Combine(reportDir, file);
-                                if (System.IO.File.Exists(fullPath))
-                                {
-                                    System.IO.File.Delete(fullPath);
-                                }
-                            }
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        await _loggerService.LogErrorAsync("Failed to delete stale report files after catch reset", ex.Message, nameof(NRDatasController));
-                    }
+                    await CleanupStaleReports(projectId);
                 }
 
                 await _loggerService.LogEventAsync($"Upload Processed (Batch {nextBatchId})", "NRData", LogHelper.GetTriggeredBy(User), projectId);
 
-                return Ok(new
-                {
-                    message = "Data processed successfully",
-                    Batch = nextBatchId,
-                    NewRecords = nrDatasToAdd.Count,
-                    UpdatedRecords = deactivatedCount
-                });
+                return Ok(new { message = "Data processed successfully", Batch = nextBatchId, NewRecords = nrDatasToAdd.Count, UpdatedRecords = deactivatedCount });
             }
             catch (Exception ex)
             {
@@ -1438,6 +1159,109 @@ namespace Tools.Controllers
                 return StatusCode(500, ex.Message);
             }
         }
+
+        [HttpPost("single")]
+        public async Task<IActionResult> PostSingleCatch([FromBody] JsonElement inputData)
+        {
+            if (!ModelState.IsValid)
+                return BadRequest(ModelState);
+
+            try
+            {
+                int projectId = inputData.GetProperty("projectId").GetInt32();
+                var incomingDataArray = inputData.GetProperty("data");
+
+                if (incomingDataArray.GetArrayLength() == 0)
+                    return BadRequest("No data provided.");
+
+                var item = incomingDataArray[0];
+
+                // 1. Fetch config
+                var projectConfig = await _context.ProjectConfigs.AsNoTracking().FirstOrDefaultAsync(x => x.ProjectId == projectId);
+                var extraConfigs = await _context.ExtraConfigurations.AsNoTracking().Where(x => x.ProjectId == projectId).ToListAsync();
+
+                // 2. Resolve Batch ID
+                var uploadLists = await _context.NRDatas.Where(x => x.ProjectId == projectId && x.UploadList != null).Select(x => x.UploadList).ToListAsync();
+                int currentMaxBatch = uploadLists.SelectMany(x => x).DefaultIfEmpty(0).Max();
+                int batchId = currentMaxBatch > 0 ? currentMaxBatch : 1;
+
+                // 3. Map JSON to NRData
+                var properties = typeof(NRData).GetProperties().ToDictionary(p => p.Name.ToLower(), p => p);
+                var nRData = MapJsonToNRData(item, projectId, properties);
+
+                // 4. Duplicate check
+                var activeMatches = await GetActiveMatches(nRData, projectId, currentMaxBatch, projectConfig);
+
+                var nrDatasToAdd = new List<NRData>();
+                var catchesToReset = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var extraEnvelopesToAdd = new List<ExtraEnvelopes>();
+                var lotsToReset = new HashSet<int>();
+                int deactivatedCount = 0;
+
+                // 5. Versioning & Steps
+                var allFields = await _context.Fields.AsNoTracking().ToListAsync();
+                var result = await ApplyVersioningAndSteps(nRData, activeMatches, batchId, projectId, projectConfig, properties, allFields);
+                if (result.ActionTaken == "NoChange")
+                {
+                    await _context.SaveChangesAsync();
+                    return Ok(result.Response);
+                }
+
+                nrDatasToAdd.AddRange(result.NewRecords);
+                catchesToReset.UnionWith(result.CatchesToReset);
+                deactivatedCount = result.DeactivatedCount;
+                lotsToReset.UnionWith(result.LotsToReset);
+
+                // 6. Process & Group Extra Envelopes
+                var extraEnvelopes = ProcessExtraEnvelopes(nRData, projectId, extraConfigs);
+                var groupedExtras = GroupAndProcessExtras(extraEnvelopes, projectId, extraConfigs);
+
+                // 7. Deactivate overlapping existing extras
+                if (groupedExtras.Any())
+                {
+                    var existingExtras = await _context.ExtrasEnvelope.Where(e => e.ProjectId == projectId && e.Status == 1).ToListAsync();
+                    foreach (var ex in existingExtras)
+                    {
+                        if (groupedExtras.Any(ge => ge.ExtraId == ex.ExtraId && ge.CatchNo == ex.CatchNo))
+                        {
+                            ex.Status = 0;
+                            _context.ExtrasEnvelope.Update(ex);
+                        }
+                    }
+                }
+
+                // 8. Save
+                if (nrDatasToAdd.Any()) await _context.NRDatas.AddRangeAsync(nrDatasToAdd);
+                if (groupedExtras.Any()) await _context.ExtrasEnvelope.AddRangeAsync(groupedExtras);
+
+                if (lotsToReset.Any())
+                {
+                    await _context.NRDatas.Where(r => r.ProjectId == projectId && r.Status == true && lotsToReset.Contains(r.LotNo))
+                        .ExecuteUpdateAsync(setters => setters.SetProperty(x => x.Steps, x => x.Steps > PipelineNavigator.STEP_AWAITING_BOX ? PipelineNavigator.STEP_AWAITING_BOX : x.Steps));
+                }
+
+                await _context.SaveChangesAsync();
+
+                // 9. Reset steps & cleanup
+                if (catchesToReset.Any())
+                {
+                    await _context.NRDatas.Where(x => x.ProjectId == projectId && x.Status == true && x.CatchNo != null && catchesToReset.Contains(x.CatchNo))
+                        .ExecuteUpdateAsync(setters => setters.SetProperty(x => x.Steps, x => x.Steps == 2 || x.Steps == 3 ? x.Steps : PipelineNavigator.STEP_UPLOADED));
+
+                    await CleanupStaleReports(projectId);
+                }
+
+                await _loggerService.LogEventAsync($"Single Catch Processed (Batch {batchId})", "NRData", LogHelper.GetTriggeredBy(User), projectId);
+
+                return Ok(new { message = "Data processed successfully", Batch = batchId, NewRecords = nrDatasToAdd.Count, UpdatedRecords = deactivatedCount });
+            }
+            catch (Exception ex)
+            {
+                await _loggerService.LogErrorAsync("Single Catch Upload Error", ex.ToString(), nameof(NRDatasController));
+                return StatusCode(500, ex.Message);
+            }
+        }
+
         public class EnvelopeType
         {
             public string Inner { get; set; }
@@ -3809,9 +3633,226 @@ namespace Tools.Controllers
             return string.Empty;
         }
 
-        private bool NRDataExists(int id)
+        private NRData MapJsonToNRData(JsonElement item, int projectId, Dictionary<string, PropertyInfo> properties)
         {
-            return _context.NRDatas.Any(e => e.Id == id);
+            var nRData = new NRData { ProjectId = projectId, Status = true };
+            var extraData = new Dictionary<string, string>();
+
+            foreach (var prop in item.EnumerateObject())
+            {
+                string key = prop.Name.Replace(" ", "").ToLower();
+                string value = prop.Value.ToString().Trim();
+
+                if (properties.TryGetValue(key, out var propInfo))
+                {
+                    if (key == "catchno") nRData.CatchNo = value;
+                    if (key == "centercode") nRData.CenterCode = value;
+                    if (propInfo.Name.Equals("NRDataId", StringComparison.OrdinalIgnoreCase)) continue;
+
+                    try
+                    {
+                        var targetType = Nullable.GetUnderlyingType(propInfo.PropertyType) ?? propInfo.PropertyType;
+                        object convertedValue;
+                        if (propInfo.Name.Equals("IsNep", StringComparison.OrdinalIgnoreCase))
+                        {
+                            if (value.Equals("nep", StringComparison.OrdinalIgnoreCase)) convertedValue = true;
+                            else if (value.Equals("non-nep", StringComparison.OrdinalIgnoreCase)) convertedValue = false;
+                            else convertedValue = null;
+                        }
+                        else
+                        {
+                            convertedValue = string.IsNullOrWhiteSpace(value) ? null : Convert.ChangeType(value, targetType);
+                        }
+                        propInfo.SetValue(nRData, convertedValue);
+                    }
+                    catch { }
+                }
+                else if (prop.Name != "projectId" && prop.Name != "isCorrectedNrdataReport")
+                {
+                    extraData[prop.Name] = value;
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(nRData.ExamDate) && DateTime.TryParse(nRData.ExamDate, out DateTime examDate))
+                nRData.Day = examDate.DayOfWeek.ToString();
+
+            if (extraData.Any()) nRData.NRDatas = JsonSerializer.Serialize(extraData);
+            return nRData;
+        }
+
+        private async Task<List<NRData>> GetActiveMatches(NRData nRData, int projectId, int currentMaxBatch, ProjectConfig projectConfig)
+        {
+            var catchNo = nRData.CatchNo?.ToLower().Trim();
+            var centerCode = nRData.CenterCode?.ToLower().Trim();
+
+            // Fetch active records for the project to memory to avoid translation issues with UploadList.Contains
+            var projectData = await _context.NRDatas
+                .Where(db => db.ProjectId == projectId && db.Status == true && db.UploadList != null)
+                .ToListAsync();
+
+            var activeMatches = projectData
+                .Where(db => db.UploadList.Contains(currentMaxBatch) &&
+                             db.CatchNo != null && db.CatchNo.ToLower().Trim() == catchNo &&
+                             db.CenterCode != null && db.CenterCode.ToLower().Trim() == centerCode)
+                .ToList();
+
+            var duplicateFieldIds = projectConfig?.DuplicateCriteria ?? new List<int>();
+            var allFields = await _context.Fields.AsNoTracking().ToListAsync();
+            var matchingFields = allFields.Where(f => duplicateFieldIds.Contains(f.FieldId)).Select(f => f.Name.Trim()).ToList();
+
+            if (matchingFields.Any() && !(matchingFields.Count == 2 && matchingFields.Contains("CatchNo") && matchingFields.Contains("CenterCode")))
+            {
+                var configuredMatches = projectData.Where(db => db.UploadList.Contains(currentMaxBatch)).Where(db => {
+                    foreach (var field in matchingFields)
+                    {
+                        if (!string.Equals((GetFieldValue(db, field) ?? "").Trim(), (GetFieldValue(nRData, field) ?? "").Trim(), StringComparison.OrdinalIgnoreCase)) return false;
+                    }
+                    return true;
+                }).ToList();
+                if (configuredMatches.Any()) activeMatches = configuredMatches;
+            }
+            return activeMatches;
+        }
+
+        private async Task<VersioningResult> ApplyVersioningAndSteps(NRData nRData, List<NRData> activeMatches, int batchId, int projectId, ProjectConfig projectConfig, Dictionary<string, PropertyInfo> properties, List<Field> allFields)
+        {
+            var result = new VersioningResult();
+            Func<string?, string?, bool> IsDifferent = (s1, s2) => !string.Equals((s1 ?? "").Trim(), (s2 ?? "").Trim(), StringComparison.OrdinalIgnoreCase);
+
+            if (activeMatches.Any())
+            {
+                var primaryMatch = activeMatches.First();
+                nRData.NRDataId = primaryMatch.Id;
+
+                bool isAnyFieldChanged = false;
+                foreach (var prop in properties.Values)
+                {
+                    if (new[] { "Id", "ProjectId", "UploadList", "Status", "NRDataId", "CenterSort", "NodalSort", "RouteSort", "NRDatas", "Day" }.Contains(prop.Name)) continue;
+                    if (prop.PropertyType == typeof(string)) { if (IsDifferent((string)prop.GetValue(primaryMatch), (string)prop.GetValue(nRData))) { isAnyFieldChanged = true; break; } }
+                    else { if (!Equals(prop.GetValue(primaryMatch), prop.GetValue(nRData))) { isAnyFieldChanged = true; break; } }
+                }
+                if (!isAnyFieldChanged && IsDifferent(primaryMatch.NRDatas, nRData.NRDatas)) isAnyFieldChanged = true;
+
+                if (!isAnyFieldChanged)
+                {
+                    foreach (var match in activeMatches)
+                    {
+                        if (match.UploadList == null) match.UploadList = new List<int>();
+                        if (!match.UploadList.Contains(batchId)) match.UploadList.Add(batchId);
+                        foreach (var p in properties.Values) { if (new[] { "Id", "ProjectId", "UploadList", "Status", "NRDataId" }.Contains(p.Name)) continue; if (p.CanWrite) p.SetValue(match, p.GetValue(nRData)); }
+                        _context.NRDatas.Update(match);
+                    }
+                    nRData.Steps = primaryMatch.Steps;
+                    result.ActionTaken = "NoChange";
+                    result.Response = new { message = "Data processed successfully (no changes detected)", Batch = batchId, NewRecords = 0, UpdatedRecords = 0 };
+                    return result;
+                }
+
+                foreach (var match in activeMatches) { match.Status = false; _context.NRDatas.Update(match); result.DeactivatedCount++; }
+                nRData.UploadList = new List<int> { batchId };
+
+                var uniqueFields = allFields.Where(f => f.IsUnique).Select(f => f.Name).ToList();
+                var sortingFields = allFields.Where(f => (projectConfig?.SortingBoxReport ?? new List<int>()).Contains(f.FieldId)).Select(f => f.Name).ToList();
+
+                bool centerChanged = IsDifferent(primaryMatch.CenterCode, nRData.CenterCode);
+                bool dateOrUniqueChanged = IsDifferent(primaryMatch.ExamDate, nRData.ExamDate);
+                bool sortingFieldChanged = IsDifferent(primaryMatch.ExamDate, nRData.ExamDate);
+
+                if (!dateOrUniqueChanged) foreach (var f in uniqueFields) if (IsDifferent(GetFieldValue(primaryMatch, f), GetFieldValue(nRData, f))) { dateOrUniqueChanged = true; break; }
+                foreach (var f in sortingFields) if (IsDifferent(GetFieldValue(primaryMatch, f), GetFieldValue(nRData, f))) { sortingFieldChanged = true; break; }
+
+                if (centerChanged) { if (IsDifferent(primaryMatch.NodalCode, nRData.NodalCode)) nRData.Steps = 2; else nRData.Steps = 3; result.LotsToReset.Add(nRData.LotNo); }
+                else if (dateOrUniqueChanged) { nRData.Steps = 3; if (sortingFieldChanged) result.LotsToReset.Add(nRData.LotNo); }
+                else nRData.Steps = 3;
+
+                result.NewRecords.Add(nRData);
+                if (!string.IsNullOrWhiteSpace(nRData.CatchNo)) result.CatchesToReset.Add(nRData.CatchNo.Trim());
+            }
+            else
+            {
+                nRData.UploadList = new List<int> { batchId };
+                nRData.Steps = 0;
+                result.NewRecords.Add(nRData);
+                result.LotsToReset.Add(nRData.LotNo);
+                if (!string.IsNullOrWhiteSpace(nRData.CatchNo)) result.CatchesToReset.Add(nRData.CatchNo.Trim());
+            }
+            return result;
+        }
+
+        private List<ExtraEnvelopes> ProcessExtraEnvelopes(NRData nRData, int projectId, List<ExtrasConfiguration> extraConfigs)
+        {
+            var extraEnvelopesToAdd = new List<ExtraEnvelopes>();
+            int? extraTypeId = nRData.CenterCode switch { "Nodal Extra" => 1, "University Extra" => 2, "Office Extra" => 3, _ => null };
+
+            if (extraTypeId.HasValue)
+            {
+                var config = extraConfigs.FirstOrDefault(x => x.ExtraType == extraTypeId);
+                if (config != null)
+                {
+                    EnvelopeType envelopeType = null;
+                    if (!string.IsNullOrWhiteSpace(config.EnvelopeType)) try { envelopeType = JsonSerializer.Deserialize<EnvelopeType>(config.EnvelopeType); } catch { }
+                    int innerCapacity = envelopeType != null ? GetEnvelopeCapacity(envelopeType.Inner) : 1;
+                    int outerCapacity = envelopeType != null ? GetEnvelopeCapacity(envelopeType.Outer) : 1;
+                    int roundedQty = nRData.NRQuantity;
+                    if (innerCapacity > 0) roundedQty = (int)Math.Ceiling((double)nRData.NRQuantity / innerCapacity) * innerCapacity;
+                    else if (outerCapacity > 0) roundedQty = (int)Math.Ceiling((double)nRData.NRQuantity / outerCapacity) * outerCapacity;
+
+                    extraEnvelopesToAdd.Add(new ExtraEnvelopes { ProjectId = projectId, CatchNo = nRData.CatchNo, ExtraId = extraTypeId.Value, Quantity = roundedQty, InnerEnvelope = innerCapacity > 0 ? Math.Ceiling((double)roundedQty / innerCapacity).ToString() : "0", OuterEnvelope = outerCapacity > 0 ? Math.Ceiling((double)roundedQty / outerCapacity).ToString() : "0", Status = 1 });
+                }
+            }
+            return extraEnvelopesToAdd;
+        }
+
+        private List<ExtraEnvelopes> GroupAndProcessExtras(List<ExtraEnvelopes> extras, int projectId, List<ExtrasConfiguration> extraConfigs)
+        {
+            var grouped = extras.GroupBy(e => new { e.ExtraId, e.CatchNo })
+                .Select(g => new ExtraEnvelopes
+                {
+                    ProjectId = projectId,
+                    ExtraId = g.Key.ExtraId,
+                    CatchNo = g.Key.CatchNo,
+                    Quantity = g.Sum(e => e.Quantity),
+                    Status = 1
+                }).ToList();
+
+            foreach (var extra in grouped)
+            {
+                var config = extraConfigs.FirstOrDefault(x => x.ExtraType == extra.ExtraId);
+                if (config != null)
+                {
+                    EnvelopeType envelopeType = null;
+                    if (!string.IsNullOrWhiteSpace(config.EnvelopeType)) try { envelopeType = JsonSerializer.Deserialize<EnvelopeType>(config.EnvelopeType); } catch { }
+                    int innerCap = envelopeType != null ? GetEnvelopeCapacity(envelopeType.Inner) : 1;
+                    int outerCap = envelopeType != null ? GetEnvelopeCapacity(envelopeType.Outer) : 1;
+                    extra.InnerEnvelope = innerCap > 0 ? Math.Ceiling((double)extra.Quantity / innerCap).ToString() : "0";
+                    extra.OuterEnvelope = outerCap > 0 ? Math.Ceiling((double)extra.Quantity / outerCap).ToString() : "0";
+                }
+            }
+            return grouped;
+        }
+
+        private async Task CleanupStaleReports(int projectId)
+        {
+            try
+            {
+                var reportDir = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", projectId.ToString());
+                if (Directory.Exists(reportDir))
+                {
+                    var files = new[] { "DuplicateTool.xlsx", "EnhancementReport.xlsx", "ExtrasCalculation.xlsx", "EnvelopeBreaking.xlsx", "BoxBreaking.xlsx", "EnvelopeSummary.xlsx", "CatchSummary.xlsx", "CatchWiseBookletAndOmrSerialing.xlsx" };
+                    foreach (var file in files) { var fullPath = Path.Combine(reportDir, file); if (System.IO.File.Exists(fullPath)) System.IO.File.Delete(fullPath); }
+                }
+            }
+            catch (Exception ex) { await _loggerService.LogErrorAsync("Report cleanup error", ex.Message, nameof(NRDatasController)); }
+        }
+
+        private class VersioningResult
+        {
+            public string ActionTaken { get; set; } = "Process";
+            public object Response { get; set; }
+            public List<NRData> NewRecords { get; set; } = new List<NRData>();
+            public HashSet<string> CatchesToReset { get; set; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            public int DeactivatedCount { get; set; } = 0;
+            public HashSet<int> LotsToReset { get; set; } = new HashSet<int>();
         }
 
         private static bool HasMeaningfulText(string? value)
@@ -3829,6 +3870,11 @@ namespace Tools.Controllers
         private static bool HasMeaningfulNumber(int? value)
         {
             return value.HasValue && value.Value > 0;
+        }
+
+        private bool NRDataExists(int id)
+        {
+            return _context.NRDatas.Any(e => e.Id == id);
         }
     }
 }
