@@ -861,6 +861,8 @@ namespace Tools.Controllers
                 var oldLot = existingRecord.LotNo;
                 var oldExamDate = existingRecord.ExamDate;
                 var oldNodalCode = existingRecord.NodalCode;
+                var oldQuantity = existingRecord.Quantity;
+                var oldNRQuantity = existingRecord.NRQuantity;
                 var oldPageNo = existingRecord.Pages;
                 var catchNo = existingRecord.CatchNo;
 
@@ -976,6 +978,7 @@ namespace Tools.Controllers
 
                 bool lotChanged = oldLot != existingRecord.LotNo;
                 bool pageChanged = oldPageNo != existingRecord.Pages;
+                bool quantityChanged = oldQuantity != existingRecord.Quantity || oldNRQuantity != existingRecord.NRQuantity;
 
                 // =====================
                 // LOAD CONFIG
@@ -1010,15 +1013,21 @@ namespace Tools.Controllers
                 bool boxFieldAffected =
                     changedFields.Any(f => boxFieldNames.Contains(f));
 
+                // Label affected means we definitely need to re-run Box Breaking (Step 5)
+                var requiredLabelFields = await GetRequiredLabelFields(existingRecord.ProjectId);
+                bool labelFieldAffected = changedFields.Any(f => requiredLabelFields.Any(rf => NormalizeKey(rf) == f));
+
                 // =====================
                 // STEP DECISION
                 // =====================
 
                 bool shouldResetToStep3 =
-                    centerChanged || envelopeFieldAffected;
+                    centerChanged || envelopeFieldAffected || quantityChanged;
 
                 bool shouldResetToStep4 =
                     boxFieldAffected || lotChanged || pageChanged;
+
+                bool shouldResetToStep5 = labelFieldAffected;
 
                 // Nodal change overrides everything
                 if (nodalChanged)
@@ -1026,19 +1035,23 @@ namespace Tools.Controllers
                     existingRecord.Steps =
                         Tools.Models.PipelineNavigator.STEP_ENHANCEMENT;
                 }
-                else
+                else if (quantityChanged)
                 {
-                    // Lowest step wins for current record
-                    if (shouldResetToStep3)
-                    {
-                        existingRecord.Steps =
-                            Tools.Models.PipelineNavigator.STEP_AWAITING_EXTRA;
-                    }
-                    else if (shouldResetToStep4)
-                    {
-                        existingRecord.Steps =
-                            Tools.Models.PipelineNavigator.STEP_AWAITING_ENV;
-                    }
+                    existingRecord.Steps = 3;
+                }
+                else if (shouldResetToStep5)
+                {
+                    existingRecord.Steps = Tools.Models.PipelineNavigator.STEP_AWAITING_BOX;
+                }
+                else if (shouldResetToStep3)
+                {
+                    existingRecord.Steps =
+                        Tools.Models.PipelineNavigator.STEP_AWAITING_EXTRA;
+                }
+                else if (shouldResetToStep4)
+                {
+                    existingRecord.Steps =
+                        Tools.Models.PipelineNavigator.STEP_AWAITING_ENV;
                 }
 
                 // =========================================================
@@ -1087,11 +1100,12 @@ namespace Tools.Controllers
                 }
 
                 // =====================
-                // STEP 5 → LOT WIDE
+                // STEP 5 / LABEL RESET → LOT WIDE
                 // =====================
-                if (isStep5)
+                if (isStep5 || shouldResetToStep5)
                 {
                     var lot = existingRecord.LotNo;
+                    var resetTargetStep = shouldResetToStep5 ? Tools.Models.PipelineNavigator.STEP_AWAITING_BOX : Tools.Models.PipelineNavigator.STEP_AWAITING_ENV;
 
                     await _context.NRDatas
                         .Where(x =>
@@ -1099,46 +1113,31 @@ namespace Tools.Controllers
                             x.LotNo == lot &&
                             x.Id != existingRecord.Id &&
                             x.Status &&
-                            x.Steps ==
-                            Tools.Models.PipelineNavigator.STEP_AWAITING_BOX)
+                            x.Steps > resetTargetStep)
                         .ExecuteUpdateAsync(s =>
                             s.SetProperty(
                                 x => x.Steps,
-                                Tools.Models.PipelineNavigator.STEP_AWAITING_ENV
+                                resetTargetStep
                             ));
                 }
 
                 // =====================
-                // LOT RESET LOGIC
+                // QUANTITY SPLIT RESET → LOT WIDE
                 // =====================
-                if (isStep5)
+                if (quantityChanged)
                 {
-                    var affectedLots = new List<int?>();
-
-                    if (lotChanged)
-                    {
-                        if (oldLot != null)
-                            affectedLots.Add(oldLot);
-
-                        if (existingRecord.LotNo != null)
-                            affectedLots.Add(existingRecord.LotNo);
-                    }
-                    else if (oldLot != null)
-                    {
-                        affectedLots.Add(oldLot);
-                    }
-
+                    var lot = existingRecord.LotNo;
                     await _context.NRDatas
-                        .Where(r =>
-                            r.ProjectId == existingRecord.ProjectId &&
-                            r.Status &&
-                            affectedLots.Contains(r.LotNo) &&
-                            r.Steps >
-                            Tools.Models.PipelineNavigator.STEP_AWAITING_ENV)
+                        .Where(x =>
+                            x.ProjectId == existingRecord.ProjectId &&
+                            x.LotNo == lot &&
+                            x.Id != existingRecord.Id &&
+                            x.Status &&
+                            x.Steps > 4)
                         .ExecuteUpdateAsync(s =>
                             s.SetProperty(
                                 x => x.Steps,
-                                Tools.Models.PipelineNavigator.STEP_AWAITING_ENV
+                                4
                             ));
                 }
 
@@ -3243,6 +3242,7 @@ namespace Tools.Controllers
             var allFields = await _context.Fields.ToListAsync();
             var uniqueFieldNames = allFields.Where(f => f.IsUnique).Select(f => f.Name).ToList();
             var sortingFieldNames = allFields.Where(f => boxSortingFieldIds.Contains(f.FieldId)).Select(f => f.Name).ToList();
+            var requiredLabelFields = await GetRequiredLabelFields(projectId);
 
             var keys = incomingData
                 .Where(x => !string.IsNullOrEmpty(x.CatchNo) && !string.IsNullOrEmpty(x.CenterCode))
@@ -3262,6 +3262,7 @@ namespace Tools.Controllers
 
             int updated = 0, inserted = 0;
             var lotsToReset = new HashSet<int>();
+            var lotsWithQuantityReset = new Dictionary<int, List<int>>(); // LotNo -> List of Row IDs (affected)
 
             foreach (var row in incomingData)
             {
@@ -3276,6 +3277,18 @@ namespace Tools.Controllers
                     bool centerChanged = existing.CenterCode != row.CenterCode;
                     bool dateOrUniqueChanged = existing.ExamDate != row.ExamDate;
                     bool sortingFieldChanged = false;
+                    bool labelFieldChanged = false;
+                    bool quantityChanged = existing.Quantity != row.Quantity || existing.NRQuantity != row.NRQuantity;
+
+                    // 🔹 Check Label-dependent Fields (Dynamic from templates)
+                    foreach (var fName in requiredLabelFields)
+                    {
+                        if (GetFieldValue(existing, fName) != GetFieldValue(row, fName))
+                        {
+                            labelFieldChanged = true;
+                            break;
+                        }
+                    }
 
                     // Check Unique Fields
                     if (!dateOrUniqueChanged)
@@ -3301,28 +3314,37 @@ namespace Tools.Controllers
                     }
                     if (existing.ExamDate != row.ExamDate) sortingFieldChanged = true;
 
-                    // 🔹 UPDATE
+                    // 🔹 APPLY LOGIC BASED ON DETECTED CHANGES
+                    bool nodalChanged = existing.NodalCode != row.NodalCode;
+
+                    // 🔹 UPDATE VALUES IN DB OBJECT
                     _context.Entry(existing).CurrentValues.SetValues(row);
                     existing.ProjectId = projectId;
-
-                    // 🔹 APPLY NODAL LOGIC
-                    bool nodalChanged = existing.NodalCode != row.NodalCode;
                     if (nodalChanged)
                     {
                         existing.Steps = 2; // Step 2 (Nodal Changed)
                         lotsToReset.Add(existing.LotNo);
+                    }
+                    else if (quantityChanged)
+                    {
+                        existing.Steps = 3; // Step 3 (Quantity Changed)
+                        lotsToReset.Add(existing.LotNo); 
+                        if (!lotsWithQuantityReset.ContainsKey(existing.LotNo))
+                            lotsWithQuantityReset[existing.LotNo] = new List<int>();
+                        lotsWithQuantityReset[existing.LotNo].Add(existing.Id);
                     }
                     else if (centerChanged)
                     {
                         existing.Steps = 3; // Step 3 (Center Changed but Nodal Same)
                         lotsToReset.Add(existing.LotNo);
                     }
-                    else if (dateOrUniqueChanged)
+                    else if (dateOrUniqueChanged || labelFieldChanged)
                     {
                         existing.Steps = Tools.Models.PipelineNavigator.STEP_AWAITING_ENV; // labelling step
-                        if (sortingFieldChanged)
+                        if (sortingFieldChanged || labelFieldChanged)
                         {
                             lotsToReset.Add(existing.LotNo);
+                            existing.Steps = Tools.Models.PipelineNavigator.STEP_AWAITING_BOX;
                         }
                     }
 
@@ -3348,9 +3370,24 @@ namespace Tools.Controllers
 
                 foreach (var r in relatedRows)
                 {
-                    if (r.Steps > Tools.Models.PipelineNavigator.STEP_AWAITING_BOX)
+                    if (lotsWithQuantityReset.TryGetValue(r.LotNo, out var affectedIds))
                     {
-                        r.Steps = Tools.Models.PipelineNavigator.STEP_AWAITING_BOX;
+                        if (affectedIds.Contains(r.Id))
+                        {
+                            r.Steps = 3;
+                        }
+                        else
+                        {
+                            // Others in lot to step 4
+                            if (r.Steps > 4) r.Steps = 4;
+                        }
+                    }
+                    else if (lotsToReset.Contains(r.LotNo))
+                    {
+                        if (r.Steps > Tools.Models.PipelineNavigator.STEP_AWAITING_BOX)
+                        {
+                            r.Steps = Tools.Models.PipelineNavigator.STEP_AWAITING_BOX;
+                        }
                     }
                 }
             }
@@ -3386,9 +3423,11 @@ namespace Tools.Controllers
                 var allFields = await _context.Fields.ToListAsync();
                 var uniqueFieldNames = allFields.Where(f => f.IsUnique).Select(f => f.Name).ToList();
                 var sortingFieldNames = allFields.Where(f => boxSortingFieldIds.Contains(f.FieldId)).Select(f => f.Name).ToList();
+                var requiredLabelFields = await GetRequiredLabelFields(projectId);
 
                 var lotsToReset = new HashSet<int>();
-
+                var lotsWithQuantityReset = new Dictionary<int, List<int>>();
+                
                 foreach (var row in data)
                 {
                     if (existingData.TryGetValue(row.Id, out var existing))
@@ -3396,6 +3435,18 @@ namespace Tools.Controllers
                         bool centerChanged = existing.CenterCode != row.CenterCode;
                         bool dateOrUniqueChanged = existing.ExamDate != row.ExamDate;
                         bool sortingFieldChanged = false;
+                        bool labelFieldChanged = false;
+                        bool quantityChanged = existing.Quantity != row.Quantity || existing.NRQuantity != row.NRQuantity;
+
+                        // Check Label-dependent Fields
+                        foreach (var fName in requiredLabelFields)
+                        {
+                            if (GetFieldValue(existing, fName) != GetFieldValue(row, fName))
+                            {
+                                labelFieldChanged = true;
+                                break;
+                            }
+                        }
 
                         if (!dateOrUniqueChanged)
                         {
@@ -3419,28 +3470,41 @@ namespace Tools.Controllers
                         }
                         if (existing.ExamDate != row.ExamDate) sortingFieldChanged = true;
 
-                        // Apply Nodal Logic
+                        // 🔹 APPLY LOGIC BASED ON DETECTED CHANGES
                         bool nodalChanged = existing.NodalCode != row.NodalCode;
                         centerChanged = existing.CenterCode != row.CenterCode;
+
+                        // Update other properties FIRST so our logic can override specific fields (like Steps)
+                        _context.Entry(existing).CurrentValues.SetValues(row);
+                        existing.ProjectId = projectId;
 
                         if (nodalChanged)
                         {
                             existing.Steps = 2;
                             lotsToReset.Add(existing.LotNo);
                         }
+                        else if (quantityChanged)
+                        {
+                            existing.Steps = 3;
+                            lotsToReset.Add(existing.LotNo);
+                            if (!lotsWithQuantityReset.ContainsKey(existing.LotNo))
+                                lotsWithQuantityReset[existing.LotNo] = new List<int>();
+                            lotsWithQuantityReset[existing.LotNo].Add(existing.Id);
+                        }
                         else if (centerChanged)
                         {
                             existing.Steps = 3;
                             lotsToReset.Add(existing.LotNo);
                         }
-                        else if (dateOrUniqueChanged)
+                        else if (dateOrUniqueChanged || labelFieldChanged)
                         {
-                            existing.Steps = 3;
-                            if (sortingFieldChanged) lotsToReset.Add(existing.LotNo);
+                            existing.Steps = Tools.Models.PipelineNavigator.STEP_AWAITING_ENV; // Envelope Setup
+                            if (sortingFieldChanged || labelFieldChanged)
+                            {
+                                lotsToReset.Add(existing.LotNo);
+                                existing.Steps = Tools.Models.PipelineNavigator.STEP_AWAITING_BOX; // Box Breaking
+                            }
                         }
-
-                        // Update other properties
-                        _context.Entry(existing).CurrentValues.SetValues(row);
                     }
                 }
 
@@ -3452,7 +3516,24 @@ namespace Tools.Controllers
 
                     foreach (var r in relatedRows)
                     {
-                        if (r.Steps > 4) r.Steps = 3;
+                        if (lotsWithQuantityReset.TryGetValue(r.LotNo, out var affectedIds))
+                        {
+                            if (affectedIds.Contains(r.Id))
+                            {
+                                r.Steps = 3;
+                            }
+                            else
+                            {
+                                if (r.Steps > 4) r.Steps = 4;
+                            }
+                        }
+                        else if (lotsToReset.Contains(r.LotNo))
+                        {
+                            if (r.Steps > Tools.Models.PipelineNavigator.STEP_AWAITING_BOX)
+                            {
+                                r.Steps = Tools.Models.PipelineNavigator.STEP_AWAITING_BOX;
+                            }
+                        }
                     }
                 }
 
@@ -3968,6 +4049,44 @@ namespace Tools.Controllers
         private bool NRDataExists(int id)
         {
             return _context.NRDatas.Any(e => e.Id == id);
+        }
+        private async Task<HashSet<string>> GetRequiredLabelFields(int projectId)
+        {
+            var requiredFields = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            
+            // 🔹 Fetch templates that belong to the Box Breaking module (ID 5)
+            var templates = await _context.RPTTemplates
+                .Where(t => t.ProjectId == projectId && t.IsActive == true && (t.IsDeleted == false || t.IsDeleted == null))
+                .ToListAsync();
+
+            var boxTemplates = templates
+                .Where(t => t.ModuleIds != null && t.ModuleIds.Contains(5))
+                .ToList();
+
+            foreach (var template in boxTemplates)
+            {
+                if (!string.IsNullOrEmpty(template.RequiredFieldsJson))
+                {
+                    try
+                    {
+                        var fields = System.Text.Json.JsonSerializer.Deserialize<List<string>>(template.RequiredFieldsJson);
+                        if (fields != null)
+                        {
+                            foreach (var field in fields)
+                            {
+                                requiredFields.Add(field);
+                            }
+                        }
+                    }
+                    catch { }
+                }
+            }
+
+            // Also include standard fields that always affect box breaking/labels
+            requiredFields.Add("NRQuantity");
+            requiredFields.Add("Quantity");
+
+            return requiredFields;
         }
     }
 }
