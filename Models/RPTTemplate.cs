@@ -26,6 +26,7 @@ namespace Tools.Models
         public DateTime UpdatedDate { get; set;} = DateTime.Now;
         public bool? IsActive { get; set; }
         public bool? IsDeleted { get; set; } = false;
+        public bool ReportStatus { get; set; } = false;
     }
 }
 

@@ -27,11 +27,12 @@ namespace Tools.Controllers
             _dispatchService = dispatchService;
         }
         [HttpPost("ProcessBoxBreaking")]
-        public async Task<IActionResult> ProcessBoxBreaking(int ProjectId, [FromQuery]List<int> LotNo)
+        public async Task<IActionResult> ProcessBoxBreaking(int ProjectId, [FromQuery]List<int> LotNo, [FromQuery] bool skipReset = false)
         {
             var sw = System.Diagnostics.Stopwatch.StartNew();
             try
             {
+                if (!skipReset) await ResetReportStatus(ProjectId);
                 await _loggerService.LogEventAsync($"Starting box breaking for ProjectId {ProjectId}, Lots: {string.Join(",", LotNo)}", "BoxBreakingProcessing", LogHelper.GetTriggeredBy(User), ProjectId);
 
                 // ✅ STEP 1: Validate dispatch status for all lots (mandatory backend validation)
@@ -1027,9 +1028,19 @@ namespace Tools.Controllers
                 return StatusCode(500, new { error = ex.Message });
             }
         }
-
-
-
+        private async Task ResetReportStatus(int projectId)
+        {
+            try
+            {
+                await _context.RPTTemplates
+                    .Where(t => t.ProjectId == projectId && t.ReportStatus)
+                    .ExecuteUpdateAsync(setters => setters.SetProperty(t => t.ReportStatus, false));
+            }
+            catch (Exception ex)
+            {
+                await _loggerService.LogErrorAsync("Report Status Reset Error", ex.Message, nameof(BoxBreakingProcessingController));
+            }
+        }
     }
 }
 

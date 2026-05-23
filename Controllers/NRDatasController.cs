@@ -1448,6 +1448,7 @@ namespace Tools.Controllers
                                     : PipelineNavigator.STEP_UPLOADED
                             ));
 
+                    await ResetReportStatus(projectId);
                     await CleanupStaleReports(projectId);
                 }
 
@@ -1534,7 +1535,7 @@ namespace Tools.Controllers
                 await _loggerService.LogEventAsync($"Single Catch Processed (Batch {batchId})",
                     "NRData", LogHelper.GetTriggeredBy(User), projectId);
 
-                return Ok(new { message = "Data added successfully" });
+                return Ok(new { message = "Data added successfully", lotNo = nRData.LotNo, catchNo = nRData.CatchNo });
             }
             catch (Exception ex)
             {
@@ -3392,6 +3393,11 @@ namespace Tools.Controllers
                 }
             }
 
+            if (lotsToReset.Any())
+            {
+                await ResetReportStatus(projectId);
+            }
+
             await _context.SaveChangesAsync();
 
             return Ok(new
@@ -3535,6 +3541,11 @@ namespace Tools.Controllers
                             }
                         }
                     }
+                }
+
+                if (lotsToReset.Any())
+                {
+                    await ResetReportStatus(projectId);
                 }
 
                 await _context.SaveChangesAsync();
@@ -4017,6 +4028,21 @@ namespace Tools.Controllers
                 }
             }
             catch (Exception ex) { await _loggerService.LogErrorAsync("Report cleanup error", ex.Message, nameof(NRDatasController)); }
+        }
+
+        private async Task ResetReportStatus(int projectId)
+        {
+            try
+            {
+                // Reset status to false (Pending) for all active templates of this project
+                await _context.RPTTemplates
+                    .Where(t => t.ProjectId == projectId && t.ReportStatus)
+                    .ExecuteUpdateAsync(setters => setters.SetProperty(t => t.ReportStatus, false));
+            }
+            catch (Exception ex)
+            {
+                await _loggerService.LogErrorAsync("Report Status Reset Error", ex.Message, nameof(NRDatasController));
+            }
         }
 
         private class VersioningResult

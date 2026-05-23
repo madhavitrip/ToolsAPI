@@ -34,23 +34,43 @@ namespace Tools.Controllers
 
 
         [HttpPost("ProcessEnvelopeBreaking")]
-        public async Task<IActionResult> ProcessEnvelopeBreaking(int ProjectId, int triggeredBy = 0)
+        public async Task<IActionResult> ProcessEnvelopeBreaking(int ProjectId, int triggeredBy = 0, [FromQuery] bool skipReset = false, [FromQuery] int? lotNo = null, [FromQuery] string? catchNo = null)
         {
             try
             {
+                if (!skipReset) await ResetReportStatus(ProjectId);
                 var envCaps = await _context.EnvelopesTypes
                     .Select(e => new { e.EnvelopeName, e.Capacity })
                     .ToListAsync();
 
                 var eligibleSteps = Tools.Models.PipelineNavigator.GetEligiblePickupSteps(Tools.Models.PipelineNavigator.STEP_AWAITING_ENV);
 
-                var nrData = await _context.NRDatas
-                    .Where(p => p.ProjectId == ProjectId && p.Status == true && eligibleSteps.Contains(p.Steps))
+                var nrQuery = _context.NRDatas
+                    .Where(p => p.ProjectId == ProjectId && p.Status == true && eligibleSteps.Contains(p.Steps));
+
+                if (lotNo.HasValue) nrQuery = nrQuery.Where(p => p.LotNo == lotNo.Value);
+                if (!string.IsNullOrEmpty(catchNo)) nrQuery = nrQuery.Where(p => p.CatchNo == catchNo);
+
+                var nrData = await nrQuery
                     .OrderBy(p => p.CatchNo)
                     .ThenBy(p => p.RouteSort)
                     .ThenBy(p => p.NodalSort)
                     .ThenBy(p => p.CenterSort)
                     .ToListAsync();
+
+                // ✅ Targeted cleanup: if processing a specific catch, clear its old results first
+                if (!string.IsNullOrEmpty(catchNo))
+                {
+                    var existingCatchResults = await _context.EnvelopeBreakingResults
+                        .Where(r => r.ProjectId == ProjectId && r.CatchNo == catchNo)
+                        .ToListAsync();
+                    if (existingCatchResults.Any())
+                    {
+                        _context.EnvelopeBreakingResults.RemoveRange(existingCatchResults);
+                        await _context.SaveChangesAsync();
+                        await _loggerService.LogEventAsync($"Cleared {existingCatchResults.Count} old results for catch {catchNo}", "EnvelopeBreakageProcessing", triggeredBy, ProjectId);
+                    }
+                }
 
                 // ✅ Clean up results for deactivated catches (Status = false)
                 var deactivatedCatches = await _context.NRDatas
@@ -87,9 +107,11 @@ namespace Tools.Controllers
                 if (!nrData.Any())
                     return BadRequest("No valid NR Data found for Envelope Breaking processing.");
 
-                var extras = await _context.ExtrasEnvelope
-                    .Where(p => p.ProjectId == ProjectId)
-                    .ToListAsync();
+                var extrasQuery = _context.ExtrasEnvelope.Where(p => p.ProjectId == ProjectId);
+                if (!string.IsNullOrEmpty(catchNo)) extrasQuery = extrasQuery.Where(e => e.CatchNo == catchNo);
+                // Note: ExtraEnvelopes doesn't usually have LotNo, so we filter by catchNo if provided.
+                
+                var extras = await extrasQuery.ToListAsync();
 
                 var projectconfig = await _context.ProjectConfigs
                     .Where(p => p.ProjectId == ProjectId)
@@ -589,9 +611,9 @@ namespace Tools.Controllers
                 foreach (var item in sortedNonMss)
                 {
                     var itemDict = (IDictionary<string, object>)item;
-                    string catchNo = itemDict["CatchNo"]?.ToString();
+                    string cNo = itemDict["CatchNo"]?.ToString();
 
-                    if (catchNo != lastCatchForMss && lastCatchForMss != null)
+                    if (cNo != lastCatchForMss && lastCatchForMss != null)
                     {
                         if (mssMode == "end")
                         {
@@ -608,7 +630,7 @@ namespace Tools.Controllers
                         {
                             finalResultList.AddRange(buffer);
                             finalResultList.AddRange(CreateMssRows(
-                                catchNo,
+                                cNo,
                                 itemDict["ExamDate"]?.ToString(),
                                 itemDict["ExamTime"]?.ToString(),
                                 itemDict["CourseName"]?.ToString()
@@ -620,7 +642,7 @@ namespace Tools.Controllers
                     if (mssMode == "start" && lastCatchForMss == null)
                     {
                         finalResultList.AddRange(CreateMssRows(
-                            catchNo,
+                            cNo,
                             itemDict["ExamDate"]?.ToString(),
                             itemDict["ExamTime"]?.ToString(),
                             itemDict["CourseName"]?.ToString()
@@ -628,7 +650,7 @@ namespace Tools.Controllers
                     }
 
                     buffer.Add(item);
-                    lastCatchForMss = catchNo;
+                    lastCatchForMss = cNo;
                 }
 
                 // Flush last buffer
@@ -650,12 +672,42 @@ namespace Tools.Controllers
                 // STEP 3: Assign serials
                 int bookletStart = projectconfig?.BookletSerialNumber ?? 0;
                 int omrStart = projectconfig.OmrSerialNumber;
-                bool assignBookletSerial = bookletStart > 0;
-                bool assignOmrSerial = omrStart > 0;
                 bool resetOmrSerialOnCatchChange = projectconfig.ResetOmrSerialOnCatchChange;
                 bool resetBookletSerialOnCatchChange = projectconfig?.ResetBookletSerialOnCatchChange ?? false;
-                string prevCatchForSerial = null;
                 int serial = 1;
+
+                // ✅ Continuity: if not resetting on catch change and we are doing a targeted run, 
+                // find the last used serials in the project to continue the sequence.
+                if (!string.IsNullOrEmpty(catchNo) && !resetOmrSerialOnCatchChange)
+                {
+                    var lastResult = await _context.EnvelopeBreakingResults
+                        .Where(r => r.ProjectId == ProjectId && r.CatchNo != catchNo)
+                        .OrderByDescending(r => r.SerialNumber)
+                        .FirstOrDefaultAsync();
+
+                    if (lastResult != null)
+                    {
+                        serial = lastResult.SerialNumber + 1;
+
+                        if (!string.IsNullOrEmpty(lastResult.OmrSerial))
+                        {
+                            var parts = lastResult.OmrSerial.Split('-');
+                            if (parts.Length == 2 && int.TryParse(parts[1], out int lastOmr)) omrStart = lastOmr + 1;
+                            else if (int.TryParse(lastResult.OmrSerial, out int lastOmrSing)) omrStart = lastOmrSing + 1;
+                        }
+
+                        if (!string.IsNullOrEmpty(lastResult.BookletSerial))
+                        {
+                            var parts = lastResult.BookletSerial.Split('-');
+                            if (parts.Length == 2 && int.TryParse(parts[1], out int lastBooklet)) bookletStart = lastBooklet + 1;
+                            else if (int.TryParse(lastResult.BookletSerial, out int lastBookletSing)) bookletStart = lastBookletSing + 1;
+                        }
+                    }
+                }
+
+                bool assignBookletSerial = bookletStart > 0;
+                bool assignOmrSerial = omrStart > 0;
+                string prevCatchForSerial = null;
 
                 var envelopeResults = new List<EnvelopeBreakingResult>();
 
@@ -664,9 +716,9 @@ namespace Tools.Controllers
                     var dict = (IDictionary<string, object>)item;
                     bool isMssRow = dict.ContainsKey("isMss") && (bool)dict["isMss"];
                     bool isExtra = (bool)dict["ExtraAttached"];
-                    string catchNo = dict["CatchNo"]?.ToString();
+                    string cNo = dict["CatchNo"]?.ToString();
 
-                    if (!isMssRow && prevCatchForSerial != null && catchNo != prevCatchForSerial)
+                    if (!isMssRow && prevCatchForSerial != null && cNo != prevCatchForSerial)
                     {
                         serial = 1;
                         if (resetOmrSerialOnCatchChange) omrStart = projectconfig.OmrSerialNumber;
@@ -680,7 +732,7 @@ namespace Tools.Controllers
                             ProjectId = ProjectId,
                             NrDataId = 0,
                             ExtraId = null,
-                            CatchNo = catchNo,
+                            CatchNo = cNo,
                             EnvQuantity = dict["EnvQuantity"]?.ToString(),
                             CenterEnv = 0,
                             TotalEnv = 0,
@@ -760,7 +812,7 @@ namespace Tools.Controllers
                         ProjectId = ProjectId,
                         NrDataId = nrDataId ?? 0,
                         ExtraId = extraId,
-                        CatchNo = catchNo,
+                        CatchNo = cNo,
                         EnvQuantity = dict["EnvQuantity"]?.ToString(),
                         CenterEnv = (int)dict["CenterEnv"],
                         TotalEnv = (int)dict["TotalEnv"],
@@ -783,7 +835,7 @@ namespace Tools.Controllers
                         DistrictSort = districtSort,
                     });
 
-                    prevCatchForSerial = catchNo;
+                    prevCatchForSerial = cNo;
                 }
 
                 _context.EnvelopeBreakingResults.AddRange(envelopeResults);
@@ -1222,6 +1274,19 @@ namespace Tools.Controllers
             }
         }
 
+        private async Task ResetReportStatus(int projectId)
+        {
+            try
+            {
+                await _context.RPTTemplates
+                    .Where(t => t.ProjectId == projectId && t.ReportStatus)
+                    .ExecuteUpdateAsync(setters => setters.SetProperty(t => t.ReportStatus, false));
+            }
+            catch (Exception ex)
+            {
+                await _loggerService.LogErrorAsync("Report Status Reset Error", ex.Message, nameof(EnvelopeBreakageProcessingController));
+            }
+        }
     }
-    }
+}
 

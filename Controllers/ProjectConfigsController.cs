@@ -163,6 +163,7 @@ namespace Tools.Controllers
             try
             {
                 await _context.SaveChangesAsync();
+                await ResetReportStatus(projectConfig.ProjectId);
                 await _loggerService.LogEventAsync($"Updated ProjectConfig for {projectConfig.ProjectId}", "ProjectConfig", LogHelper.GetTriggeredBy(User), projectConfig.ProjectId);
             }
             catch (Exception ex)
@@ -201,6 +202,7 @@ namespace Tools.Controllers
                 }
                 _context.ProjectConfigs.Add(projectConfig);
                 await _context.SaveChangesAsync();
+                await ResetReportStatus(projectConfig.ProjectId);
                 await _loggerService.LogEventAsync($"Created a new ProjectConfig with ID {projectConfig.ProjectId}", "ProjectConfig", LogHelper.GetTriggeredBy(User), projectConfig.ProjectId);
                 return CreatedAtAction("GetProjectConfig", new { id = projectConfig.Id }, projectConfig);
             }
@@ -317,6 +319,20 @@ namespace Tools.Controllers
         private bool ProjectConfigExists(int id)
         {
             return _context.ProjectConfigs.Any(e => e.Id == id);
+        }
+
+        private async Task ResetReportStatus(int projectId)
+        {
+            try
+            {
+                await _context.RPTTemplates
+                    .Where(t => t.ProjectId == projectId && t.ReportStatus)
+                    .ExecuteUpdateAsync(setters => setters.SetProperty(t => t.ReportStatus, false));
+            }
+            catch (Exception ex)
+            {
+                await _loggerService.LogErrorAsync("Report Status Reset Error", ex.Message, nameof(ProjectConfigsController));
+            }
         }
     }
 }
