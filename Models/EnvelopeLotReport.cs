@@ -20,7 +20,7 @@ namespace ToolsAPI.Models
         [Required]
         public string TemplateName { get; set; } = string.Empty;
 
-        [Required]
+        // Removed [Required] to allow for project-wide reports or empty lot selections
         public string EnvLotNumbers { get; set; } = string.Empty; // Comma-separated envelope lot numbers
 
         [Required]
