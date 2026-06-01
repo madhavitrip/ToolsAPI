@@ -24,21 +24,69 @@ namespace Tools.Controllers
         private readonly ERPToolsDbContext _context;
         private readonly ILoggerService _loggerService;
         private readonly ApiSettings _apiSettings;
+        private readonly IDispatchService _dispatchService;
 
-        public EnvelopeBreakageProcessingController(ERPToolsDbContext context, ILoggerService loggerService, IOptions<ApiSettings> apiSettings)
+        public EnvelopeBreakageProcessingController(ERPToolsDbContext context, ILoggerService loggerService, IOptions<ApiSettings> apiSettings, IDispatchService dispatchService)
         {
             _context = context;
             _loggerService = loggerService;
             _apiSettings = apiSettings.Value;
+            _dispatchService = dispatchService;
         }
 
 
         [HttpPost("ProcessEnvelopeBreaking")]
-        public async Task<IActionResult> ProcessEnvelopeBreaking(int ProjectId, int triggeredBy = 0, [FromQuery] bool skipReset = false, [FromQuery] int? lotNo = null, [FromQuery] string? catchNo = null)
+        public async Task<IActionResult> ProcessEnvelopeBreaking(int ProjectId, int triggeredBy = 0, [FromQuery] bool skipReset = false, [FromQuery] int? lotNo = null, [FromQuery] string? catchNo = null, [FromQuery] bool bypassDispatch = false)
         {
             try
             {
                 if (!skipReset) await ResetReportStatus(ProjectId);
+
+                // ✅ STEP 0: Validate dispatch status (mandatory backend validation unless bypassed)
+                if (!bypassDispatch)
+                {
+                    List<int> lotsToCheck = new List<int>();
+                    if (lotNo.HasValue)
+                    {
+                        lotsToCheck.Add(lotNo.Value);
+                    }
+                    else if (!string.IsNullOrEmpty(catchNo))
+                    {
+                        var lot = await _context.NRDatas
+                            .Where(p => p.ProjectId == ProjectId && p.CatchNo == catchNo)
+                            .Select(p => p.LotNo)
+                            .FirstOrDefaultAsync();
+                        if (lot != 0) lotsToCheck.Add(lot);
+                    }
+                    else
+                    {
+                        lotsToCheck = await _context.NRDatas
+                            .Where(p => p.ProjectId == ProjectId && p.Status == true)
+                            .Select(p => p.LotNo)
+                            .Distinct()
+                            .ToListAsync();
+                    }
+
+                    if (lotsToCheck.Any())
+                    {
+                        var dispatchInfoDict = await _dispatchService.GetDispatchDatesAsync(ProjectId, lotsToCheck);
+                        var dispatchedLots = dispatchInfoDict.Where(d => d.Value.IsDispatched).ToList();
+
+                        if (dispatchedLots.Any())
+                        {
+                            var dispatchedLotNumbers = string.Join(", ", dispatchedLots.Select(d => d.Key));
+                            return BadRequest(new
+                            {
+                                error = $"Lot(s) {dispatchedLotNumbers} already dispatched. Envelope Breaking not allowed.",
+                                dispatchedLots = dispatchedLots.Select(d => new
+                                {
+                                    lotNo = d.Key,
+                                    dispatchDate = d.Value.DispatchDate
+                                })
+                            });
+                        }
+                    }
+                }
                 var envCaps = await _context.EnvelopesTypes
                     .Select(e => new { e.EnvelopeName, e.Capacity })
                     .ToListAsync();
