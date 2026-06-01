@@ -162,7 +162,7 @@ namespace Tools.Controllers
                 var projectConfig = await _context.ProjectConfigs
                     .FirstOrDefaultAsync(p => p.ProjectId == ProjectId);
 
-                var eligibleSteps = Tools.Models.PipelineNavigator.GetEligiblePickupSteps(Tools.Models.PipelineNavigator.STEP_AWAITING_EXTRA);
+                var eligibleSteps = Tools.Models.PipelineNavigator.GetEligiblePickupSteps(Tools.Models.PipelineNavigator.STEP_ENHANCEMENT);
 
                 List<NRData> nrDataList;
                 if (uploadId.HasValue)

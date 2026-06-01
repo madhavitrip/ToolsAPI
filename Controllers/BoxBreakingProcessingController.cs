@@ -27,29 +27,33 @@ namespace Tools.Controllers
             _dispatchService = dispatchService;
         }
         [HttpPost("ProcessBoxBreaking")]
-        public async Task<IActionResult> ProcessBoxBreaking(int ProjectId, [FromQuery]List<int> LotNo)
+        public async Task<IActionResult> ProcessBoxBreaking(int ProjectId, [FromQuery]List<int> LotNo, [FromQuery] bool skipReset = false, [FromQuery] bool bypassDispatch = false, [FromQuery] bool runBoth = false)
         {
             var sw = System.Diagnostics.Stopwatch.StartNew();
             try
             {
+                if (!skipReset) await ResetReportStatus(ProjectId);
                 await _loggerService.LogEventAsync($"Starting box breaking for ProjectId {ProjectId}, Lots: {string.Join(",", LotNo)}", "BoxBreakingProcessing", LogHelper.GetTriggeredBy(User), ProjectId);
 
-                // ✅ STEP 1: Validate dispatch status for all lots (mandatory backend validation)
-                var dispatchInfoDict = await _dispatchService.GetDispatchDatesAsync(ProjectId, LotNo);
-                var dispatchedLots = dispatchInfoDict.Where(d => d.Value.IsDispatched).ToList();
-
-                if (dispatchedLots.Any())
+                // ✅ STEP 1: Validate dispatch status for all lots (mandatory backend validation unless bypassed)
+                if (!bypassDispatch)
                 {
-                    var dispatchedLotNumbers = string.Join(", ", dispatchedLots.Select(d => d.Key));
-                    return BadRequest(new
+                    var dispatchInfoDict = await _dispatchService.GetDispatchDatesAsync(ProjectId, LotNo);
+                    var dispatchedLots = dispatchInfoDict.Where(d => d.Value.IsDispatched).ToList();
+
+                    if (dispatchedLots.Any())
                     {
-                        error = $"Lot(s) {dispatchedLotNumbers} already dispatched. Processing not allowed.",
-                        dispatchedLots = dispatchedLots.Select(d => new
+                        var dispatchedLotNumbers = string.Join(", ", dispatchedLots.Select(d => d.Key));
+                        return BadRequest(new
                         {
-                            lotNo = d.Key,
-                            dispatchDate = d.Value.DispatchDate
-                        })
-                    });
+                            error = $"Lot(s) {dispatchedLotNumbers} already dispatched. Processing not allowed.",
+                            dispatchedLots = dispatchedLots.Select(d => new
+                            {
+                                lotNo = d.Key,
+                                dispatchDate = d.Value.DispatchDate
+                            })
+                        });
+                    }
                 }
 
                 await _loggerService.LogEventAsync($"Dispatch validation passed in {sw.ElapsedMilliseconds}ms", "BoxBreakingProcessing", 0, ProjectId);
@@ -68,14 +72,6 @@ namespace Tools.Controllers
                 }
 
                 await _loggerService.LogEventAsync($"Loaded {envelopeResults.Count} envelope results in {sw.ElapsedMilliseconds}ms", "BoxBreakingProcessing", 0, ProjectId);
-
-                if (!maxBatch.HasValue)
-                {
-                    return BadRequest(new
-                    {
-                        error = "No EnvelopeBreakingResults found. Please run Envelope Breaking processing first."
-                    });
-                }
 
                 var eligibleSteps = Tools.Models.PipelineNavigator.GetEligiblePickupSteps(Tools.Models.PipelineNavigator.STEP_AWAITING_BOX);
 
@@ -1027,9 +1023,19 @@ namespace Tools.Controllers
                 return StatusCode(500, new { error = ex.Message });
             }
         }
-
-
-
+        private async Task ResetReportStatus(int projectId)
+        {
+            try
+            {
+                await _context.RPTTemplates
+                    .Where(t => t.ProjectId == projectId && t.ReportStatus)
+                    .ExecuteUpdateAsync(setters => setters.SetProperty(t => t.ReportStatus, false));
+            }
+            catch (Exception ex)
+            {
+                await _loggerService.LogErrorAsync("Report Status Reset Error", ex.Message, nameof(BoxBreakingProcessingController));
+            }
+        }
     }
 }
 

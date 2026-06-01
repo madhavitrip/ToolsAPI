@@ -33,18 +33,6 @@ namespace ToolsAPI.Controllers
                 Console.WriteLine($"Loading envelope lot reports for project: {projectId}");
                 var reports = await _context.EnvelopeLotReports
                     .Where(r => r.ProjectId == projectId)
-                    .Select(r => new EnvelopeLotReport
-                    {
-                        Id = r.Id,
-                        ProjectId = r.ProjectId,
-                        TemplateId = r.TemplateId,
-                        TemplateName = r.TemplateName ?? "",
-                        EnvLotNumbers = r.EnvLotNumbers ?? "",
-                        FileName = r.FileName ?? "",
-                        GeneratedAt = r.GeneratedAt,
-                        GeneratedBy = r.GeneratedBy ?? "",
-                        FilePath = r.FilePath // This can be null
-                    })
                     .OrderByDescending(r => r.GeneratedAt)
                     .ToListAsync();
 
@@ -53,9 +41,9 @@ namespace ToolsAPI.Controllers
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error loading reports for project {projectId}: {ex.Message}");
-                Console.WriteLine($"Stack trace: {ex.StackTrace}");
-                return StatusCode(500, new { message = "Failed to retrieve reports", error = ex.Message });
+                var fullMessage = ex.Message + (ex.InnerException != null ? " | Inner: " + ex.InnerException.Message : "");
+                Console.WriteLine($"Error loading reports for project {projectId}: {fullMessage}");
+                return StatusCode(500, new { message = "Failed to retrieve reports", error = fullMessage });
             }
         }
 
@@ -96,54 +84,34 @@ namespace ToolsAPI.Controllers
                     return BadRequest(ModelState);
                 }
 
-                // Check if a report with the same template and envelope lots already exists
-                var existingReport = await _context.EnvelopeLotReports
-                    .FirstOrDefaultAsync(r => r.ProjectId == request.ProjectId 
-                                           && r.TemplateId == request.TemplateId 
-                                           && r.EnvLotNumbers == request.EnvLotNumbers);
-
-                if (existingReport != null)
+                // Always create a new report record instead of overwriting existing ones
+                // This allows for a full history of generated reports for the project/template
+                Console.WriteLine("Creating new report record for history");
+                
+                var newReport = new EnvelopeLotReport
                 {
-                    Console.WriteLine($"Updating existing report with ID: {existingReport.Id}");
-                    // Update existing report
-                    existingReport.FileName = request.FileName;
-                    existingReport.GeneratedAt = DateTime.UtcNow;
-                    existingReport.GeneratedBy = request.GeneratedBy;
-                    existingReport.FilePath = request.FilePath;
+                    ProjectId = request.ProjectId,
+                    TemplateId = request.TemplateId,
+                    TemplateName = request.TemplateName,
+                    EnvLotNumbers = request.EnvLotNumbers ?? "",
+                    FileName = request.FileName,
+                    GeneratedAt = DateTime.UtcNow,
+                    GeneratedBy = request.GeneratedBy,
+                    FilePath = request.FilePath
+                };
 
-                    await _context.SaveChangesAsync();
-                    Console.WriteLine("Report updated successfully");
-                    return Ok(existingReport);
-                }
-                else
-                {
-                    Console.WriteLine("Creating new report");
-                    // Create new report
-                    var newReport = new EnvelopeLotReport
-                    {
-                        ProjectId = request.ProjectId,
-                        TemplateId = request.TemplateId,
-                        TemplateName = request.TemplateName,
-                        EnvLotNumbers = request.EnvLotNumbers,
-                        FileName = request.FileName,
-                        GeneratedAt = DateTime.UtcNow,
-                        GeneratedBy = request.GeneratedBy,
-                        FilePath = request.FilePath
-                    };
+                _context.EnvelopeLotReports.Add(newReport);
+                await _context.SaveChangesAsync();
+                Console.WriteLine($"New report created with ID: {newReport.Id}");
 
-                    _context.EnvelopeLotReports.Add(newReport);
-                    await _context.SaveChangesAsync();
-                    Console.WriteLine($"New report created with ID: {newReport.Id}");
-
-                    return CreatedAtAction(nameof(GetEnvelopeLotReportsByProject), 
-                        new { projectId = newReport.ProjectId }, newReport);
-                }
+                return CreatedAtAction(nameof(GetEnvelopeLotReportsByProject), 
+                    new { projectId = newReport.ProjectId }, newReport);
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error creating envelope lot report: {ex.Message}");
-                Console.WriteLine($"Stack trace: {ex.StackTrace}");
-                return StatusCode(500, new { message = "Failed to create report", error = ex.Message });
+                var fullMessage = ex.Message + (ex.InnerException != null ? " | Inner: " + ex.InnerException.Message : "");
+                Console.WriteLine($"Error creating envelope lot report: {fullMessage}");
+                return StatusCode(500, new { message = "Failed to create report", error = fullMessage });
             }
         }
 
@@ -182,8 +150,8 @@ namespace ToolsAPI.Controllers
         [Required]
         public string TemplateName { get; set; }
 
-        [Required]
-        public string EnvLotNumbers { get; set; } // Comma-separated envelope lot numbers
+        // Removed [Required] to allow for project-wide reports or empty selections
+        public string EnvLotNumbers { get; set; } = ""; 
 
         [Required]
         public string FileName { get; set; }
@@ -191,6 +159,6 @@ namespace ToolsAPI.Controllers
         [Required]
         public string GeneratedBy { get; set; }
 
-        public string? FilePath { get; set; } = null; // Make explicitly nullable with default
+        public string? FilePath { get; set; } = null;
     }
 }

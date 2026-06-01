@@ -28,12 +28,14 @@ namespace Tools.Controllers
         private readonly ERPToolsDbContext _context;
         private readonly ILoggerService _loggerService;
         private readonly ApiSettings _apiSettings;
+        private readonly IDispatchService _dispatchService;
 
-        public EnvelopeBreakagesController(ERPToolsDbContext context, ILoggerService loggerService, IOptions<ApiSettings> apiSettings)
+        public EnvelopeBreakagesController(ERPToolsDbContext context, ILoggerService loggerService, IOptions<ApiSettings> apiSettings, IDispatchService dispatchService)
         {
             _context = context;
             _loggerService = loggerService;
             _apiSettings = apiSettings.Value;
+            _dispatchService = dispatchService;
         }
 
         [HttpGet]
@@ -294,7 +296,7 @@ namespace Tools.Controllers
         // POST: api/EnvelopeBreakages
         // To protect from overposting attacks, see https://go.microsoft.com/fwlink/?linkid=2123754
         [HttpPost("EnvelopeConfiguration")]
-        public async Task<IActionResult> EnvelopeConfiguration(int ProjectId)
+        public async Task<IActionResult> EnvelopeConfiguration(int ProjectId, [FromQuery] bool bypassDispatch = false)
         {
             try
             {
@@ -436,8 +438,8 @@ namespace Tools.Controllers
                             {
                                 // Create an Options wrapper for ApiSettings
                                 var apiSettingsOptions = Options.Create(_apiSettings);
-                                var envelopeBreakageProcessingController = new EnvelopeBreakageProcessingController(_context, _loggerService, apiSettingsOptions);
-                                var processResult = await envelopeBreakageProcessingController.ProcessEnvelopeBreaking(ProjectId, LogHelper.GetTriggeredBy(User));
+                                var envelopeBreakageProcessingController = new EnvelopeBreakageProcessingController(_context, _loggerService, apiSettingsOptions, _dispatchService);
+                                var processResult = await envelopeBreakageProcessingController.ProcessEnvelopeBreaking(ProjectId, LogHelper.GetTriggeredBy(User), bypassDispatch: bypassDispatch);
                                 
                                 if (processResult is OkObjectResult okResult)
                                 {
