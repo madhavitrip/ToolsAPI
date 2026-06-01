@@ -1440,7 +1440,9 @@ namespace Tools.Controllers
                             x.ProjectId == projectId &&
                             x.Status == true &&
                             x.CatchNo != null &&
-                            catchesToResetToDuplicate.Contains(x.CatchNo))
+                            catchesToResetToDuplicate.Contains(x.CatchNo)
+                            &&
+    !(x.UploadList != null && x.UploadList.Contains(nextBatchId)))
                         .ExecuteUpdateAsync(setters => setters
                             .SetProperty(
                                 x => x.Steps,
