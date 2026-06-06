@@ -308,10 +308,9 @@ namespace Tools.Controllers
 
                 var envelopesJson = projectConfig.Envelope;
 
-                var eligibleSteps = new[] { 1, 2 };
 
                 var nrDataList = await _context.NRDatas
-                    .Where(s => s.ProjectId == ProjectId && s.Status == true && eligibleSteps.Contains(s.Steps))
+                    .Where(s => s.ProjectId == ProjectId && s.Status == true && s.Steps == Tools.Models.PipelineNavigator.STEP_ENHANCEMENT)
                     .ToListAsync();
 
                 if (!nrDataList.Any())
@@ -438,14 +437,14 @@ namespace Tools.Controllers
                 {
                     _context.EnvelopeBreakages.AddRange(breakagesToAdd);
 
-                    // Update steps to 2 since both enhancement and envelope configuration are now completed
+                    // Update steps since envelope configuration is completed
                     foreach (var nr in nrDataList)
                     {
-                        nr.Steps = Tools.Models.PipelineNavigator.GetNextStep(Tools.Models.PipelineNavigator.STEP_DUP_PARTIAL, projectConfig?.Modules);
+                        nr.Steps = Tools.Models.PipelineNavigator.GetNextStep(Tools.Models.PipelineNavigator.STEP_ENHANCEMENT, projectConfig?.Modules);
                     }
 
                     await _context.SaveChangesAsync();
-                    await _loggerService.LogEventAsync($"Created Envelope Breaking of ProjectID {ProjectId} and updated steps to 2", "EnvelopeBreakages", LogHelper.GetTriggeredBy(User), ProjectId);
+                    await _loggerService.LogEventAsync($"Created Envelope Breaking of ProjectID {ProjectId} and updated steps", "EnvelopeBreakages", LogHelper.GetTriggeredBy(User), ProjectId);
                 }
 
                 return Ok("Envelope breakdown report has been successfully created.");

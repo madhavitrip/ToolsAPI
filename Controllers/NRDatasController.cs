@@ -470,7 +470,7 @@ namespace Tools.Controllers
                         Symbol = primaryRow.Symbol,
                         Status = true,
                         NRDataId = null,
-                        Steps = 0, // NEW: Start from scratch for merged catch
+                        Steps = Tools.Models.PipelineNavigator.STEP_UPLOADED, // Start from scratch for merged catch
                         UploadList = primaryRow.UploadList != null
                             ? new List<int>(primaryRow.UploadList)
                             : new List<int>(),
@@ -1021,13 +1021,13 @@ namespace Tools.Controllers
                 // STEP DECISION
                 // =====================
 
-                bool shouldResetToStep3 =
-                    centerChanged || envelopeFieldAffected || quantityChanged;
+                bool shouldResetToStepEnvBreaking =
+                    centerChanged || envelopeFieldAffected;
 
-                bool shouldResetToStep4 =
+                bool shouldResetToStepAwaitingEnv =
                     boxFieldAffected || lotChanged || pageChanged;
 
-                bool shouldResetToStep5 = labelFieldAffected;
+                bool shouldResetToStepAwaitingBox = labelFieldAffected;
 
                 // Nodal change overrides everything
                 if (nodalChanged)
@@ -1035,23 +1035,26 @@ namespace Tools.Controllers
                     existingRecord.Steps =
                         Tools.Models.PipelineNavigator.STEP_ENHANCEMENT;
                 }
+                // Quantity change has special handling - this entry goes to STEP_ENHANCEMENT
                 else if (quantityChanged)
                 {
-                    existingRecord.Steps = 3;
+                    existingRecord.Steps =
+                        Tools.Models.PipelineNavigator.STEP_ENHANCEMENT;
                 }
-                else if (shouldResetToStep5)
-                {
-                    existingRecord.Steps = Tools.Models.PipelineNavigator.STEP_AWAITING_BOX;
-                }
-                else if (shouldResetToStep3)
+                else if (shouldResetToStepEnvBreaking)
                 {
                     existingRecord.Steps =
-                        Tools.Models.PipelineNavigator.STEP_AWAITING_EXTRA;
+                        Tools.Models.PipelineNavigator.STEP_ENV_BREAKING;
                 }
-                else if (shouldResetToStep4)
+                else if (shouldResetToStepAwaitingEnv)
                 {
                     existingRecord.Steps =
                         Tools.Models.PipelineNavigator.STEP_AWAITING_ENV;
+                }
+                else if (shouldResetToStepAwaitingBox)
+                {
+                    existingRecord.Steps =
+                        Tools.Models.PipelineNavigator.STEP_AWAITING_BOX;
                 }
 
                 // =========================================================
@@ -1060,11 +1063,50 @@ namespace Tools.Controllers
                 // =========================================================
 
                 // =========================================================
-                // PROPAGATION & STEP RESET RULES FOR SAME CATCH
+                // SPECIAL HANDLING FOR QUANTITY CHANGE
                 // =========================================================
-                bool stepResetTriggered = nodalChanged || quantityChanged || shouldResetToStep5 || shouldResetToStep3 || shouldResetToStep4;
+                if (quantityChanged)
+                {
+                    // Edited record → STEP_ENHANCEMENT (already set above)
+                    // Other records with same CatchNo → STEP_ENV_BREAKING
+                    // All remaining records in project → STEP_AWAITING_EXTRA
+                    
+                    if (!string.IsNullOrWhiteSpace(catchNo))
+                    {
+                        // Get all other records with same CatchNo
+                        var sameCatchRows = await _context.NRDatas
+                            .Where(x =>
+                                x.ProjectId == existingRecord.ProjectId &&
+                                x.CatchNo == catchNo &&
+                                x.Id != existingRecord.Id &&
+                                x.Status)
+                            .ToListAsync();
 
-                if ((stepResetTriggered || hasUniqueFieldsEdited) &&
+                        foreach (var row in sameCatchRows)
+                        {
+                            row.Steps = Tools.Models.PipelineNavigator.STEP_ENV_BREAKING;
+                            _context.NRDatas.Update(row);
+                        }
+                    }
+
+                    // Reset all remaining records in project to STEP_AWAITING_EXTRA
+                    await _context.NRDatas
+                        .Where(x =>
+                            x.ProjectId == existingRecord.ProjectId &&
+                            x.Id != existingRecord.Id &&
+                            (string.IsNullOrWhiteSpace(catchNo) || x.CatchNo != catchNo) &&
+                            x.Status &&
+                            x.Steps > Tools.Models.PipelineNavigator.STEP_AWAITING_EXTRA)
+                        .ExecuteUpdateAsync(s =>
+                            s.SetProperty(
+                                x => x.Steps,
+                                Tools.Models.PipelineNavigator.STEP_AWAITING_EXTRA
+                            ));
+                }
+                // =========================================================
+                // PROPAGATION & STEP RESET RULES FOR SAME CATCH (NON-QUANTITY CHANGES)
+                // =========================================================
+                else if ((nodalChanged || shouldResetToStepEnvBreaking || shouldResetToStepAwaitingEnv || shouldResetToStepAwaitingBox) &&
                     !string.IsNullOrWhiteSpace(catchNo))
                 {
                     var rows = await _context.NRDatas
@@ -1112,7 +1154,7 @@ namespace Tools.Controllers
                             }
                         }
 
-                        if (stepResetTriggered)
+                        if (nodalChanged || shouldResetToStepEnvBreaking || shouldResetToStepAwaitingEnv || shouldResetToStepAwaitingBox)
                         {
                             // Reset related catch rows' steps to match the edited record's step
                             row.Steps = existingRecord.Steps;
@@ -1124,68 +1166,23 @@ namespace Tools.Controllers
                             _context.NRDatas.Update(row);
                         }
                     }
-                }
 
-                // =====================
-                // STEP 5 / LABEL RESET / ENVELOPE RESET → LOT WIDE
-                // =====================
-                if (shouldResetToStep4 || shouldResetToStep5)
-                {
-                    var lot = existingRecord.LotNo;
-                    var resetTargetStep = shouldResetToStep5 
-                        ? Tools.Models.PipelineNavigator.STEP_AWAITING_BOX 
-                        : Tools.Models.PipelineNavigator.STEP_AWAITING_ENV;
-
-                    await _context.NRDatas
-                        .Where(x =>
-                            x.ProjectId == existingRecord.ProjectId &&
-                            x.LotNo == lot &&
-                            x.Id != existingRecord.Id &&
-                            x.Status &&
-                            x.Steps > resetTargetStep)
-                        .ExecuteUpdateAsync(s =>
-                            s.SetProperty(
-                                x => x.Steps,
-                                resetTargetStep
-                            ));
-                }
-
-                // =====================
-                // QUANTITY SPLIT RESET → LOT WIDE
-                // =====================
-                if (quantityChanged)
-                {
-                    var lot = existingRecord.LotNo;
-                    await _context.NRDatas
-                        .Where(x =>
-                            x.ProjectId == existingRecord.ProjectId &&
-                            x.LotNo == lot &&
-                            x.Id != existingRecord.Id &&
-                            x.Status &&
-                            x.Steps > 4)
-                        .ExecuteUpdateAsync(s =>
-                            s.SetProperty(
-                                x => x.Steps,
-                                4
-                            ));
-                }
-
-                // =====================
-                // RESET TO STEP 3 → PROJECT WIDE
-                // =====================
-                if (shouldResetToStep3)
-                {
-                    await _context.NRDatas
-                        .Where(x =>
-                            x.ProjectId == existingRecord.ProjectId &&
-                            x.Id != existingRecord.Id &&
-                            x.Status &&
-                            x.Steps > Tools.Models.PipelineNavigator.STEP_AWAITING_EXTRA)
-                        .ExecuteUpdateAsync(s =>
-                            s.SetProperty(
-                                x => x.Steps,
-                                Tools.Models.PipelineNavigator.STEP_AWAITING_EXTRA
-                            ));
+                    // Reset all remaining project records
+                    var stepResetTriggered = nodalChanged || shouldResetToStepEnvBreaking || shouldResetToStepAwaitingEnv || shouldResetToStepAwaitingBox;
+                    if (stepResetTriggered)
+                    {
+                        await _context.NRDatas
+                            .Where(x =>
+                                x.ProjectId == existingRecord.ProjectId &&
+                                x.Id != existingRecord.Id &&
+                                x.Status &&
+                                x.Steps > existingRecord.Steps)
+                            .ExecuteUpdateAsync(s =>
+                                s.SetProperty(
+                                    x => x.Steps,
+                                    existingRecord.Steps
+                                ));
+                    }
                 }
 
                 _context.NRDatas.Update(existingRecord);
@@ -1266,7 +1263,7 @@ namespace Tools.Controllers
                         Console.WriteLine($"After mapping Steps = {nRData.Steps}");
                         nRData.UploadList = new List<int> { 1 };
                         nRData.Status = true;
-                        nRData.Steps = 0;
+                        nRData.Steps = Tools.Models.PipelineNavigator.STEP_UPLOADED;
                         nrDatasToAdd.Add(nRData);
 
                         // Extra Envelopes
@@ -1492,7 +1489,7 @@ namespace Tools.Controllers
                         .ExecuteUpdateAsync(setters => setters
                             .SetProperty(
                                 x => x.Steps,
-                                x => x.Steps == 2 || x.Steps == 3
+                                x => x.Steps == PipelineNavigator.STEP_ENHANCEMENT || x.Steps == PipelineNavigator.STEP_ENV_BREAKING
                                     ? x.Steps
                                     : PipelineNavigator.STEP_UPLOADED
                             ));
@@ -1565,21 +1562,46 @@ namespace Tools.Controllers
                 {
                     return BadRequest("Record already exists with same duplicate criteria.");
                 }
-                nRData.Steps = 1;
+                nRData.Steps = PipelineNavigator.STEP_DUP_PARTIAL;
                 nRData.Status = true;
 
                 // Save
                 await _context.NRDatas.AddAsync(nRData);
                 await _context.SaveChangesAsync();
+
+                var catchNo = nRData.CatchNo;
+
+                if (!string.IsNullOrWhiteSpace(catchNo))
+                {
+                    // Get all other records with same CatchNo
+                    var sameCatchRows = await _context.NRDatas
+                        .Where(x =>
+                            x.ProjectId == projectId &&
+                            x.CatchNo == catchNo &&
+                            x.Id != nRData.Id &&
+                            x.Status)
+                        .ToListAsync();
+
+                    foreach (var row in sameCatchRows)
+                    {
+                        row.Steps = PipelineNavigator.STEP_ENV_BREAKING;
+                        _context.NRDatas.Update(row);
+                    }
+                }
+
+                // Reset all remaining records in project to STEP_AWAITING_EXTRA
                 await _context.NRDatas
-      .Where(x =>
-          x.ProjectId == projectId &&
-          x.Status == true &&
-          x.LotNo == nRData.LotNo &&
-          x.Id != nRData.Id &&
-          (x.Steps == 4 || x.Steps == 5))
-      .ExecuteUpdateAsync(setters =>
-          setters.SetProperty(x => x.Steps, 3));
+                    .Where(x =>
+                        x.ProjectId == projectId &&
+                        x.Id != nRData.Id &&
+                        (string.IsNullOrWhiteSpace(catchNo) || x.CatchNo != catchNo) &&
+                        x.Status &&
+                        x.Steps > PipelineNavigator.STEP_AWAITING_EXTRA)
+                    .ExecuteUpdateAsync(s =>
+                        s.SetProperty(
+                            x => x.Steps,
+                            PipelineNavigator.STEP_AWAITING_EXTRA
+                        ));
 
                 await _loggerService.LogEventAsync($"Single Catch Processed (Batch {batchId})",
                     "NRData", LogHelper.GetTriggeredBy(User), projectId);
@@ -1686,8 +1708,8 @@ namespace Tools.Controllers
                 return Ok(new
                 {
                     hasPendingPipelineChanges = false,
-                    minStep = 5,
-                    maxStep = 5,
+                    minStep = 6,
+                    maxStep = 6,
                     totalActive = 0
                 });
             }
@@ -1703,11 +1725,10 @@ namespace Tools.Controllers
                 maxStep,
                 totalActive = activeSteps.Count,
                 // Helpful flags for the UI to disable/enable specific rerun buttons
-                duplicatePending = activeSteps.Any(s => s < 2),
-                enhancementPending = activeSteps.Any(s => s == 1),
-                extraPending = activeSteps.Any(s => s == 2),
-                envelopePending = activeSteps.Any(s => s == 3),
-                boxPending = activeSteps.Any(s => s == 4)
+                enhancementPending = activeSteps.Any(s => s <= 2),
+                extraPending = activeSteps.Any(s => s <= 3),
+                envelopePending = activeSteps.Any(s => s <= 4),
+                boxPending = activeSteps.Any(s => s <= 5)
             });
         }
 
@@ -3374,12 +3395,12 @@ namespace Tools.Controllers
                     existing.ProjectId = projectId;
                     if (nodalChanged)
                     {
-                        existing.Steps = 2; // Step 2 (Nodal Changed)
+                        existing.Steps = Tools.Models.PipelineNavigator.STEP_ENHANCEMENT;
                         lotsToReset.Add(existing.LotNo);
                     }
                     else if (quantityChanged)
                     {
-                        existing.Steps = 3; // Step 3 (Quantity Changed)
+                        existing.Steps = Tools.Models.PipelineNavigator.STEP_ENV_BREAKING;
                         lotsToReset.Add(existing.LotNo); 
                         if (!lotsWithQuantityReset.ContainsKey(existing.LotNo))
                             lotsWithQuantityReset[existing.LotNo] = new List<int>();
@@ -3387,12 +3408,12 @@ namespace Tools.Controllers
                     }
                     else if (centerChanged)
                     {
-                        existing.Steps = 3; // Step 3 (Center Changed but Nodal Same)
+                        existing.Steps = Tools.Models.PipelineNavigator.STEP_ENV_BREAKING;
                         lotsToReset.Add(existing.LotNo);
                     }
                     else if (dateOrUniqueChanged || labelFieldChanged)
                     {
-                        existing.Steps = Tools.Models.PipelineNavigator.STEP_AWAITING_ENV; // labelling step
+                        existing.Steps = Tools.Models.PipelineNavigator.STEP_AWAITING_ENV;
                         if (sortingFieldChanged || labelFieldChanged)
                         {
                             lotsToReset.Add(existing.LotNo);
@@ -3426,12 +3447,13 @@ namespace Tools.Controllers
                     {
                         if (affectedIds.Contains(r.Id))
                         {
-                            r.Steps = 3;
+                            r.Steps = Tools.Models.PipelineNavigator.STEP_ENV_BREAKING;
                         }
                         else
                         {
                             // Others in lot to step 4
-                            if (r.Steps > 4) r.Steps = 4;
+                            if (r.Steps > Tools.Models.PipelineNavigator.STEP_AWAITING_EXTRA) 
+                                r.Steps = Tools.Models.PipelineNavigator.STEP_AWAITING_EXTRA;
                         }
                     }
                     else if (lotsToReset.Contains(r.LotNo))
@@ -3537,12 +3559,12 @@ namespace Tools.Controllers
 
                         if (nodalChanged)
                         {
-                            existing.Steps = 2;
+                            existing.Steps = Tools.Models.PipelineNavigator.STEP_ENHANCEMENT;
                             lotsToReset.Add(existing.LotNo);
                         }
                         else if (quantityChanged)
                         {
-                            existing.Steps = 3;
+                            existing.Steps = Tools.Models.PipelineNavigator.STEP_ENV_BREAKING;
                             lotsToReset.Add(existing.LotNo);
                             if (!lotsWithQuantityReset.ContainsKey(existing.LotNo))
                                 lotsWithQuantityReset[existing.LotNo] = new List<int>();
@@ -3550,7 +3572,7 @@ namespace Tools.Controllers
                         }
                         else if (centerChanged)
                         {
-                            existing.Steps = 3;
+                            existing.Steps = Tools.Models.PipelineNavigator.STEP_ENV_BREAKING;
                             lotsToReset.Add(existing.LotNo);
                         }
                         else if (dateOrUniqueChanged || labelFieldChanged)
@@ -3577,11 +3599,12 @@ namespace Tools.Controllers
                         {
                             if (affectedIds.Contains(r.Id))
                             {
-                                r.Steps = 3;
+                                r.Steps = Tools.Models.PipelineNavigator.STEP_ENV_BREAKING;
                             }
                             else
                             {
-                                if (r.Steps > 4) r.Steps = 4;
+                                if (r.Steps > Tools.Models.PipelineNavigator.STEP_AWAITING_EXTRA) 
+                                    r.Steps = Tools.Models.PipelineNavigator.STEP_AWAITING_EXTRA;
                             }
                         }
                         else if (lotsToReset.Contains(r.LotNo))
@@ -3952,9 +3975,9 @@ namespace Tools.Controllers
                 if (!dateOrUniqueChanged) foreach (var f in uniqueFields) if (IsDifferent(GetFieldValue(primaryMatch, f), GetFieldValue(nRData, f))) { dateOrUniqueChanged = true; break; }
                 foreach (var f in sortingFields) if (IsDifferent(GetFieldValue(primaryMatch, f), GetFieldValue(nRData, f))) { sortingFieldChanged = true; break; }
 
-                if (centerChanged) { if (IsDifferent(primaryMatch.NodalCode, nRData.NodalCode)) nRData.Steps = 2; else nRData.Steps = 3; result.LotsToReset.Add(nRData.LotNo); }
-                else if (dateOrUniqueChanged) { nRData.Steps = 3; if (sortingFieldChanged) result.LotsToReset.Add(nRData.LotNo); }
-                else nRData.Steps = 3;
+                if (centerChanged) { if (IsDifferent(primaryMatch.NodalCode, nRData.NodalCode)) nRData.Steps = Tools.Models.PipelineNavigator.STEP_ENHANCEMENT; else nRData.Steps = Tools.Models.PipelineNavigator.STEP_ENV_BREAKING; result.LotsToReset.Add(nRData.LotNo); }
+                else if (dateOrUniqueChanged) { nRData.Steps = Tools.Models.PipelineNavigator.STEP_ENV_BREAKING; if (sortingFieldChanged) result.LotsToReset.Add(nRData.LotNo); }
+                else nRData.Steps = Tools.Models.PipelineNavigator.STEP_ENV_BREAKING;
 
                 result.NewRecords.Add(nRData);
                 if (!string.IsNullOrWhiteSpace(nRData.CatchNo)) result.CatchesToReset.Add(nRData.CatchNo.Trim());
@@ -3962,7 +3985,7 @@ namespace Tools.Controllers
             else
             {
                 nRData.UploadList = new List<int> { batchId };
-                nRData.Steps = 0;
+                nRData.Steps = Tools.Models.PipelineNavigator.STEP_UPLOADED;
                 result.NewRecords.Add(nRData);
                 result.LotsToReset.Add(nRData.LotNo);
                 if (!string.IsNullOrWhiteSpace(nRData.CatchNo)) result.CatchesToReset.Add(nRData.CatchNo.Trim());

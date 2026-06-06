@@ -108,7 +108,7 @@ namespace Tools.Controllers
                     // 🔹 Override merged values
                     newRow.Status = true;
                     newRow.NRQuantity = group.Sum(x => x.NRQuantity);
-                    newRow.Steps = 1;
+                    newRow.Steps = Tools.Models.PipelineNavigator.STEP_DUP_PARTIAL;
                     var subjectValues = group.Select(x => x.SubjectName?.Trim())
                         .Where(v => !string.IsNullOrEmpty(v))
                         .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -140,7 +140,7 @@ namespace Tools.Controllers
                 }
                 foreach (var row in data)
                 {
-                    row.Steps = 1;
+                    row.Steps = Tools.Models.PipelineNavigator.STEP_DUP_PARTIAL;
                 }
                 await _context.SaveChangesAsync();
 
@@ -317,6 +317,8 @@ namespace Tools.Controllers
         {
             try
             {
+                Console.WriteLine($"ApplyEnhancement API called for ProjectId: {ProjectId}");
+
                 // Normalize NULL numeric fields to 0 to avoid materialization errors
                 await _context.Database.ExecuteSqlRawAsync(@"
 UPDATE NRDatas
@@ -330,18 +332,22 @@ SET Quantity = IFNULL(Quantity, 0),
     LotNo = IFNULL(LotNo, 0)
 WHERE ProjectId = {0};", ProjectId);
 
+                Console.WriteLine("[ApplyEnhancement] Database raw update completed.");
+
                 var data = await _context.NRDatas
-                    .Where(p => p.ProjectId == ProjectId && p.Status==true && p.Steps==1)
+                    .Where(p => p.ProjectId == ProjectId && p.Status==true && p.Steps==Tools.Models.PipelineNavigator.STEP_DUP_PARTIAL)
                     .ToListAsync();
 
-                if (!data.Any())
-                    return NotFound("Nr data not found for this project.");
+                Console.WriteLine($"[ApplyEnhancement] Data loaded: {data.Count} records found.");
 
                 var projectconfig = await _context.ProjectConfigs
                     .Where(p => p.ProjectId == ProjectId).FirstOrDefaultAsync();
 
+                Console.WriteLine($"[ApplyEnhancement] Project config loaded. IsNull = {projectconfig == null}");
+
                 if (projectconfig == null)
                 {
+                    Console.WriteLine($"[ApplyEnhancement] Project config not exists for ProjectId: {ProjectId}");
                     return NotFound("Project config not exists for this project");
                 }
 
@@ -395,100 +401,110 @@ WHERE ProjectId = {0};", ProjectId);
                 }
 
                 // Consolidated calculation logic: Round Before (Optional) -> Enhance -> Round After (Mandatory if capacity exists)
-                foreach (var d in data)
+                if (data.Any())
                 {
-                    if (d.NRQuantity > 0)
+                    foreach (var d in data)
                     {
-                        double initialQuantity = d.NRQuantity;
-
-                        // Phase 1: Round before enhancement (if enabled)
-                        if (projectconfig.RoundOffBeforeEnhancement && smallestInner > 0)
+                        if (d.NRQuantity > 0)
                         {
-                            initialQuantity = Math.Ceiling(initialQuantity / (double)smallestInner) * smallestInner;
-                        }
+                            double initialQuantity = d.NRQuantity;
 
-                        // Phase 2: Calculate enhancement value based on the initial quantity
-                        double enhancementVal = 0;
-                        if (projectconfig.Enhancement > 0)
-                        {
-                            enhancementVal = (projectconfig.Enhancement * initialQuantity) / 100.0;
-                        }
+                            // Phase 1: Round before enhancement (if enabled)
+                            if (projectconfig.RoundOffBeforeEnhancement && smallestInner > 0)
+                            {
+                                initialQuantity = Math.Ceiling(initialQuantity / (double)smallestInner) * smallestInner;
+                            }
 
-                        // Phase 3: Add enhancement and apply final rounding
-                        double totalTarget = initialQuantity + enhancementVal;
+                            // Phase 2: Calculate enhancement value based on the initial quantity
+                            double enhancementVal = 0;
+                            if (projectconfig.Enhancement > 0)
+                            {
+                                enhancementVal = (projectconfig.Enhancement * initialQuantity) / 100.0;
+                            }
 
-                        if (smallestInner > 0)
-                        {
-                            d.Quantity = (int)Math.Ceiling(totalTarget / (double)smallestInner) * smallestInner;
+                            // Phase 3: Add enhancement and apply final rounding
+                            double totalTarget = initialQuantity + enhancementVal;
+
+                            if (smallestInner > 0)
+                            {
+                                d.Quantity = (int)Math.Ceiling(totalTarget / (double)smallestInner) * smallestInner;
+                            }
+                            else
+                            {
+                                d.Quantity = (int)Math.Round(totalTarget);
+                            }
                         }
-                        else
-                        {
-                            d.Quantity = (int)Math.Round(totalTarget);
-                        }
+                        // Keep steps as 1; step will be updated to 2 in EnvelopeConfiguration once both are done
+                        d.Steps = Tools.Models.PipelineNavigator.GetNextStep(Tools.Models.PipelineNavigator.STEP_DUP_PARTIAL, projectconfig?.Modules);
                     }
-                    // Keep steps as 1; step will be updated to 2 in EnvelopeConfiguration once both are done
-                    d.Steps = 1;
+
+                    await _context.SaveChangesAsync();
                 }
 
-                await _context.SaveChangesAsync();
-                var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
-                if (!Directory.Exists(reportPath))
-                    Directory.CreateDirectory(reportPath);
+                var filePath = string.Empty;
 
-                var filePath = Path.Combine(reportPath, "EnhancementReport.xlsx");
-
-                if (System.IO.File.Exists(filePath))
-                    System.IO.File.Delete(filePath);
-
-                var baseProperties = typeof(NRData).GetProperties(BindingFlags.Public | BindingFlags.Instance)
-                    .Where(p => p.Name != "NRDatas" && p.Name != "ProjectId")
-                    .ToList();
-
-                using (var package = new ExcelPackage())
+                if (data.Any())
                 {
-                    var ws = package.Workbook.Worksheets.Add("Enhancement Report");
+                    var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
+                    if (!Directory.Exists(reportPath))
+                        Directory.CreateDirectory(reportPath);
 
-                    int col = 1;
-                    foreach (var prop in baseProperties)
+                    filePath = Path.Combine(reportPath, "EnhancementReport.xlsx");
+
+                    if (System.IO.File.Exists(filePath))
+                        System.IO.File.Delete(filePath);
+
+                    var baseProperties = typeof(NRData).GetProperties(BindingFlags.Public | BindingFlags.Instance)
+                        .Where(p => p.Name != "NRDatas" && p.Name != "ProjectId")
+                        .ToList();
+
+                    using (var package = new ExcelPackage())
                     {
-                        ws.Cells[1, col].Value = prop.Name;
-                        ws.Cells[1, col].Style.Font.Bold = true;
-                        col++;
-                    }
+                        var ws = package.Workbook.Worksheets.Add("Enhancement Report");
 
-                    int row = 2;
-
-                    foreach (var item in data)
-                    {
-                        col = 1;
-
+                        int col = 1;
                         foreach (var prop in baseProperties)
                         {
-                            ws.Cells[row, col++].Value = prop.GetValue(item)?.ToString();
+                            ws.Cells[1, col].Value = prop.Name;
+                            ws.Cells[1, col].Style.Font.Bold = true;
+                            col++;
                         }
-                        row++;
+
+                        int row = 2;
+
+                        foreach (var item in data)
+                        {
+                            col = 1;
+
+                            foreach (var prop in baseProperties)
+                            {
+                                ws.Cells[row, col++].Value = prop.GetValue(item)?.ToString();
+                            }
+                            row++;
+                        }
+
+                        ws.Cells[ws.Dimension.Address].AutoFitColumns();
+                        ws.View.FreezePanes(2, 1);
+
+                        package.SaveAs(new FileInfo(filePath));
                     }
 
-                    ws.Cells[ws.Dimension.Address].AutoFitColumns();
-                    ws.View.FreezePanes(2, 1);
+                    // Logging
+                    var triggeredBy = LogHelper.GetTriggeredBy(User);
 
-                    package.SaveAs(new FileInfo(filePath));
+                    await _logger.LogEventAsync(
+                        "Enhancement applied with report",
+                        "Enhancement",
+                        triggeredBy,
+                        ProjectId,
+                        string.Empty,
+                        LogHelper.ToJson(new { ProjectId })
+                    );
                 }
-
-                // Logging
-                var triggeredBy = LogHelper.GetTriggeredBy(User);
-
-                await _logger.LogEventAsync(
-                    "Enhancement applied with report",
-                    "Enhancement",
-                    triggeredBy,
-                    ProjectId,
-                    string.Empty,
-                    LogHelper.ToJson(new { ProjectId })
-                );
 
                 try
                 {
+                    Console.WriteLine("Envelope breaking is called");
                     var envelopeController = new EnvelopeBreakagesController(_context, _logger, _apiSettingsOptions, _dispatchService);
                     await envelopeController.EnvelopeConfiguration(ProjectId, bypassDispatch: true);
                 }
@@ -499,12 +515,13 @@ WHERE ProjectId = {0};", ProjectId);
 
                 return Ok(new
                 {
-                    EnhancementApplied = projectconfig.Enhancement,
+                    EnhancementApplied = data.Any() ? projectconfig.Enhancement : 0.0,
                     ReportPath = filePath
                 });
             }
             catch (Exception ex)
             {
+                Console.WriteLine($"[ApplyEnhancement] Exception thrown: {ex}");
                 await _logger.LogErrorAsync("Error applying enhancement", ex.Message, nameof(DuplicateController));
                 return StatusCode(500, "Internal server error");
             }
