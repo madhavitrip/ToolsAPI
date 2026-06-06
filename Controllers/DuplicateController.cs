@@ -171,9 +171,8 @@ namespace Tools.Controllers
                 if (!Directory.Exists(reportPath))
                     Directory.CreateDirectory(reportPath);
 
-                var filePath = Path.Combine(reportPath, "DuplicateTool.xlsx");
-                if (System.IO.File.Exists(filePath))
-                    System.IO.File.Delete(filePath);
+                var fileName = ReportVersionHelper.GetNextVersionFileName(reportPath, "DuplicateTool.xlsx");
+                var filePath = Path.Combine(reportPath, fileName);
 
                 var baseProperties = typeof(NRData).GetProperties(BindingFlags.Public | BindingFlags.Instance)
                     .Where(p => p.Name != "NRDatas" && p.Name != "Id" && p.Name != "ProjectId")
@@ -449,10 +448,8 @@ WHERE ProjectId = {0};", ProjectId);
                     if (!Directory.Exists(reportPath))
                         Directory.CreateDirectory(reportPath);
 
-                    filePath = Path.Combine(reportPath, "EnhancementReport.xlsx");
-
-                    if (System.IO.File.Exists(filePath))
-                        System.IO.File.Delete(filePath);
+                    var fileName = ReportVersionHelper.GetNextVersionFileName(reportPath, "EnhancementReport.xlsx");
+                    filePath = Path.Combine(reportPath, fileName);
 
                     var baseProperties = typeof(NRData).GetProperties(BindingFlags.Public | BindingFlags.Instance)
                         .Where(p => p.Name != "NRDatas" && p.Name != "ProjectId")

@@ -415,9 +415,8 @@ namespace Tools.Controllers
                 var path = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
                 if (!Directory.Exists(path)) Directory.CreateDirectory(path);
 
-                var fileName = uploadId.HasValue ? $"ExtrasCalculation_v{uploadId}.xlsx" : "ExtrasCalculation.xlsx";
+                var fileName = uploadId.HasValue ? $"ExtrasCalculation_v{uploadId}.xlsx" : ReportVersionHelper.GetNextVersionFileName(path, "ExtrasCalculation.xlsx");
                 var filePath = Path.Combine(path, fileName);
-                if (System.IO.File.Exists(filePath)) System.IO.File.Delete(filePath);
 
                 using (var package = new ExcelPackage())
                 {

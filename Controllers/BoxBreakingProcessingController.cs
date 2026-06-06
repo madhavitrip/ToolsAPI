@@ -934,9 +934,8 @@ namespace Tools.Controllers
                 if (!Directory.Exists(reportPath)) Directory.CreateDirectory(reportPath);
 
                 // ✅ One file per lot or version
-                var fileName = uploadId.HasValue ? $"BoxBreaking_v{uploadId}.xlsx" : $"BoxBreaking_{LotNo}.xlsx";
+                var fileName = uploadId.HasValue ? $"BoxBreaking_v{uploadId}.xlsx" : ReportVersionHelper.GetNextVersionFileName(reportPath, $"BoxBreaking_{LotNo}.xlsx");
                 var filePath = Path.Combine(reportPath, fileName);
-                if (System.IO.File.Exists(filePath)) System.IO.File.Delete(filePath);
 
                 using (var package = new ExcelPackage())
                 {

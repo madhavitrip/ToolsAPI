@@ -4092,16 +4092,8 @@ namespace Tools.Controllers
 
         private async Task CleanupStaleReports(int projectId)
         {
-            try
-            {
-                var reportDir = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", projectId.ToString());
-                if (Directory.Exists(reportDir))
-                {
-                    var files = new[] { "DuplicateTool.xlsx", "EnhancementReport.xlsx", "ExtrasCalculation.xlsx", "EnvelopeBreaking.xlsx", "BoxBreaking.xlsx", "EnvelopeSummary.xlsx", "CatchSummary.xlsx", "CatchWiseBookletAndOmrSerialing.xlsx" };
-                    foreach (var file in files) { var fullPath = Path.Combine(reportDir, file); if (System.IO.File.Exists(fullPath)) System.IO.File.Delete(fullPath); }
-                }
-            }
-            catch (Exception ex) { await _loggerService.LogErrorAsync("Report cleanup error", ex.Message, nameof(NRDatasController)); }
+            // Do not delete reports on upload as we now support and maintain report versions.
+            await Task.CompletedTask;
         }
 
         private async Task ResetReportStatus(int projectId)
