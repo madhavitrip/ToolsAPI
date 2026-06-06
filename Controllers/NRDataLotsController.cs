@@ -64,7 +64,8 @@ namespace Tools.Controllers
                     .Select(g => new
                     {
                         lotNo = g.Key,
-                        catchCount = g.Select(x => x.CatchNo).Distinct().Count()
+                        catchCount = g.Select(x => x.CatchNo).Distinct().Count(),
+                        minStep = g.Min(x => x.Steps)
                     })
                     .OrderBy(x => x.lotNo)
                     .ToListAsync();
@@ -102,7 +103,8 @@ namespace Tools.Controllers
                     .Select(g => new
                     {
                         lotNo = g.Key,
-                        catchCount = g.Select(x => x.CatchNo).Distinct().Count()
+                        catchCount = g.Select(x => x.CatchNo).Distinct().Count(),
+                        minStep = g.Min(x => x.Steps)
                     })
                     .OrderBy(x => x.lotNo)
                     .ToListAsync();
@@ -121,6 +123,7 @@ namespace Tools.Controllers
                 {
                     lot.lotNo,
                     lot.catchCount,
+                    lot.minStep,
                     isDispatched = dispatchInfoDict.ContainsKey(lot.lotNo) && dispatchInfoDict[lot.lotNo].IsDispatched,
                     dispatchDate = dispatchInfoDict.ContainsKey(lot.lotNo) ? dispatchInfoDict[lot.lotNo].DispatchDate : null
                 }).ToList();

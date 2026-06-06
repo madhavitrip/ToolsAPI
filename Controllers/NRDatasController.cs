@@ -1055,17 +1055,16 @@ namespace Tools.Controllers
                 }
 
                 // =========================================================
+                // =========================================================
                 // PROPAGATION RULES
                 // =========================================================
 
-                bool isStep4 = shouldResetToStep3;
-                bool isStep5 = shouldResetToStep4;
+                // =========================================================
+                // PROPAGATION & STEP RESET RULES FOR SAME CATCH
+                // =========================================================
+                bool stepResetTriggered = nodalChanged || quantityChanged || shouldResetToStep5 || shouldResetToStep3 || shouldResetToStep4;
 
-                // =====================
-                // STEP 4 → CATCH ONLY
-                // =====================
-                if (isStep4 &&
-                    hasUniqueFieldsEdited &&
+                if ((stepResetTriggered || hasUniqueFieldsEdited) &&
                     !string.IsNullOrWhiteSpace(catchNo))
                 {
                     var rows = await _context.NRDatas
@@ -1078,34 +1077,64 @@ namespace Tools.Controllers
 
                     foreach (var row in rows)
                     {
-                        foreach (var field in changedFields
-                            .Where(f => normalizedUniqueFields.Contains(f)))
+                        bool rowChanged = false;
+
+                        if (hasUniqueFieldsEdited)
                         {
-                            if (properties.TryGetValue(field, out var propInfo))
+                            foreach (var field in changedFields
+                                .Where(f => normalizedUniqueFields.Contains(f)))
                             {
-                                var val = propInfo.GetValue(existingRecord);
-                                propInfo.SetValue(row, val);
+                                if (properties.TryGetValue(field, out var propInfo))
+                                {
+                                    var val = propInfo.GetValue(existingRecord);
+                                    propInfo.SetValue(row, val);
+                                    rowChanged = true;
+                                }
+                            }
+
+                            row.NRDatas =
+                                JsonSerializer.Serialize(existingExtraData);
+                            rowChanged = true;
+                        }
+
+                        if (envelopeFieldAffected)
+                        {
+                            foreach (var field in changedFields
+                                .Where(f => envelopeFieldNames.Contains(f)))
+                            {
+                                // Only propagate the value if the field is unique
+                                if (normalizedUniqueFields.Contains(field) && properties.TryGetValue(field, out var propInfo))
+                                {
+                                    var val = propInfo.GetValue(existingRecord);
+                                    propInfo.SetValue(row, val);
+                                    rowChanged = true;
+                                }
                             }
                         }
 
-                        row.NRDatas =
-                            JsonSerializer.Serialize(existingExtraData);
+                        if (stepResetTriggered)
+                        {
+                            // Reset related catch rows' steps to match the edited record's step
+                            row.Steps = existingRecord.Steps;
+                            rowChanged = true;
+                        }
 
-                        // Reset related rows to Step 3
-                        row.Steps =
-                            Tools.Models.PipelineNavigator.STEP_AWAITING_EXTRA;
-
-                        _context.NRDatas.Update(row);
+                        if (rowChanged)
+                        {
+                            _context.NRDatas.Update(row);
+                        }
                     }
                 }
 
                 // =====================
-                // STEP 5 / LABEL RESET → LOT WIDE
+                // STEP 5 / LABEL RESET / ENVELOPE RESET → LOT WIDE
                 // =====================
-                if (isStep5 || shouldResetToStep5)
+                if (shouldResetToStep4 || shouldResetToStep5)
                 {
                     var lot = existingRecord.LotNo;
-                    var resetTargetStep = shouldResetToStep5 ? Tools.Models.PipelineNavigator.STEP_AWAITING_BOX : Tools.Models.PipelineNavigator.STEP_AWAITING_ENV;
+                    var resetTargetStep = shouldResetToStep5 
+                        ? Tools.Models.PipelineNavigator.STEP_AWAITING_BOX 
+                        : Tools.Models.PipelineNavigator.STEP_AWAITING_ENV;
 
                     await _context.NRDatas
                         .Where(x =>
@@ -1138,6 +1167,24 @@ namespace Tools.Controllers
                             s.SetProperty(
                                 x => x.Steps,
                                 4
+                            ));
+                }
+
+                // =====================
+                // RESET TO STEP 3 → PROJECT WIDE
+                // =====================
+                if (shouldResetToStep3)
+                {
+                    await _context.NRDatas
+                        .Where(x =>
+                            x.ProjectId == existingRecord.ProjectId &&
+                            x.Id != existingRecord.Id &&
+                            x.Status &&
+                            x.Steps > Tools.Models.PipelineNavigator.STEP_AWAITING_EXTRA)
+                        .ExecuteUpdateAsync(s =>
+                            s.SetProperty(
+                                x => x.Steps,
+                                Tools.Models.PipelineNavigator.STEP_AWAITING_EXTRA
                             ));
                 }
 
@@ -1525,14 +1572,14 @@ namespace Tools.Controllers
                 await _context.NRDatas.AddAsync(nRData);
                 await _context.SaveChangesAsync();
                 await _context.NRDatas
-     .Where(x =>
-         x.ProjectId == projectId &&
-         x.Status == true &&
-         x.LotNo == nRData.LotNo &&
-         x.Id != nRData.Id &&
-         x.Steps == 5)
-     .ExecuteUpdateAsync(setters =>
-         setters.SetProperty(x => x.Steps, 4));
+      .Where(x =>
+          x.ProjectId == projectId &&
+          x.Status == true &&
+          x.LotNo == nRData.LotNo &&
+          x.Id != nRData.Id &&
+          (x.Steps == 4 || x.Steps == 5))
+      .ExecuteUpdateAsync(setters =>
+          setters.SetProperty(x => x.Steps, 3));
 
                 await _loggerService.LogEventAsync($"Single Catch Processed (Batch {batchId})",
                     "NRData", LogHelper.GetTriggeredBy(User), projectId);
@@ -1625,6 +1672,7 @@ namespace Tools.Controllers
             return Ok(new { Conflict, NrData });
         }
 
+
         [HttpGet("PipelineRerunStatus")]
         public async Task<ActionResult> GetPipelineRerunStatus(int ProjectId)
         {
@@ -1662,6 +1710,7 @@ namespace Tools.Controllers
                 boxPending = activeSteps.Any(s => s == 4)
             });
         }
+
 
         [HttpGet("DuplicateRerunStatus")]
         public async Task<ActionResult> GetDuplicateRerunStatus(int ProjectId)

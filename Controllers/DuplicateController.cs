@@ -1,6 +1,7 @@
 using ERPToolsAPI.Data;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
 using Microsoft.EntityFrameworkCore;
 using System.Reflection;
 using OfficeOpenXml;
@@ -21,11 +22,15 @@ namespace Tools.Controllers
     {
         private readonly ERPToolsDbContext _context;
         private readonly ILoggerService _logger;
+        private readonly IOptions<ApiSettings> _apiSettingsOptions;
+        private readonly IDispatchService _dispatchService;
 
-        public DuplicateController(ERPToolsDbContext context, ILoggerService loggerService)
+        public DuplicateController(ERPToolsDbContext context, ILoggerService loggerService, IOptions<ApiSettings> apiSettings, IDispatchService dispatchService)
         {
             _context = context;
             _logger = loggerService;
+            _apiSettingsOptions = apiSettings;
+            _dispatchService = dispatchService;
         }
 
         [HttpPost]
@@ -421,7 +426,8 @@ WHERE ProjectId = {0};", ProjectId);
                             d.Quantity = (int)Math.Round(totalTarget);
                         }
                     }
-                    d.Steps = Tools.Models.PipelineNavigator.GetNextStep(Tools.Models.PipelineNavigator.STEP_DUP_PARTIAL, projectconfig?.Modules);
+                    // Keep steps as 1; step will be updated to 2 in EnvelopeConfiguration once both are done
+                    d.Steps = 1;
                 }
 
                 await _context.SaveChangesAsync();
@@ -480,6 +486,16 @@ WHERE ProjectId = {0};", ProjectId);
                     string.Empty,
                     LogHelper.ToJson(new { ProjectId })
                 );
+
+                try
+                {
+                    var envelopeController = new EnvelopeBreakagesController(_context, _logger, _apiSettingsOptions, _dispatchService);
+                    await envelopeController.EnvelopeConfiguration(ProjectId, bypassDispatch: true);
+                }
+                catch (Exception ex)
+                {
+                    await _logger.LogErrorAsync("Error running combined EnvelopeConfiguration", ex.Message, nameof(DuplicateController));
+                }
 
                 return Ok(new
                 {

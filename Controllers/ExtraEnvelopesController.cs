@@ -162,7 +162,7 @@ namespace Tools.Controllers
                 var projectConfig = await _context.ProjectConfigs
                     .FirstOrDefaultAsync(p => p.ProjectId == ProjectId);
 
-                var eligibleSteps = Tools.Models.PipelineNavigator.GetEligiblePickupSteps(Tools.Models.PipelineNavigator.STEP_ENHANCEMENT);
+                var eligibleSteps = Tools.Models.PipelineNavigator.GetEligiblePickupSteps(Tools.Models.PipelineNavigator.STEP_AWAITING_EXTRA);
 
                 List<NRData> nrDataList;
                 if (uploadId.HasValue)
@@ -362,7 +362,7 @@ namespace Tools.Controllers
                     await _context.ExtrasEnvelope.AddRangeAsync(envelopesToAdd);
 
                     foreach (var nr in nrDataList)
-                        nr.Steps = Tools.Models.PipelineNavigator.GetNextStep(Tools.Models.PipelineNavigator.STEP_AWAITING_EXTRA, projectConfig?.Modules);
+                        nr.Steps = Tools.Models.PipelineNavigator.GetNextStep(Tools.Models.PipelineNavigator.STEP_ENHANCEMENT, projectConfig?.Modules);
 
                     await _context.SaveChangesAsync();
 

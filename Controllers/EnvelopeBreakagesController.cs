@@ -300,20 +300,25 @@ namespace Tools.Controllers
         {
             try
             {
-                var envelopesJson = await _context.ProjectConfigs
-                    .Where(s => s.ProjectId == ProjectId)
-                    .Select(s => s.Envelope)
-                    .FirstOrDefaultAsync();
+                var projectConfig = await _context.ProjectConfigs
+                    .FirstOrDefaultAsync(s => s.ProjectId == ProjectId);
 
-                if (envelopesJson == null)
-                    return NotFound("No envelope config found.");
+                if (projectConfig == null)
+                    return NotFound("Project config not found for this project.");
+
+                var envelopesJson = projectConfig.Envelope;
+
+                var eligibleSteps = new[] { 1, 2 };
 
                 var nrDataList = await _context.NRDatas
-                    .Where(s => s.ProjectId == ProjectId && s.Status == true)
+                    .Where(s => s.ProjectId == ProjectId && s.Status == true && eligibleSteps.Contains(s.Steps))
                     .ToListAsync();
 
                 if (!nrDataList.Any())
-                    return NotFound("No NRData found.");
+                {
+                    return Ok("Envelope breakdown report has been successfully created.");
+                }
+
                 var envelopeDict = JsonSerializer.Deserialize<Dictionary<string, string>>(envelopesJson);
                 if (envelopeDict == null)
                     return BadRequest("Invalid envelope JSON format.");
@@ -333,7 +338,11 @@ namespace Tools.Controllers
                     .OrderByDescending(x => x)
                     .ToList();
 
-                var env = await _context.EnvelopeBreakages.Where(p => p.ProjectId == ProjectId).ToListAsync();
+                var nrDataIds = nrDataList.Select(r => r.Id).ToList();
+                var env = await _context.EnvelopeBreakages
+                    .Where(p => p.ProjectId == ProjectId && nrDataIds.Contains(p.NrDataId))
+                    .ToListAsync();
+
                 if (env.Any()) // Check if any records were found
                 {
                     _context.EnvelopeBreakages.RemoveRange(env);
@@ -428,49 +437,17 @@ namespace Tools.Controllers
                 if (breakagesToAdd.Any())
                 {
                     _context.EnvelopeBreakages.AddRange(breakagesToAdd);
+
+                    // Update steps to 2 since both enhancement and envelope configuration are now completed
+                    foreach (var nr in nrDataList)
+                    {
+                        nr.Steps = Tools.Models.PipelineNavigator.GetNextStep(Tools.Models.PipelineNavigator.STEP_DUP_PARTIAL, projectConfig?.Modules);
+                    }
+
                     await _context.SaveChangesAsync();
-                    await _loggerService.LogEventAsync($"Created Envelope Breaking of ProjectID {ProjectId}", "EnvelopeBreakages", LogHelper.GetTriggeredBy(User), ProjectId);
+                    await _loggerService.LogEventAsync($"Created Envelope Breaking of ProjectID {ProjectId} and updated steps to 2", "EnvelopeBreakages", LogHelper.GetTriggeredBy(User), ProjectId);
                 }
 
-
-                            // ✅ Call ProcessEnvelopeBreaking directly instead of via HTTP
-                            try
-                            {
-                                // Create an Options wrapper for ApiSettings
-                                var apiSettingsOptions = Options.Create(_apiSettings);
-                                var envelopeBreakageProcessingController = new EnvelopeBreakageProcessingController(_context, _loggerService, apiSettingsOptions, _dispatchService);
-                                var processResult = await envelopeBreakageProcessingController.ProcessEnvelopeBreaking(ProjectId, LogHelper.GetTriggeredBy(User), bypassDispatch: bypassDispatch);
-                                
-                                if (processResult is OkObjectResult okResult)
-                                {
-                                    Console.WriteLine($"ProcessEnvelopeBreaking Success: {okResult.Value}");
-                                }
-                                else if (processResult is BadRequestObjectResult badResult)
-                                {
-                                    Console.WriteLine($"ProcessEnvelopeBreaking Failed: {badResult.Value}");
-                                    return BadRequest(new { error = "Envelope breaking processing failed", details = badResult.Value });
-                                }
-                                else if (processResult is ObjectResult objResult && objResult.StatusCode >= 400)
-                                {
-                                    Console.WriteLine($"ProcessEnvelopeBreaking Error: {objResult.Value}");
-                                    return StatusCode(objResult.StatusCode ?? 500, new { error = "Envelope breaking processing failed", details = objResult.Value });
-                                }
-                                else
-                                {
-                                    Console.WriteLine($"ProcessEnvelopeBreaking returned: {processResult.GetType().Name}");
-                                }
-                            }
-                            catch (Exception ex)
-                            {
-                                var innerError = ex.InnerException?.Message ?? ex.Message;
-                                Console.WriteLine($"ProcessEnvelopeBreaking Exception: {ex.Message} | Inner: {innerError}");
-                                return StatusCode(500, new { 
-                                    error = "Failed to process envelope breaking", 
-                                    details = ex.Message,
-                                    innerException = innerError,
-                                    stackTrace = ex.StackTrace
-                                });
-                            }
                 return Ok("Envelope breakdown report has been successfully created.");
             }
             catch (Exception ex)

@@ -106,44 +106,10 @@ namespace Tools.Controllers
                     .ThenBy(p => p.CenterSort)
                     .ToListAsync();
 
-                // ✅ Targeted cleanup: if processing a specific catch, clear its old results first
-                if (!string.IsNullOrEmpty(catchNo))
-                {
-                    var existingCatchResults = await _context.EnvelopeBreakingResults
-                        .Where(r => r.ProjectId == ProjectId && r.CatchNo == catchNo)
-                        .ToListAsync();
-                    if (existingCatchResults.Any())
-                    {
-                        _context.EnvelopeBreakingResults.RemoveRange(existingCatchResults);
-                        await _context.SaveChangesAsync();
-                        await _loggerService.LogEventAsync($"Cleared {existingCatchResults.Count} old results for catch {catchNo}", "EnvelopeBreakageProcessing", triggeredBy, ProjectId);
-                    }
-                }
+                var catchesToProcess = nrData.Select(n => n.CatchNo).Where(c => !string.IsNullOrEmpty(c)).Distinct().ToList();
+                var nrDataIdsToProcess = nrData.Select(n => n.Id).ToList();
 
-                // ✅ Clean up results for deactivated catches (Status = false)
-                var deactivatedCatches = await _context.NRDatas
-                    .Where(p => p.ProjectId == ProjectId && p.Status == false)
-                    .Select(p => p.CatchNo)
-                    .Distinct()
-                    .ToListAsync();
 
-                if (deactivatedCatches.Any())
-                {
-                    var resultsToDelete = await _context.EnvelopeBreakingResults
-                        .Where(r => r.ProjectId == ProjectId && deactivatedCatches.Contains(r.CatchNo))
-                        .ToListAsync();
-
-                    if (resultsToDelete.Any())
-                    {
-                        _context.EnvelopeBreakingResults.RemoveRange(resultsToDelete);
-                        await _context.SaveChangesAsync();
-                        await _loggerService.LogEventAsync(
-                            $"Cleaned up {resultsToDelete.Count} envelope breaking results for {deactivatedCatches.Count} deactivated catches",
-                            "EnvelopeBreakageProcessing",
-                            triggeredBy,
-                            ProjectId);
-                    }
-                }
 
                 var envBreaking = await _context.EnvelopeBreakages
                     .Where(p => p.ProjectId == ProjectId)
@@ -888,7 +854,7 @@ namespace Tools.Controllers
 
                 _context.EnvelopeBreakingResults.AddRange(envelopeResults);
                 foreach (var nr in nrData)
-                    nr.Steps = Tools.Models.PipelineNavigator.GetNextStep(Tools.Models.PipelineNavigator.STEP_AWAITING_ENV, projectconfig?.Modules);
+                    nr.Steps = Tools.Models.PipelineNavigator.GetNextStep(Tools.Models.PipelineNavigator.STEP_AWAITING_EXTRA, projectconfig?.Modules);
 
                 await _context.SaveChangesAsync();
 

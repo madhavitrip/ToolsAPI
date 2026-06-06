@@ -778,7 +778,7 @@ namespace Tools.Controllers
                 _context.BoxBreakingResults.AddRange(boxResults);
                 foreach (var nr in nrData)
                                 {
-                    nr.Steps = Tools.Models.PipelineNavigator.GetNextStep(Tools.Models.PipelineNavigator.STEP_AWAITING_BOX, projectconfig?.Modules);
+                    nr.Steps = Tools.Models.PipelineNavigator.GetNextStep(Tools.Models.PipelineNavigator.STEP_AWAITING_ENV, projectconfig?.Modules);
                 }
 
                 await _loggerService.LogEventAsync($"Preparing to save {boxResults.Count} box results in {sw.ElapsedMilliseconds}ms", "BoxBreakingProcessing", 0, ProjectId);

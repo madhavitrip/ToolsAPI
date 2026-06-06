@@ -105,16 +105,18 @@ namespace Tools.Models
         /// </summary>
         public static int[] GetEligiblePickupSteps(int targetStep)
         {
-            // If a module expects step 2, it should pick up 2.
-            // Under some workflows, older data might have skipped straight to 4. We want to be inclusive.
             switch (targetStep)
             {
-                case STEP_AWAITING_EXTRA:
-                    return new[] { STEP_AWAITING_EXTRA, STEP_AWAITING_ENV, STEP_AWAITING_BOX };
-                case STEP_AWAITING_ENV:
-                    return new[] { STEP_AWAITING_ENV, STEP_AWAITING_BOX, STEP_AWAITING_EXTRA };
-                case STEP_AWAITING_BOX:
-                    return new[] { STEP_AWAITING_BOX };
+                case STEP_DUP_PARTIAL: // 1
+                    return new[] { 0 };
+                case STEP_ENHANCEMENT: // 2
+                    return new[] { 1 };
+                case STEP_AWAITING_EXTRA: // 3
+                    return new[] { 2 };
+                case STEP_AWAITING_ENV: // 4
+                    return new[] { 3 };
+                case STEP_AWAITING_BOX: // 5
+                    return new[] { 4 };
                 default:
                     return new[] { targetStep };
             }
