@@ -1489,14 +1489,15 @@ namespace Tools.Controllers
                 // Reset steps & cleanup
                 if (catchesToResetToDuplicate.Any())
                 {
+                    var newlyAddedIds = nrDatasToAddNormal.Select(r => r.Id).ToList();
+
                     await _context.NRDatas
                         .Where(x =>
                             x.ProjectId == projectId &&
                             x.Status == true &&
                             x.CatchNo != null &&
                             catchesToResetToDuplicate.Contains(x.CatchNo)
-                            &&
-    !(x.UploadList != null && x.UploadList.Contains(nextBatchId)))
+                            && !newlyAddedIds.Contains(x.Id))
                         .ExecuteUpdateAsync(setters => setters
                             .SetProperty(
                                 x => x.Steps,

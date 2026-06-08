@@ -67,9 +67,31 @@ namespace Tools.Controllers
                 .GroupBy(x => x.CatchNo)
                 .Select(g => new
                 {
-                    CatchNo = g.Key
+                    CatchNo = g.Key,
+                    Count = g.Count()
                 })
                 .OrderBy(x => x.CatchNo)
+                .ToListAsync();
+
+            return Ok(catchItems);
+        }
+
+        [HttpGet("GetAssignedEnvLotCatches/{projectId}")]
+        public async Task<IActionResult> GetAssignedEnvLotCatches(int projectId)
+        {
+            if (projectId <= 0)
+                return BadRequest("ProjectId is required.");
+
+            var catchItems = await _context.NRDatas
+                .Where(x => x.ProjectId == projectId && x.Status == true && x.EnvLotNo > 0 && !string.IsNullOrWhiteSpace(x.CatchNo))
+                .GroupBy(x => new { x.EnvLotNo, x.CatchNo })
+                .Select(g => new
+                {
+                    EnvLotNo = g.Key.EnvLotNo,
+                    CatchNo = g.Key.CatchNo
+                })
+                .OrderBy(x => x.EnvLotNo)
+                .ThenBy(x => x.CatchNo)
                 .ToListAsync();
 
             return Ok(catchItems);
