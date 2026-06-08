@@ -954,6 +954,23 @@ namespace Tools.Controllers
                     existingRecord.NRDatas = JsonSerializer.Serialize(existingExtraData);
 
                 // =====================
+                // LOAD CONFIG
+                // =====================
+                var config = await _context.ProjectConfigs
+                    .FirstOrDefaultAsync(c => c.ProjectId == existingRecord.ProjectId);
+
+                // =====================
+                // DUPLICATE CHECK
+                // =====================
+                // Re-run duplicate check on the pending updated record
+                bool isDuplicate = await DuplicateExists(existingRecord, existingRecord.ProjectId, config, id);
+                if (isDuplicate)
+                {
+                    await transaction.RollbackAsync();
+                    return BadRequest("Record already exists with same duplicate criteria.");
+                }
+
+                // =====================
                 // UNIQUE CHECK
                 // =====================
                 bool hasUniqueFieldsEdited = changedFields
@@ -979,12 +996,6 @@ namespace Tools.Controllers
                 bool lotChanged = oldLot != existingRecord.LotNo;
                 bool pageChanged = oldPageNo != existingRecord.Pages;
                 bool quantityChanged = oldQuantity != existingRecord.Quantity || oldNRQuantity != existingRecord.NRQuantity;
-
-                // =====================
-                // LOAD CONFIG
-                // =====================
-                var config = await _context.ProjectConfigs
-                    .FirstOrDefaultAsync(c => c.ProjectId == existingRecord.ProjectId);
 
                 var allFields = await _context.Fields.ToListAsync();
 
@@ -3971,9 +3982,10 @@ namespace Tools.Controllers
         }
 
         private async Task<bool> DuplicateExists(
-    NRData newData,
-    int projectId,
-    ProjectConfig projectConfig)
+            NRData newData,
+            int projectId,
+            ProjectConfig projectConfig,
+            int? skipId = null)
         {
             var duplicateFieldIds = projectConfig?.DuplicateCriteria ?? new List<int>();
 
@@ -3989,9 +4001,15 @@ namespace Tools.Controllers
                 .Select(f => f.Name.Trim())
                 .ToList();
 
-            var activeRecords = await _context.NRDatas
-                .Where(x => x.ProjectId == projectId && x.Status == true)
-                .ToListAsync();
+            var query = _context.NRDatas
+                .Where(x => x.ProjectId == projectId && x.Status == true);
+
+            if (skipId.HasValue)
+            {
+                query = query.Where(x => x.Id != skipId.Value);
+            }
+
+            var activeRecords = await query.ToListAsync();
 
             foreach (var db in activeRecords)
             {
