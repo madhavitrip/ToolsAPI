@@ -1137,10 +1137,8 @@ namespace Tools.Controllers
                 var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
                 Directory.CreateDirectory(reportPath);
 
-                var fileName = uploadId.HasValue ? $"EnvelopeBreaking_v{uploadId}.xlsx" : "EnvelopeBreaking.xlsx";
+                var fileName = uploadId.HasValue ? $"EnvelopeBreaking_v{uploadId}.xlsx" : ReportVersionHelper.GetNextVersionFileName(reportPath, "EnvelopeBreaking.xlsx");
                 var filePath = Path.Combine(reportPath, fileName);
-                if (System.IO.File.Exists(filePath))
-                    System.IO.File.Delete(filePath);
 
                 using (var package = new ExcelPackage())
                 {
@@ -1248,12 +1246,8 @@ namespace Tools.Controllers
                 var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
                 Directory.CreateDirectory(reportPath);
 
-                var fileName = uploadId.HasValue ? $"CatchWiseBookletAndOmrSerialing_v{uploadId}.xlsx" : "CatchWiseBookletAndOmrSerialing.xlsx";
+                var fileName = uploadId.HasValue ? $"CatchWiseBookletAndOmrSerialing_v{uploadId}.xlsx" : ReportVersionHelper.GetNextVersionFileName(reportPath, "CatchWiseBookletAndOmrSerialing.xlsx");
                 var filePath = Path.Combine(reportPath, fileName);
-                if (System.IO.File.Exists(filePath))
-                {
-                    System.IO.File.Delete(filePath);
-                }
                 using (var package = new ExcelPackage())
                 {
                     var worksheet = package.Workbook.Worksheets.Add("Serial Report");

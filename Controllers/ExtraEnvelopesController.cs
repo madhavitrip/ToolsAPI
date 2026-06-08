@@ -211,9 +211,15 @@ namespace Tools.Controllers
                     if (!extraConfig.Any())
                         return BadRequest("No ExtraConfiguration found");
 
-                    // Remove old
+                    // Remove old records only for the catches currently being processed
+                    var catchNos = nrDataList
+                        .Where(d => !string.IsNullOrWhiteSpace(d.CatchNo))
+                        .Select(d => d.CatchNo)
+                        .Distinct()
+                        .ToList();
+
                     var existing = await _context.ExtrasEnvelope
-                        .Where(e => e.ProjectId == ProjectId)
+                        .Where(e => e.ProjectId == ProjectId && e.CatchNo != null && catchNos.Contains(e.CatchNo))
                         .ToListAsync();
 
                     if (existing.Any())
@@ -362,7 +368,7 @@ namespace Tools.Controllers
                     await _context.ExtrasEnvelope.AddRangeAsync(envelopesToAdd);
 
                     foreach (var nr in nrDataList)
-                        nr.Steps = Tools.Models.PipelineNavigator.GetNextStep(Tools.Models.PipelineNavigator.STEP_ENHANCEMENT, projectConfig?.Modules);
+                        nr.Steps = Tools.Models.PipelineNavigator.GetNextStep(Tools.Models.PipelineNavigator.STEP_ENV_BREAKING, projectConfig?.Modules);
 
                     await _context.SaveChangesAsync();
 
@@ -409,9 +415,8 @@ namespace Tools.Controllers
                 var path = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
                 if (!Directory.Exists(path)) Directory.CreateDirectory(path);
 
-                var fileName = uploadId.HasValue ? $"ExtrasCalculation_v{uploadId}.xlsx" : "ExtrasCalculation.xlsx";
+                var fileName = uploadId.HasValue ? $"ExtrasCalculation_v{uploadId}.xlsx" : ReportVersionHelper.GetNextVersionFileName(path, "ExtrasCalculation.xlsx");
                 var filePath = Path.Combine(path, fileName);
-                if (System.IO.File.Exists(filePath)) System.IO.File.Delete(filePath);
 
                 using (var package = new ExcelPackage())
                 {

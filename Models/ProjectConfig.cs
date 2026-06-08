@@ -37,10 +37,11 @@ namespace Tools.Models
         public const int STEP_UPLOADED = 0;
         public const int STEP_DUP_PARTIAL = 1;
         public const int STEP_ENHANCEMENT = 2;
-        public const int STEP_AWAITING_EXTRA = 3; // Extra Configuration
-        public const int STEP_AWAITING_ENV = 4;   // Envelope Setup
-        public const int STEP_AWAITING_BOX = 5;   // Box Breaking
-        public const int STEP_DONE = 6;
+        public const int STEP_ENV_BREAKING = 3;       // Envelope Making/Breaking
+        public const int STEP_AWAITING_EXTRA = 4;     // Extra Configuration
+        public const int STEP_AWAITING_ENV = 5;       // Envelope Setup / ProcessEnvelopeBreaking
+        public const int STEP_AWAITING_BOX = 6;       // Box Breaking
+        public const int STEP_DONE = 7;
 
       
         /// <summary>
@@ -52,9 +53,10 @@ namespace Tools.Models
 
             if (active.Contains(1)) return STEP_DUP_PARTIAL;
             if (active.Contains(2)) return STEP_ENHANCEMENT;
-            if (active.Contains(3)) return STEP_AWAITING_EXTRA;
-            if (active.Contains(4)) return STEP_AWAITING_ENV;
-            if (active.Contains(5)) return STEP_AWAITING_BOX;
+            if (active.Contains(3)) return STEP_ENV_BREAKING;
+            if (active.Contains(4)) return STEP_AWAITING_EXTRA;
+            if (active.Contains(5)) return STEP_AWAITING_ENV;
+            if (active.Contains(6)) return STEP_AWAITING_BOX;
 
             return STEP_DONE;
         }
@@ -70,30 +72,39 @@ namespace Tools.Models
             if (completedStep == STEP_DUP_PARTIAL)
             {
                 if (active.Contains(2)) return STEP_ENHANCEMENT ;
-                if (active.Contains(3)) return STEP_AWAITING_EXTRA;
-                if (active.Contains(4)) return STEP_AWAITING_ENV;
-                if (active.Contains(5)) return STEP_AWAITING_BOX;
+                if (active.Contains(3)) return STEP_ENV_BREAKING;
+                if (active.Contains(4)) return STEP_AWAITING_EXTRA;
+                if (active.Contains(5)) return STEP_AWAITING_ENV;
+                if (active.Contains(6)) return STEP_AWAITING_BOX;
                 return STEP_DONE;
             }
             if (completedStep == STEP_ENHANCEMENT)
             {
-                if (active.Contains(3)) return STEP_AWAITING_EXTRA;
-                if (active.Contains(4)) return STEP_AWAITING_ENV;
-                if (active.Contains(5)) return STEP_AWAITING_BOX;
+                if (active.Contains(3)) return STEP_ENV_BREAKING;
+                if (active.Contains(4)) return STEP_AWAITING_EXTRA;
+                if (active.Contains(5)) return STEP_AWAITING_ENV;
+                if (active.Contains(6)) return STEP_AWAITING_BOX;
+                return STEP_DONE;
+            }
+            if (completedStep == STEP_ENV_BREAKING)
+            {
+                if (active.Contains(4)) return STEP_AWAITING_EXTRA;
+                if (active.Contains(5)) return STEP_AWAITING_ENV;
+                if (active.Contains(6)) return STEP_AWAITING_BOX;
                 return STEP_DONE;
             }
             // Extra Configuration finished
             if (completedStep == STEP_AWAITING_EXTRA)
             {
-                if (active.Contains(4)) return STEP_AWAITING_ENV;
-                if (active.Contains(5)) return STEP_AWAITING_BOX;
+                if (active.Contains(5)) return STEP_AWAITING_ENV;
+                if (active.Contains(6)) return STEP_AWAITING_BOX;
                 return STEP_DONE;
             }
 
             // Envelope Setup finished
             if (completedStep == STEP_AWAITING_ENV)
             {
-                if (active.Contains(5)) return STEP_AWAITING_BOX;
+                if (active.Contains(6)) return STEP_AWAITING_BOX;
                 return STEP_DONE;
             }
 
@@ -111,12 +122,14 @@ namespace Tools.Models
                     return new[] { 0 };
                 case STEP_ENHANCEMENT: // 2
                     return new[] { 1 };
-                case STEP_AWAITING_EXTRA: // 3
+                case STEP_ENV_BREAKING: // 3
                     return new[] { 2 };
-                case STEP_AWAITING_ENV: // 4
+                case STEP_AWAITING_EXTRA: // 4
                     return new[] { 3 };
-                case STEP_AWAITING_BOX: // 5
+                case STEP_AWAITING_ENV: // 5
                     return new[] { 4 };
+                case STEP_AWAITING_BOX: // 6
+                    return new[] { 5 };
                 default:
                     return new[] { targetStep };
             }

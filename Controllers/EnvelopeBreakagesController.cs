@@ -85,7 +85,7 @@ namespace Tools.Controllers
             var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
             Directory.CreateDirectory(reportPath);
 
-            var filename = uploadId.HasValue ? $"EnvelopeBreaking_v{uploadId}.xlsx" : $"EnvelopeBreaking.xlsx";
+            var filename = uploadId.HasValue ? $"EnvelopeBreaking_v{uploadId}.xlsx" : ReportVersionHelper.GetNextVersionFileName(reportPath, "EnvelopeBreaking.xlsx");
             var filePath = Path.Combine(reportPath, filename);
 
             // ?? Skip generation if file already exists
@@ -308,10 +308,9 @@ namespace Tools.Controllers
 
                 var envelopesJson = projectConfig.Envelope;
 
-                var eligibleSteps = new[] { 1, 2 };
 
                 var nrDataList = await _context.NRDatas
-                    .Where(s => s.ProjectId == ProjectId && s.Status == true && eligibleSteps.Contains(s.Steps))
+                    .Where(s => s.ProjectId == ProjectId && s.Status == true && s.Steps == Tools.Models.PipelineNavigator.STEP_ENHANCEMENT)
                     .ToListAsync();
 
                 if (!nrDataList.Any())
@@ -438,14 +437,14 @@ namespace Tools.Controllers
                 {
                     _context.EnvelopeBreakages.AddRange(breakagesToAdd);
 
-                    // Update steps to 2 since both enhancement and envelope configuration are now completed
+                    // Update steps since envelope configuration is completed
                     foreach (var nr in nrDataList)
                     {
-                        nr.Steps = Tools.Models.PipelineNavigator.GetNextStep(Tools.Models.PipelineNavigator.STEP_DUP_PARTIAL, projectConfig?.Modules);
+                        nr.Steps = Tools.Models.PipelineNavigator.GetNextStep(Tools.Models.PipelineNavigator.STEP_ENHANCEMENT, projectConfig?.Modules);
                     }
 
                     await _context.SaveChangesAsync();
-                    await _loggerService.LogEventAsync($"Created Envelope Breaking of ProjectID {ProjectId} and updated steps to 2", "EnvelopeBreakages", LogHelper.GetTriggeredBy(User), ProjectId);
+                    await _loggerService.LogEventAsync($"Created Envelope Breaking of ProjectID {ProjectId} and updated steps", "EnvelopeBreakages", LogHelper.GetTriggeredBy(User), ProjectId);
                 }
 
                 return Ok("Envelope breakdown report has been successfully created.");
@@ -462,7 +461,6 @@ namespace Tools.Controllers
         {
             var rootFolder = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", projectId.ToString());
 
-            // If uploadId is provided and fileName doesn't already have a version, inject it
             string finalFileName = fileName;
             if (uploadId.HasValue)
             {
@@ -473,10 +471,134 @@ namespace Tools.Controllers
                     finalFileName = $"{nameWithoutExt}_v{uploadId}{extension}";
                 }
             }
+            else
+            {
+                // Look for the latest version if no uploadId is provided
+                string extension = Path.GetExtension(fileName);
+                string nameWithoutExt = Path.GetFileNameWithoutExtension(fileName);
+                if (Directory.Exists(rootFolder))
+                {
+                    var pattern = new System.Text.RegularExpressions.Regex(@"^" + System.Text.RegularExpressions.Regex.Escape(nameWithoutExt) + @"_v(\d+)" + System.Text.RegularExpressions.Regex.Escape(extension) + "$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                    int maxVersion = 0;
+                    foreach (var file in Directory.GetFiles(rootFolder))
+                    {
+                        var match = pattern.Match(Path.GetFileName(file));
+                        if (match.Success && int.TryParse(match.Groups[1].Value, out int v) && v > maxVersion)
+                        {
+                            maxVersion = v;
+                        }
+                    }
+                    if (maxVersion > 0)
+                    {
+                        finalFileName = $"{nameWithoutExt}_v{maxVersion}{extension}";
+                    }
+                }
+            }
 
             var filePath = Path.Combine(rootFolder, finalFileName);
             bool fileExists = System.IO.File.Exists(filePath);
             return Ok(new { exists = fileExists, fileName = finalFileName });
+        }
+
+        [HttpGet("Reports/AllVersions")]
+        public IActionResult GetAllReportVersions(int projectId)
+        {
+            var rootFolder = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", projectId.ToString());
+            var results = new Dictionary<string, List<object>>();
+
+            var baseNames = new Dictionary<string, string>
+            {
+                { "duplicate", "DuplicateTool.xlsx" },
+                { "extra", "ExtrasCalculation.xlsx" },
+                { "enhancement", "EnhancementReport.xlsx" },
+                { "envelopebreaking", "EnvelopeBreaking.xlsx" },
+                { "box", "BoxBreaking" }, // Handle box breaking specially
+                { "envelopeSummary", "EnvelopeSummary.xlsx" },
+                { "catchSummary", "CatchSummary.xlsx" },
+                { "catchOmrSerialing", "CatchWiseBookletAndOmrSerialing.xlsx" }
+            };
+
+            if (!Directory.Exists(rootFolder))
+            {
+                return Ok(results);
+            }
+
+            foreach (var kvp in baseNames)
+            {
+                var list = new List<object>();
+                var key = kvp.Key;
+                var baseFile = kvp.Value;
+
+                if (key == "box")
+                {
+                    var pattern = new System.Text.RegularExpressions.Regex(@"^BoxBreaking_(?:(?:v(\d+))|(?:(\d+)(?:_v(\d+))?))\.xlsx$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                    foreach (var file in Directory.GetFiles(rootFolder))
+                    {
+                        var name = Path.GetFileName(file);
+                        var match = pattern.Match(name);
+                        if (match.Success)
+                        {
+                            var fileInfo = new FileInfo(file);
+                            int? version = null;
+                            string lotNo = null;
+
+                            if (match.Groups[1].Success)
+                            {
+                                version = int.Parse(match.Groups[1].Value);
+                            }
+                            else if (match.Groups[2].Success)
+                            {
+                                lotNo = match.Groups[2].Value;
+                                if (match.Groups[3].Success)
+                                {
+                                    version = int.Parse(match.Groups[3].Value);
+                                }
+                            }
+
+                            list.Add(new
+                            {
+                                fileName = name,
+                                version = version,
+                                lotNo = lotNo,
+                                generatedAt = fileInfo.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss")
+                            });
+                        }
+                    }
+                }
+                else
+                {
+                    string extension = Path.GetExtension(baseFile);
+                    string nameWithoutExt = Path.GetFileNameWithoutExtension(baseFile);
+
+                    var pattern = new System.Text.RegularExpressions.Regex(@"^" + System.Text.RegularExpressions.Regex.Escape(nameWithoutExt) + @"(?:_v(\d+))?" + System.Text.RegularExpressions.Regex.Escape(extension) + "$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+                    foreach (var file in Directory.GetFiles(rootFolder))
+                    {
+                        var name = Path.GetFileName(file);
+                        var match = pattern.Match(name);
+                        if (match.Success)
+                        {
+                            var fileInfo = new FileInfo(file);
+                            int version = 0;
+                            if (match.Groups[1].Success)
+                            {
+                                version = int.Parse(match.Groups[1].Value);
+                            }
+
+                            list.Add(new
+                            {
+                                fileName = name,
+                                version = version,
+                                generatedAt = fileInfo.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss")
+                            });
+                        }
+                    }
+                }
+
+                results[key] = list;
+            }
+
+            return Ok(results);
         }
 
         [HttpGet("EnvelopeSummaryReport")]
@@ -749,12 +871,8 @@ namespace Tools.Controllers
                 // Save in application root folder
                 var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
                 Directory.CreateDirectory(reportPath);
-                var fileName = uploadId.HasValue ? $"EnvelopeSummary_v{uploadId}.xlsx" : "EnvelopeSummary.xlsx";
+                var fileName = uploadId.HasValue ? $"EnvelopeSummary_v{uploadId}.xlsx" : ReportVersionHelper.GetNextVersionFileName(reportPath, "EnvelopeSummary.xlsx");
                 var filePath = Path.Combine(reportPath, fileName);
-                if (System.IO.File.Exists(filePath))
-                {
-                    System.IO.File.Delete(filePath);
-                }
 
                 package.SaveAs(new FileInfo(filePath));
 
@@ -1046,11 +1164,8 @@ namespace Tools.Controllers
                 var folderPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
                 Directory.CreateDirectory(folderPath);
 
-                var fileName = uploadId.HasValue ? $"CatchSummary_v{uploadId}.xlsx" : "CatchSummary.xlsx";
+                var fileName = uploadId.HasValue ? $"CatchSummary_v{uploadId}.xlsx" : ReportVersionHelper.GetNextVersionFileName(folderPath, "CatchSummary.xlsx");
                 var filePath = Path.Combine(folderPath, fileName);
-
-                if (System.IO.File.Exists(filePath))
-                    System.IO.File.Delete(filePath);
 
                 package.SaveAs(new FileInfo(filePath));
 
