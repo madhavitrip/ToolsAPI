@@ -49,6 +49,134 @@ namespace Tools.Controllers
 
             return Ok(rows);
         }
+
+        public class EnvLotAssignmentRequest
+        {
+            public int ProjectId { get; set; }
+            public List<string> CatchNos { get; set; } = new();
+        }
+
+        [HttpGet("GetMissingEnvLotCatches/{projectId}")]
+        public async Task<IActionResult> GetMissingEnvLotCatches(int projectId)
+        {
+            if (projectId <= 0)
+                return BadRequest("ProjectId is required.");
+
+            var catchItems = await _context.NRDatas
+                .Where(x => x.ProjectId == projectId && x.Status == true && x.EnvLotNo == 0 && !string.IsNullOrWhiteSpace(x.CatchNo))
+                .GroupBy(x => x.CatchNo)
+                .Select(g => new
+                {
+                    CatchNo = g.Key
+                })
+                .OrderBy(x => x.CatchNo)
+                .ToListAsync();
+
+            return Ok(catchItems);
+        }
+
+        [HttpPost("AssignEnvLotByCatches")]
+        public async Task<IActionResult> AssignEnvLotByCatches([FromBody] EnvLotAssignmentRequest request)
+        {
+            if (!ModelState.IsValid)
+                return BadRequest(ModelState);
+
+            if (request.ProjectId <= 0)
+                return BadRequest("ProjectId is required.");
+
+            if (request.CatchNos == null || request.CatchNos.Count == 0)
+                return BadRequest("No catch numbers provided.");
+
+            var catchNos = request.CatchNos
+                .Where(c => !string.IsNullOrWhiteSpace(c))
+                .Select(c => c.Trim())
+                .Distinct()
+                .ToList();
+
+            if (catchNos.Count == 0)
+                return BadRequest("No valid catch numbers provided.");
+
+            var maxEnvLotNo = await _context.NRDatas
+                .Where(x => x.ProjectId == request.ProjectId && x.Status == true && x.EnvLotNo > 0)
+                .MaxAsync(x => (int?)x.EnvLotNo) ?? 0;
+
+            var nextEnvLotNo = maxEnvLotNo + 1;
+
+            var rows = await _context.NRDatas
+                .Where(x => x.ProjectId == request.ProjectId && x.EnvLotNo == 0 && catchNos.Contains(x.CatchNo))
+                .ToListAsync();
+
+            if (rows.Count == 0)
+                return NotFound("No matching unassigned NRData rows found.");
+
+            foreach (var row in rows)
+            {
+                row.EnvLotNo = nextEnvLotNo;
+            }
+
+            await _context.SaveChangesAsync();
+            _loggerService.LogEventAsync(
+                $"Assigned EnvLotNo {nextEnvLotNo} to {rows.Count} NRData rows (ProjectId {request.ProjectId})",
+                "NRDataLots",
+                LogHelper.GetTriggeredBy(User),
+                request.ProjectId
+            );
+
+            return Ok(new
+            {
+                message = "Envelope lot created and assigned successfully.",
+                assignedEnvLotNo = nextEnvLotNo
+            });
+        }
+
+        [HttpPost("UnassignEnvLotByCatches")]
+        public async Task<IActionResult> UnassignEnvLotByCatches([FromBody] EnvLotAssignmentRequest request)
+        {
+            if (!ModelState.IsValid)
+                return BadRequest(ModelState);
+
+            if (request.ProjectId <= 0)
+                return BadRequest("ProjectId is required.");
+
+            if (request.CatchNos == null || request.CatchNos.Count == 0)
+                return BadRequest("No catch numbers provided.");
+
+            var catchNos = request.CatchNos
+                .Where(c => !string.IsNullOrWhiteSpace(c))
+                .Select(c => c.Trim())
+                .Distinct()
+                .ToList();
+
+            if (catchNos.Count == 0)
+                return BadRequest("No valid catch numbers provided.");
+
+            var rows = await _context.NRDatas
+                .Where(x => x.ProjectId == request.ProjectId && catchNos.Contains(x.CatchNo) && x.EnvLotNo > 0)
+                .ToListAsync();
+
+            if (rows.Count == 0)
+                return NotFound("No matching NRData rows found for unassignment.");
+
+            foreach (var row in rows)
+            {
+                row.EnvLotNo = 0;
+            }
+
+            await _context.SaveChangesAsync();
+            _loggerService.LogEventAsync(
+                $"Unassigned EnvLotNo from {rows.Count} NRData rows (ProjectId {request.ProjectId})",
+                "NRDataLots",
+                LogHelper.GetTriggeredBy(User),
+                request.ProjectId
+            );
+
+            return Ok(new
+            {
+                message = "Envelope lot assignment reverted successfully.",
+                revertedCount = rows.Count
+            });
+        }
+
         [HttpGet("GetByProjectId/{projectId}")]
         public async Task<IActionResult> GetUniqueLotsByProject(int projectId)
         {
