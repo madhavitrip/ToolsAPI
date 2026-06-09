@@ -503,23 +503,8 @@ namespace Tools.Controllers
                     }
                 }
 
-                // =========================================================
-                // STEP RESET LOGIC AFTER MERGE
-                // =========================================================
-
-                // =========================================================
-                // STEP RESET LOGIC AFTER MERGE
-                // =========================================================
-
                 var projectConfig = await _context.ProjectConfigs
                     .FirstOrDefaultAsync(x => x.ProjectId == ProjectId);
-
-                bool hasBookletOrOmrSerial =
-                    (projectConfig?.BookletSerialNumber ?? 0) > 0 ||
-                    (projectConfig?.OmrSerialNumber ?? 0) > 0;
-
-                bool resetOnBookletSerial =
-                    projectConfig?.ResetOmrSerialOnCatchChange ?? false;
 
                 var affectedLotNos = newMergedRows
                     .Where(x => x.LotNo != null)
@@ -533,138 +518,152 @@ namespace Tools.Controllers
                     .Distinct()
                     .ToList();
 
-                // =====================================================
-                // CASE 1
-                // Booklet/OMR exists
-                // AND ResetOnBookletSerial = FALSE
-                //
-                // → ENTIRE LOT goes back to STEP 3
-                // =====================================================
-
-                if (hasBookletOrOmrSerial && !resetOnBookletSerial)
-                {
-                    await _context.NRDatas
-                        .Where(x =>
-                            x.ProjectId == ProjectId &&
-                            x.Status == true &&
-                            x.LotNo != null &&
-                            affectedLotNos.Contains(x.LotNo) &&
-                            x.Steps >
-                            Tools.Models.PipelineNavigator.STEP_AWAITING_EXTRA)
-                        .ExecuteUpdateAsync(setters => setters
-                            .SetProperty(
-                                x => x.Steps,
-                                Tools.Models.PipelineNavigator.STEP_AWAITING_EXTRA
-                            ));
-                }
-
-                // =====================================================
-                // CASE 2
-                // Booklet/OMR exists
-                // AND ResetOnBookletSerial = TRUE
-                //
-                // → merged catches = STEP 3
-                // → remaining rows in lot = STEP 4
-                // =====================================================
-
-                else if (hasBookletOrOmrSerial && resetOnBookletSerial)
-                {
-                    // STEP 3 → merged catches
-
-                    await _context.NRDatas
-                        .Where(x =>
-                            x.ProjectId == ProjectId &&
-                            x.Status == true &&
-                            x.CatchNo != null &&
-                            mergedCatchNos.Contains(x.CatchNo) &&
-                            x.Steps >
-                            Tools.Models.PipelineNavigator.STEP_AWAITING_EXTRA)
-                        .ExecuteUpdateAsync(setters => setters
-                            .SetProperty(
-                                x => x.Steps,
-                                Tools.Models.PipelineNavigator.STEP_AWAITING_EXTRA
-                            ));
-
-                    // STEP 4 → rest of lot
-
-                    await _context.NRDatas
-                        .Where(x =>
-                            x.ProjectId == ProjectId &&
-                            x.Status == true &&
-                            x.LotNo != null &&
-                            affectedLotNos.Contains(x.LotNo) &&
-                            (
-                                x.CatchNo == null ||
-                                !mergedCatchNos.Contains(x.CatchNo)
-                            ) &&
-                            x.Steps >
-                            Tools.Models.PipelineNavigator.STEP_AWAITING_ENV)
-                        .ExecuteUpdateAsync(setters => setters
-                            .SetProperty(
-                                x => x.Steps,
-                                Tools.Models.PipelineNavigator.STEP_AWAITING_ENV
-                            ));
-                }
-
-                // =====================================================
-                // CASE 3
-                // No booklet/OMR serial
-                //
-                // → merged catches = STEP 3
-                // → remaining rows in lot = STEP 4
-                // =====================================================
-
-                else
-                {
-                    // STEP 3 → merged catches
-
-                    await _context.NRDatas
-                        .Where(x =>
-                            x.ProjectId == ProjectId &&
-                            x.Status == true &&
-                            x.CatchNo != null &&
-                            mergedCatchNos.Contains(x.CatchNo) &&
-                            x.Steps >
-                            Tools.Models.PipelineNavigator.STEP_AWAITING_EXTRA)
-                        .ExecuteUpdateAsync(setters => setters
-                            .SetProperty(
-                                x => x.Steps,
-                                Tools.Models.PipelineNavigator.STEP_AWAITING_EXTRA
-                            ));
-
-                    // STEP 4 → rest of lot
-
-                    await _context.NRDatas
-                        .Where(x =>
-                            x.ProjectId == ProjectId &&
-                            x.Status == true &&
-                            x.LotNo != null &&
-                            affectedLotNos.Contains(x.LotNo) &&
-                            (
-                                x.CatchNo == null ||
-                                !mergedCatchNos.Contains(x.CatchNo)
-                            ) &&
-                            x.Steps >
-                            Tools.Models.PipelineNavigator.STEP_AWAITING_ENV)
-                        .ExecuteUpdateAsync(setters => setters
-                            .SetProperty(
-                                x => x.Steps,
-                                Tools.Models.PipelineNavigator.STEP_AWAITING_ENV
-                            ));
-                }
-            }
-
+                // 1. Calculate the new ExtraEnvelopes to add
                 var extraConfigs = await _context.ExtraConfigurations
-                .Where(x => x.ProjectId == ProjectId)
-                .ToListAsync();
+                    .Where(x => x.ProjectId == ProjectId)
+                    .ToListAsync();
 
-            if (extraConfigs.Any())
-            {
+                var extrasToAdd = new List<ExtraEnvelopes>();
+                var extraOverrides = (request.ExtraQuantities ?? new List<ExtraQuantityOverride>())
+                    .Where(x => x.ExtraType > 0)
+                    .GroupBy(x => x.ExtraType)
+                    .ToDictionary(g => g.Key, g => g.Last().Quantity);
+
+                if (extraConfigs.Any())
+                {
+                    foreach (var config in extraConfigs)
+                    {
+                        var (innerCapacity, outerCapacity) = GetEnvelopeCapacities(config.EnvelopeType);
+                        
+                        if (UseNodalCalculation(config))
+                        {
+                            var nrDataRecords = await _context.NRDatas
+                                .Where(n => n.ProjectId == ProjectId 
+                                         && n.CatchNo == mergedCatchNo 
+                                         && n.Status == true)
+                                .ToListAsync();
+
+                            foreach (var nrData in nrDataRecords)
+                            {
+                                var calculatedQuantity = CalculateExtraQuantityWithNodal(
+                                    config, 
+                                    nrData.NRQuantity, 
+                                    nrData.NodalCode
+                                );
+
+                                var innerCount = innerCapacity > 0
+                                    ? (int)Math.Ceiling((double)calculatedQuantity / innerCapacity)
+                                    : 0;
+                                var outerCount = outerCapacity > 0
+                                    ? (int)Math.Ceiling((double)calculatedQuantity / outerCapacity)
+                                    : 0;
+
+                                extrasToAdd.Add(new ExtraEnvelopes
+                                {
+                                    ProjectId = ProjectId,
+                                    CatchNo = mergedCatchNo,
+                                    NodalCode = nrData.NodalCode,
+                                    ExtraId = config.ExtraType,
+                                    Quantity = calculatedQuantity,
+                                    InnerEnvelope = innerCount.ToString(),
+                                    OuterEnvelope = outerCount.ToString(),
+                                    Status = 1
+                                });
+                            }
+                        }
+                        else
+                        {
+                            var calculatedQuantity = perCatchTotals.Any()
+                                ? perCatchTotals
+                                    .Select(qty => CalculateExtraQuantity(config, qty))
+                                    .DefaultIfEmpty(0)
+                                    .Sum()
+                                : CalculateExtraQuantity(config, totalQuantity);
+                                
+                            if (extraOverrides.TryGetValue(config.ExtraType, out var overrideQuantity))
+                            {
+                                var roundedOverride = RoundUpToMinimumCapacity(
+                                    Math.Max(overrideQuantity, 0),
+                                    innerCapacity,
+                                    outerCapacity);
+                                calculatedQuantity = roundedOverride;
+                            }
+                            
+                            var innerCount = innerCapacity > 0
+                                ? (int)Math.Ceiling((double)calculatedQuantity / innerCapacity)
+                                : 0;
+                            var outerCount = outerCapacity > 0
+                                ? (int)Math.Ceiling((double)calculatedQuantity / outerCapacity)
+                                : 0;
+
+                            extrasToAdd.Add(new ExtraEnvelopes
+                            {
+                                ProjectId = ProjectId,
+                                CatchNo = mergedCatchNo,
+                                NodalCode = null,
+                                ExtraId = config.ExtraType,
+                                Quantity = calculatedQuantity,
+                                InnerEnvelope = innerCount.ToString(),
+                                OuterEnvelope = outerCount.ToString(),
+                                Status = 1
+                            });
+                        }
+                    }
+                }
+
+                // 2. Fetch existing active extras for the original catches to compare quantities
                 var affectedCatchNos = normalizedRequestedCatchNos
                     .Concat(new[] { mergedCatchNo })
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .ToList();
 
+                var existingExtras = await _context.ExtrasEnvelope
+                    .Where(x =>
+                        x.ProjectId == ProjectId &&
+                        x.CatchNo != null &&
+                        affectedCatchNos.Contains(x.CatchNo) &&
+                        x.Status == 1)
+                    .ToListAsync();
+
+                var existingSums = existingExtras
+                    .GroupBy(x => x.ExtraId)
+                    .ToDictionary(g => g.Key, g => g.Sum(x => x.Quantity));
+
+                var newSums = extrasToAdd
+                    .GroupBy(x => x.ExtraId)
+                    .ToDictionary(g => g.Key, g => g.Sum(x => x.Quantity));
+
+                bool extrasQuantityChanged = false;
+                foreach (var config in extraConfigs)
+                {
+                    var newQty = newSums.TryGetValue(config.ExtraType, out var nSum) ? nSum : 0;
+                    var oldQty = existingSums.TryGetValue(config.ExtraType, out var eSum) ? eSum : 0;
+                    if (newQty != oldQty)
+                    {
+                        extrasQuantityChanged = true;
+                        break;
+                    }
+                }
+
+                // 3. Set the redirect step based on whether extras quantity changed
+                int targetStep = extrasQuantityChanged 
+                    ? Tools.Models.PipelineNavigator.STEP_ENV_BREAKING 
+                    : Tools.Models.PipelineNavigator.STEP_AWAITING_EXTRA;
+
+                await _context.NRDatas
+                    .Where(x =>
+                        x.ProjectId == ProjectId &&
+                        x.Status == true &&
+                        x.LotNo != null &&
+                        affectedLotNos.Contains(x.LotNo) &&
+                        x.Steps > targetStep)
+                    .ExecuteUpdateAsync(setters => setters
+                        .SetProperty(
+                            x => x.Steps,
+                            targetStep
+                        ));
+
+                // 4. Overwrite original active extra envelope entries (soft delete) and add new ones
                 var extrasToDisable = await _context.ExtrasEnvelope
                     .Where(x =>
                         x.ProjectId == ProjectId &&
@@ -679,105 +678,6 @@ namespace Tools.Controllers
                         extra.Status = 0;
                     }
                 }
-
-                var extraOverrides = (request.ExtraQuantities ?? new List<ExtraQuantityOverride>())
-                    .Where(x => x.ExtraType > 0)
-                    .GroupBy(x => x.ExtraType)
-                    .ToDictionary(g => g.Key, g => g.Last().Quantity);
-
-                var extrasToAdd = new List<ExtraEnvelopes>();
-
-                foreach (var config in extraConfigs)
-                {
-                    var (innerCapacity, outerCapacity) = GetEnvelopeCapacities(config.EnvelopeType);
-                    
-                    // NEW: Check if nodal calculation should be used
-                    if (UseNodalCalculation(config))
-                    {
-                        // NEW: Create extras per NRData with nodal support
-                        Console.WriteLine($" Using nodal calculation for ExtraType {config.ExtraType}");
-                        
-                        var nrDataRecords = await _context.NRDatas
-                            .Where(n => n.ProjectId == ProjectId 
-                                     && n.CatchNo == mergedCatchNo 
-                                     && n.Status == true)
-                            .ToListAsync();
-
-                        Console.WriteLine($" Found {nrDataRecords.Count} NRData records for catch {mergedCatchNo}");
-
-                        foreach (var nrData in nrDataRecords)
-                        {
-                            var calculatedQuantity = CalculateExtraQuantityWithNodal(
-                                config, 
-                                nrData.NRQuantity, 
-                                nrData.NodalCode
-                            );
-
-                            Console.WriteLine($"   NRData {nrData.Id}, NodalCode: {nrData.NodalCode}, Quantity: {calculatedQuantity}");
-
-                            var innerCount = innerCapacity > 0
-                                ? (int)Math.Ceiling((double)calculatedQuantity / innerCapacity)
-                                : 0;
-                            var outerCount = outerCapacity > 0
-                                ? (int)Math.Ceiling((double)calculatedQuantity / outerCapacity)
-                                : 0;
-
-                            extrasToAdd.Add(new ExtraEnvelopes
-                            {
-                                ProjectId = ProjectId,
-                                CatchNo = mergedCatchNo,
-                                NodalCode = nrData.NodalCode, // NEW: Link to specific NRData
-                                ExtraId = config.ExtraType,
-                                Quantity = calculatedQuantity,
-                                InnerEnvelope = innerCount.ToString(),
-                                OuterEnvelope = outerCount.ToString(),
-                                Status = 1
-                            });
-                        }
-                    }
-                    else
-                    {
-                        // EXISTING: Catch-based calculation (preserved)
-                        Console.WriteLine($"⚪ Using catch-based calculation for ExtraType {config.ExtraType}");
-                        
-                        var calculatedQuantity = perCatchTotals.Any()
-                            ? perCatchTotals
-                                .Select(qty => CalculateExtraQuantity(config, qty))
-                                .DefaultIfEmpty(0)
-                                .Sum()
-                            : CalculateExtraQuantity(config, totalQuantity);
-                            
-                        if (extraOverrides.TryGetValue(config.ExtraType, out var overrideQuantity))
-                        {
-                            var roundedOverride = RoundUpToMinimumCapacity(
-                                Math.Max(overrideQuantity, 0),
-                                innerCapacity,
-                                outerCapacity);
-                            calculatedQuantity = roundedOverride;
-                        }
-                        
-                        var innerCount = innerCapacity > 0
-                            ? (int)Math.Ceiling((double)calculatedQuantity / innerCapacity)
-                            : 0;
-                        var outerCount = outerCapacity > 0
-                            ? (int)Math.Ceiling((double)calculatedQuantity / outerCapacity)
-                            : 0;
-
-                        extrasToAdd.Add(new ExtraEnvelopes
-                        {
-                            ProjectId = ProjectId,
-                            CatchNo = mergedCatchNo,
-                            NodalCode = null, // EXISTING: No NrDataId for catch-based
-                            ExtraId = config.ExtraType,
-                            Quantity = calculatedQuantity,
-                            InnerEnvelope = innerCount.ToString(),
-                            OuterEnvelope = outerCount.ToString(),
-                            Status = 1
-                        });
-                    }
-                }
-
-                Console.WriteLine($" Total extras to add: {extrasToAdd.Count}");
 
                 if (extrasToAdd.Any())
                 {
