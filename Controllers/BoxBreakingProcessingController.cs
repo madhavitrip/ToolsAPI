@@ -36,7 +36,11 @@ namespace Tools.Controllers
                 await _loggerService.LogEventAsync($"Starting box breaking for ProjectId {ProjectId}, Lots: {string.Join(",", LotNo)}", "BoxBreakingProcessing", LogHelper.GetTriggeredBy(User), ProjectId);
 
                 // ✅ STEP 1: Validate dispatch status for all lots (mandatory backend validation unless bypassed)
-                if (!bypassDispatch)
+                // Allow a global bypass via environment variable `BYPASS_DISPATCH_CHECK=true`
+                var globalBypassBox = (System.Environment.GetEnvironmentVariable("BYPASS_DISPATCH_CHECK") ?? "").ToLowerInvariant() == "true";
+                var dispatchBypassEffectiveBox = bypassDispatch || globalBypassBox;
+
+                if (!dispatchBypassEffectiveBox)
                 {
                     var dispatchInfoDict = await _dispatchService.GetDispatchDatesAsync(ProjectId, LotNo);
                     var dispatchedLots = dispatchInfoDict.Where(d => d.Value.IsDispatched).ToList();
