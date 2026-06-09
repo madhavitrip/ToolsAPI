@@ -43,7 +43,11 @@ namespace Tools.Controllers
                 if (!skipReset) await ResetReportStatus(ProjectId);
 
                 // ✅ STEP 0: Validate dispatch status (mandatory backend validation unless bypassed)
-                if (!bypassDispatch)
+                // Allow a global bypass via environment variable `BYPASS_DISPATCH_CHECK=true`
+                var globalBypass = (Environment.GetEnvironmentVariable("BYPASS_DISPATCH_CHECK") ?? "").ToLowerInvariant() == "true";
+                var dispatchBypassEffective = bypassDispatch || globalBypass;
+
+                if (!dispatchBypassEffective)
                 {
                     List<int> lotsToCheck = new List<int>();
                     if (lotNo.HasValue)
