@@ -33,11 +33,13 @@ namespace Tools.Controllers
 
         private readonly ERPToolsDbContext _context;
         private readonly ILoggerService _loggerService;
+        private readonly TemplateRegenerationService _templateRegenerationService;
 
         public NRDatasController(ERPToolsDbContext context, ILoggerService loggerService)
         {
             _context = context;
             _loggerService = loggerService;
+            _templateRegenerationService = new TemplateRegenerationService(context, loggerService);
         }
 
         // GET: api/NRDatas
@@ -1201,6 +1203,18 @@ namespace Tools.Controllers
                 await _context.SaveChangesAsync();
                 await transaction.CommitAsync();
 
+                // =========================================================
+                // TEMPLATE REGENERATION: Mark templates for regeneration
+                // if any field used in RPT templates has been edited
+                // =========================================================
+                if (changedFields.Any() && existingRecord.ProjectId > 0)
+                {
+                    await _templateRegenerationService.HandleFieldChangeAndRegenerateTemplates(
+                        existingRecord.ProjectId,
+                        changedFields
+                    );
+                }
+
                 return Ok(new
                 {
                     message = "Data updated successfully",
@@ -1516,6 +1530,31 @@ namespace Tools.Controllers
                     LogHelper.GetTriggeredBy(User),
                     projectId
                 );
+
+                // =========================================================
+                // TEMPLATE REGENERATION: Mark templates for regeneration
+                // if any field used in RPT templates has been edited
+                // =========================================================
+                var allEditedFields = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var editedFieldsList in nrDatasToAddNormal.Select(r => r.Symbol?.Split(',') ?? new string[0]))
+                {
+                    foreach (var field in editedFieldsList)
+                    {
+                        if (!string.IsNullOrWhiteSpace(field))
+                        {
+                            allEditedFields.Add(field.Trim());
+                        }
+                    }
+                }
+
+                // Mark all templates using any edited fields for regeneration
+                if (allEditedFields.Any())
+                {
+                    await _templateRegenerationService.HandleFieldChangeAndRegenerateTemplates(
+                        projectId,
+                        allEditedFields.ToList()
+                    );
+                }
 
                 return Ok(new
                 {
@@ -4176,7 +4215,7 @@ namespace Tools.Controllers
 
             foreach (var template in boxTemplates)
             {
-                if (!string.IsNullOrEmpty(template.RequiredFieldsJson))
+                if (!string.IsNullOrEmpty(template.ParsedFieldsJson))
                 {
                     try
                     {
