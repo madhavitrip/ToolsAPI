@@ -33,11 +33,13 @@ namespace Tools.Controllers
 
         private readonly ERPToolsDbContext _context;
         private readonly ILoggerService _loggerService;
+        private readonly TemplateRegenerationService _templateRegenerationService;
 
         public NRDatasController(ERPToolsDbContext context, ILoggerService loggerService)
         {
             _context = context;
             _loggerService = loggerService;
+            _templateRegenerationService = new TemplateRegenerationService(context, loggerService);
         }
 
         // GET: api/NRDatas
@@ -854,6 +856,23 @@ namespace Tools.Controllers
                     existingRecord.NRDatas = JsonSerializer.Serialize(existingExtraData);
 
                 // =====================
+                // LOAD CONFIG
+                // =====================
+                var config = await _context.ProjectConfigs
+                    .FirstOrDefaultAsync(c => c.ProjectId == existingRecord.ProjectId);
+
+                // =====================
+                // DUPLICATE CHECK
+                // =====================
+                // Re-run duplicate check on the pending updated record
+                bool isDuplicate = await DuplicateExists(existingRecord, existingRecord.ProjectId, config, id);
+                if (isDuplicate)
+                {
+                    await transaction.RollbackAsync();
+                    return BadRequest("Record already exists with same duplicate criteria.");
+                }
+
+                // =====================
                 // UNIQUE CHECK
                 // =====================
                 bool hasUniqueFieldsEdited = changedFields
@@ -879,12 +898,6 @@ namespace Tools.Controllers
                 bool lotChanged = oldLot != existingRecord.LotNo;
                 bool pageChanged = oldPageNo != existingRecord.Pages;
                 bool quantityChanged = oldQuantity != existingRecord.Quantity || oldNRQuantity != existingRecord.NRQuantity;
-
-                // =====================
-                // LOAD CONFIG
-                // =====================
-                var config = await _context.ProjectConfigs
-                    .FirstOrDefaultAsync(c => c.ProjectId == existingRecord.ProjectId);
 
                 var allFields = await _context.Fields.ToListAsync();
 
@@ -1089,6 +1102,18 @@ namespace Tools.Controllers
 
                 await _context.SaveChangesAsync();
                 await transaction.CommitAsync();
+
+                // =========================================================
+                // TEMPLATE REGENERATION: Mark templates for regeneration
+                // if any field used in RPT templates has been edited
+                // =========================================================
+                if (changedFields.Any() && existingRecord.ProjectId > 0)
+                {
+                    await _templateRegenerationService.HandleFieldChangeAndRegenerateTemplates(
+                        existingRecord.ProjectId,
+                        changedFields
+                    );
+                }
 
                 return Ok(new
                 {
@@ -1378,14 +1403,15 @@ namespace Tools.Controllers
                 // Reset steps & cleanup
                 if (catchesToResetToDuplicate.Any())
                 {
+                    var newlyAddedIds = nrDatasToAddNormal.Select(r => r.Id).ToList();
+
                     await _context.NRDatas
                         .Where(x =>
                             x.ProjectId == projectId &&
                             x.Status == true &&
                             x.CatchNo != null &&
                             catchesToResetToDuplicate.Contains(x.CatchNo)
-                            &&
-    !(x.UploadList != null && x.UploadList.Contains(nextBatchId)))
+                            && !newlyAddedIds.Contains(x.Id))
                         .ExecuteUpdateAsync(setters => setters
                             .SetProperty(
                                 x => x.Steps,
@@ -1404,6 +1430,31 @@ namespace Tools.Controllers
                     LogHelper.GetTriggeredBy(User),
                     projectId
                 );
+
+                // =========================================================
+                // TEMPLATE REGENERATION: Mark templates for regeneration
+                // if any field used in RPT templates has been edited
+                // =========================================================
+                var allEditedFields = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var editedFieldsList in nrDatasToAddNormal.Select(r => r.Symbol?.Split(',') ?? new string[0]))
+                {
+                    foreach (var field in editedFieldsList)
+                    {
+                        if (!string.IsNullOrWhiteSpace(field))
+                        {
+                            allEditedFields.Add(field.Trim());
+                        }
+                    }
+                }
+
+                // Mark all templates using any edited fields for regeneration
+                if (allEditedFields.Any())
+                {
+                    await _templateRegenerationService.HandleFieldChangeAndRegenerateTemplates(
+                        projectId,
+                        allEditedFields.ToList()
+                    );
+                }
 
                 return Ok(new
                 {
@@ -3894,9 +3945,10 @@ namespace Tools.Controllers
         }
 
         private async Task<bool> DuplicateExists(
-    NRData newData,
-    int projectId,
-    ProjectConfig projectConfig)
+            NRData newData,
+            int projectId,
+            ProjectConfig projectConfig,
+            int? skipId = null)
         {
             var duplicateFieldIds = projectConfig?.DuplicateCriteria ?? new List<int>();
 
@@ -3912,9 +3964,15 @@ namespace Tools.Controllers
                 .Select(f => f.Name.Trim())
                 .ToList();
 
-            var activeRecords = await _context.NRDatas
-                .Where(x => x.ProjectId == projectId && x.Status == true)
-                .ToListAsync();
+            var query = _context.NRDatas
+                .Where(x => x.ProjectId == projectId && x.Status == true);
+
+            if (skipId.HasValue)
+            {
+                query = query.Where(x => x.Id != skipId.Value);
+            }
+
+            var activeRecords = await query.ToListAsync();
 
             foreach (var db in activeRecords)
             {
@@ -4057,7 +4115,7 @@ namespace Tools.Controllers
 
             foreach (var template in boxTemplates)
             {
-                if (!string.IsNullOrEmpty(template.RequiredFieldsJson))
+                if (!string.IsNullOrEmpty(template.ParsedFieldsJson))
                 {
                     try
                     {
