@@ -80,15 +80,15 @@ namespace Tools.Controllers
                         if (dispatchedLots.Any())
                         {
                             var dispatchedLotNumbers = string.Join(", ", dispatchedLots.Select(d => d.Key));
-                            return BadRequest(new
-                            {
-                                error = $"Lot(s) {dispatchedLotNumbers} already dispatched. Envelope Breaking not allowed.",
-                                dispatchedLots = dispatchedLots.Select(d => new
-                                {
-                                    lotNo = d.Key,
-                                    dispatchDate = d.Value.DispatchDate
-                                })
-                            });
+                            //return BadRequest(new
+                            //{
+                            //    error = $"Lot(s) {dispatchedLotNumbers} already dispatched. Envelope Breaking not allowed.",
+                            //    dispatchedLots = dispatchedLots.Select(d => new
+                            //    {
+                            //        lotNo = d.Key,
+                            //        dispatchDate = d.Value.DispatchDate
+                            //    })
+                            //});
                         }
                     }
                 }
