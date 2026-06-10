@@ -44,8 +44,9 @@ namespace Tools.Controllers
 
                 // ✅ STEP 0: Validate dispatch status (mandatory backend validation unless bypassed)
                 // Allow a global bypass via environment variable `BYPASS_DISPATCH_CHECK=true`
+                // Temporarily ignore dispatch date checks (force bypass for now)
                 var globalBypass = (Environment.GetEnvironmentVariable("BYPASS_DISPATCH_CHECK") ?? "").ToLowerInvariant() == "true";
-                var dispatchBypassEffective = bypassDispatch || globalBypass;
+                var dispatchBypassEffective = true;
 
                 if (!dispatchBypassEffective)
                 {

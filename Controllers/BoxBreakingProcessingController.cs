@@ -37,8 +37,9 @@ namespace Tools.Controllers
 
                 // ✅ STEP 1: Validate dispatch status for all lots (mandatory backend validation unless bypassed)
                 // Allow a global bypass via environment variable `BYPASS_DISPATCH_CHECK=true`
+                // Temporarily ignore dispatch date checks (force bypass for now)
                 var globalBypassBox = (System.Environment.GetEnvironmentVariable("BYPASS_DISPATCH_CHECK") ?? "").ToLowerInvariant() == "true";
-                var dispatchBypassEffectiveBox = bypassDispatch || globalBypassBox;
+                var dispatchBypassEffectiveBox = true;
 
                 if (!dispatchBypassEffectiveBox)
                 {
