@@ -44,8 +44,9 @@ namespace Tools.Controllers
 
                 // ✅ STEP 0: Validate dispatch status (mandatory backend validation unless bypassed)
                 // Allow a global bypass via environment variable `BYPASS_DISPATCH_CHECK=true`
+                // Temporarily ignore dispatch date checks (force bypass for now)
                 var globalBypass = (Environment.GetEnvironmentVariable("BYPASS_DISPATCH_CHECK") ?? "").ToLowerInvariant() == "true";
-                var dispatchBypassEffective = bypassDispatch || globalBypass;
+                var dispatchBypassEffective = true;
 
                 if (!dispatchBypassEffective)
                 {
@@ -79,15 +80,15 @@ namespace Tools.Controllers
                         if (dispatchedLots.Any())
                         {
                             var dispatchedLotNumbers = string.Join(", ", dispatchedLots.Select(d => d.Key));
-                            return BadRequest(new
-                            {
-                                error = $"Lot(s) {dispatchedLotNumbers} already dispatched. Envelope Breaking not allowed.",
-                                dispatchedLots = dispatchedLots.Select(d => new
-                                {
-                                    lotNo = d.Key,
-                                    dispatchDate = d.Value.DispatchDate
-                                })
-                            });
+                            //return BadRequest(new
+                            //{
+                            //    error = $"Lot(s) {dispatchedLotNumbers} already dispatched. Envelope Breaking not allowed.",
+                            //    dispatchedLots = dispatchedLots.Select(d => new
+                            //    {
+                            //        lotNo = d.Key,
+                            //        dispatchDate = d.Value.DispatchDate
+                            //    })
+                            //});
                         }
                     }
                 }
