@@ -700,7 +700,7 @@ namespace Tools.Controllers
                 if (!string.IsNullOrEmpty(catchNo) && !resetOmrSerialOnCatchChange)
                 {
                     var lastResult = await _context.EnvelopeBreakingResults
-                        .Where(r => r.ProjectId == ProjectId && r.CatchNo != catchNo)
+                        .Where(r => r.ProjectId == ProjectId && r.CatchNo != catchNo && r.Status)
                         .OrderByDescending(r => r.SerialNumber)
                         .FirstOrDefaultAsync();
 
@@ -857,6 +857,26 @@ namespace Tools.Controllers
                     prevCatchForSerial = cNo;
                 }
 
+                // Soft deactivate existing records for the catches being processed
+                if (catchesToProcess.Any())
+                {
+                    var existingEnvelopeBreakingIds = await _context.EnvelopeBreakingResults
+                        .Where(r => r.ProjectId == ProjectId && r.CatchNo != null && catchesToProcess.Contains(r.CatchNo) && r.Status)
+                        .Select(r => r.Id)
+                        .ToListAsync();
+
+                    if (existingEnvelopeBreakingIds.Any())
+                    {
+                        await _context.EnvelopeBreakingResults
+                            .Where(r => existingEnvelopeBreakingIds.Contains(r.Id))
+                            .ExecuteUpdateAsync(s => s.SetProperty(r => r.Status, false));
+
+                        await _context.BoxBreakingResults
+                            .Where(b => b.ProjectId == ProjectId && b.EnvelopeBreakingResultId.HasValue && existingEnvelopeBreakingIds.Contains(b.EnvelopeBreakingResultId.Value) && b.Status)
+                            .ExecuteUpdateAsync(s => s.SetProperty(b => b.Status, false));
+                    }
+                }
+
                 _context.EnvelopeBreakingResults.AddRange(envelopeResults);
                 foreach (var nr in nrData)
                     nr.Steps = Tools.Models.PipelineNavigator.GetNextStep(Tools.Models.PipelineNavigator.STEP_AWAITING_EXTRA, projectconfig?.Modules);
@@ -929,7 +949,7 @@ namespace Tools.Controllers
                     .ToList();
 
                 IQueryable<EnvelopeBreakingResult> query = _context.EnvelopeBreakingResults
-                    .Where(r => r.ProjectId == ProjectId);
+                    .Where(r => r.ProjectId == ProjectId && r.Status);
 
                 if (uploadId.HasValue)
                 {
@@ -937,15 +957,6 @@ namespace Tools.Controllers
                     var allNr = await _context.NRDatas.Where(p => p.ProjectId == ProjectId).ToListAsync();
                     var validIds = allNr.Where(x => x.UploadList != null && x.UploadList.Contains(uploadId.Value)).Select(x => x.Id).ToList();
                     query = query.Where(r => validIds.Contains(r.NrDataId));
-                }
-                else
-                {
-                    var maxBatch = await _context.EnvelopeBreakingResults
-                        .Where(r => r.ProjectId == ProjectId)
-                        .MaxAsync(r => (int?)r.UploadBatch);
-
-                    if (maxBatch.HasValue)
-                        query = query.Where(r => r.UploadBatch == maxBatch.Value);
                 }
 
                 var results = await query.OrderBy(r => r.Id).ToListAsync();

@@ -63,18 +63,10 @@ namespace Tools.Controllers
 
                 await _loggerService.LogEventAsync($"Dispatch validation passed in {sw.ElapsedMilliseconds}ms", "BoxBreakingProcessing", 0, ProjectId);
 
-                // Read EnvelopeBreakingResults from DB (latest batch)
-                var maxBatch = await _context.EnvelopeBreakingResults
-                    .Where(r => r.ProjectId == ProjectId)
-                    .MaxAsync(r => (int?)r.UploadBatch);
-
-                var envelopeResults = new List<EnvelopeBreakingResult>();
-                if (maxBatch.HasValue)
-                {
-                    envelopeResults = await _context.EnvelopeBreakingResults
-                        .Where(r => r.ProjectId == ProjectId && r.UploadBatch == maxBatch.Value && r.SerialNumber != 0)
-                        .ToListAsync();
-                }
+                // Read active EnvelopeBreakingResults from DB
+                var envelopeResults = await _context.EnvelopeBreakingResults
+                    .Where(r => r.ProjectId == ProjectId && r.Status && r.SerialNumber != 0)
+                    .ToListAsync();
 
                 await _loggerService.LogEventAsync($"Loaded {envelopeResults.Count} envelope results in {sw.ElapsedMilliseconds}ms", "BoxBreakingProcessing", 0, ProjectId);
 
@@ -780,6 +772,23 @@ namespace Tools.Controllers
                     });
                 }
 
+                // Soft deactivate existing box results for the lots being processed
+                if (nrData.Any())
+                {
+                    var nrDataIds = nrData.Select(n => n.Id).ToList();
+                    var allEnvelopeIds = await _context.EnvelopeBreakingResults
+                        .Where(e => e.ProjectId == ProjectId && nrDataIds.Contains(e.NrDataId))
+                        .Select(e => e.Id)
+                        .ToListAsync();
+
+                    if (allEnvelopeIds.Any())
+                    {
+                        await _context.BoxBreakingResults
+                            .Where(b => b.ProjectId == ProjectId && b.EnvelopeBreakingResultId.HasValue && allEnvelopeIds.Contains(b.EnvelopeBreakingResultId.Value) && b.Status)
+                            .ExecuteUpdateAsync(s => s.SetProperty(b => b.Status, false));
+                    }
+                }
+
                 _context.BoxBreakingResults.AddRange(boxResults);
                 foreach (var nr in nrData)
                      nr.Steps = Tools.Models.PipelineNavigator.GetNextStep(Tools.Models.PipelineNavigator.STEP_AWAITING_ENV, projectconfig?.Modules);
@@ -875,20 +884,15 @@ namespace Tools.Controllers
 
                 // ✅ Get envelope results for this lot's catches
                 var envelopeResults = await _context.EnvelopeBreakingResults
-                    .Where(nr => nrCatchNos.Contains(nr.CatchNo) && nr.ProjectId == ProjectId)
+                    .Where(nr => nrCatchNos.Contains(nr.CatchNo) && nr.ProjectId == ProjectId && nr.Status)
                     .ToListAsync();
 
                 var envelopeResultIds = envelopeResults.Select(e => e.Id).ToHashSet();
 
-                // ✅ Get the latest batch
-                var maxBatch = await _context.BoxBreakingResults
-                    .Where(r => r.ProjectId == ProjectId)
-                    .MaxAsync(r => (int?)r.UploadBatch);
-
-                // ✅ Filter box results by latest batch AND only envelope result IDs belonging to this lot
+                // ✅ Filter box results by active Status AND only envelope result IDs belonging to this lot
                 var boxResults = await _context.BoxBreakingResults
                     .Where(r => r.ProjectId == ProjectId
-                             && r.UploadBatch == maxBatch
+                             && r.Status
                              && r.EnvelopeBreakingResultId.HasValue
                              && envelopeResultIds.Contains(r.EnvelopeBreakingResultId.Value))
                     .OrderBy(r => r.Id)
