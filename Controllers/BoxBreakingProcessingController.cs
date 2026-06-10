@@ -742,11 +742,7 @@ namespace Tools.Controllers
 
                 await _loggerService.LogEventAsync($"Completed box breaking loop: {loopIterations} envelopes processed, {finalWithBoxes.Count} boxes created in {sw.ElapsedMilliseconds}ms", "BoxBreakingProcessing", 0, ProjectId);
 
-                var maxBoxBatch = await _context.BoxBreakingResults
-                    .Where(r => r.ProjectId == ProjectId)
-                    .MaxAsync(r => (int?)r.UploadBatch) ?? 0;
-                int currentBatch = maxBoxBatch + 1;
-
+               
                 var boxResults = new List<BoxBreakingResult>();
 
                 foreach (var item in finalWithBoxes)
@@ -768,7 +764,6 @@ namespace Tools.Controllers
                         BookletSerial = itemDict["BookletSerial"]?.ToString(),
                         InnerBundlingSerial = itemDict["InnerBundlingSerial"] as int?,
                         Quantity = (int)itemDict["Quantity"],
-                        UploadBatch = currentBatch
                     });
                 }
 
@@ -798,7 +793,7 @@ namespace Tools.Controllers
                 await _context.SaveChangesAsync();
 
                 await _loggerService.LogEventAsync(
-                    $"Database save completed: {boxResults.Count} box breaking results for ProjectId {ProjectId}, Batch {currentBatch} in {sw.ElapsedMilliseconds}ms",
+                    $"Database save completed: {boxResults.Count} box breaking results for ProjectId {ProjectId}",
                     "BoxBreakingProcessing",
                     LogHelper.GetTriggeredBy(User),
                     ProjectId);
@@ -817,7 +812,6 @@ namespace Tools.Controllers
                 {
                     message = "Box breaking data saved to database",
                     recordsCount = boxResults.Count,
-                    uploadBatch = currentBatch,
                     processingTimeMs = sw.ElapsedMilliseconds,
                     note = "Report generation is in progress in the background"
                 });

@@ -573,10 +573,7 @@ namespace Tools.Controllers
                     }
                 }
 
-                var maxBatch = await _context.EnvelopeBreakingResults
-                    .Where(r => r.ProjectId == ProjectId)
-                    .MaxAsync(r => (int?)r.UploadBatch) ?? 0;
-                int currentBatch = maxBatch + 1;
+              
 
                 // sortFields and sortingFieldNames already loaded above ✅
 
@@ -771,7 +768,6 @@ namespace Tools.Controllers
                             District = "",
                             DistrictSort = 0,
                             CourseName = dict["CourseName"]?.ToString(),
-                            UploadBatch = currentBatch,
                         });
                         continue;
                     }
@@ -849,7 +845,6 @@ namespace Tools.Controllers
                         Route = dict["Route"]?.ToString(),
                         RouteSort = routeSort,
                         CourseName = dict["CourseName"]?.ToString(),
-                        UploadBatch = currentBatch,
                         District = dict["District"]?.ToString(),
                         DistrictSort = districtSort,
                     });
@@ -884,7 +879,7 @@ namespace Tools.Controllers
                 await _context.SaveChangesAsync();
 
                 await _loggerService.LogEventAsync(
-                    $"Saved {envelopeResults.Count} envelope breaking results for ProjectId {ProjectId}, Batch {currentBatch}",
+                    $"Saved {envelopeResults.Count} envelope breaking results for ProjectId {ProjectId}",
                     "EnvelopeBreakageProcessing",
                     triggeredBy,
                     ProjectId);
@@ -901,7 +896,6 @@ namespace Tools.Controllers
                 {
                     message = "Envelope breaking data saved to database",
                     recordsCount = envelopeResults.Count,
-                    uploadBatch = currentBatch
                 });
             }
             catch (Exception ex)
