@@ -472,7 +472,7 @@ namespace Tools.Controllers
                         Symbol = primaryRow.Symbol,
                         Status = true,
                         NRDataId = null,
-                        Steps = Tools.Models.PipelineNavigator.STEP_UPLOADED, // Start from scratch for merged catch
+                        Steps = 3, // Tools.Models.PipelineNavigator.STEP_ENV_BREAKING
                         UploadList = primaryRow.UploadList != null
                             ? new List<int>(primaryRow.UploadList)
                             : new List<int>(),
@@ -647,27 +647,42 @@ namespace Tools.Controllers
                     }
                 }
 
-                // 3. Set the redirect step based on OMR/Booklet serial configurations
-                int targetStep = Tools.Models.PipelineNavigator.STEP_AWAITING_ENV;
+                var newlyAddedIds = newMergedRows.Select(r => r.Id).ToList();
+
+                // Reset other records of same CatchNo to step 4
+                if (!string.IsNullOrWhiteSpace(mergedCatchNo))
+                {
+                    await _context.NRDatas
+                        .Where(x =>
+                            x.ProjectId == ProjectId &&
+                            x.CatchNo == mergedCatchNo &&
+                            !newlyAddedIds.Contains(x.Id) &&
+                            x.Status)
+                        .ExecuteUpdateAsync(s => s.SetProperty(x => x.Steps, 4));
+                }
+
+                int resetStep = 5;
                 bool isBothSerialsPositive = projectConfig != null && projectConfig.OmrSerialNumber > 0 && (projectConfig.BookletSerialNumber ?? 0) > 0;
                 bool resetBookletSerial = projectConfig?.ResetBookletSerialOnCatchChange ?? false;
 
                 if (isBothSerialsPositive && !resetBookletSerial)
                 {
-                    targetStep = Tools.Models.PipelineNavigator.STEP_AWAITING_EXTRA;
+                    resetStep = 4;
                 }
 
+                // Reset remaining records of that lot (excluding the merged catch) to resetStep (if further along)
                 await _context.NRDatas
                     .Where(x =>
                         x.ProjectId == ProjectId &&
                         x.Status == true &&
-                        x.LotNo > 0 &&
+                        x.LotNo >= 0 &&
                         affectedLotNos.Contains(x.LotNo) &&
-                        x.Steps > targetStep)
+                        x.CatchNo != mergedCatchNo &&
+                        x.Steps > resetStep)
                     .ExecuteUpdateAsync(setters => setters
                         .SetProperty(
                             x => x.Steps,
-                            targetStep
+                            resetStep
                         ));
 
                 // 4. Overwrite original active extra envelope entries (soft delete) and add new ones
@@ -902,8 +917,8 @@ namespace Tools.Controllers
 
                 bool lotChanged = oldLot != existingRecord.LotNo;
                 bool pageChanged = oldPageNo != existingRecord.Pages;
-                bool quantityChanged = oldQuantity != existingRecord.Quantity || oldNRQuantity != existingRecord.NRQuantity;
-
+                bool quantityChanged = oldQuantity != existingRecord.Quantity;
+                bool NrQuantityChanged = oldNRQuantity != existingRecord.NRQuantity;
                 var allFields = await _context.Fields.ToListAsync();
 
                 var envelopeFieldNames = allFields
@@ -947,86 +962,12 @@ namespace Tools.Controllers
 
                 bool shouldResetToStepAwaitingBox = labelFieldAffected;
 
-                // Nodal change overrides everything
-                if (nodalChanged)
-                {
-                    existingRecord.Steps =
-                        Tools.Models.PipelineNavigator.STEP_ENHANCEMENT;
-                }
-                // Quantity change has special handling - this entry goes to STEP_ENHANCEMENT
-                else if (quantityChanged)
-                {
-                    existingRecord.Steps =
-                        Tools.Models.PipelineNavigator.STEP_ENHANCEMENT;
-                }
-                else if (shouldResetToStepEnvBreaking)
-                {
-                    existingRecord.Steps = 4; // Tools.Models.PipelineNavigator.STEP_AWAITING_EXTRA
-                }
-                else if (shouldResetToStepAwaitingEnv)
-                {
-                    existingRecord.Steps =
-                        Tools.Models.PipelineNavigator.STEP_AWAITING_ENV;
-                }
-                else if (shouldResetToStepAwaitingBox)
-                {
-                    existingRecord.Steps =
-                        Tools.Models.PipelineNavigator.STEP_AWAITING_BOX;
-                }
+                bool isBothSerialsPositive = config != null && config.OmrSerialNumber > 0 && (config.BookletSerialNumber ?? 0) > 0;
 
-                // =========================================================
-                // =========================================================
-                // PROPAGATION RULES
-                // =========================================================
-
-                // =========================================================
-                // SPECIAL HANDLING FOR QUANTITY CHANGE
-                // =========================================================
                 if (quantityChanged)
                 {
-                    // Edited record → STEP_ENHANCEMENT (already set above)
-                    // Other records with same CatchNo → STEP_ENV_BREAKING
-                    // All remaining records in project → STEP_AWAITING_EXTRA
-                    
-                    if (!string.IsNullOrWhiteSpace(catchNo))
-                    {
-                        // Get all other records with same CatchNo
-                        var sameCatchRows = await _context.NRDatas
-                            .Where(x =>
-                                x.ProjectId == existingRecord.ProjectId &&
-                                x.CatchNo == catchNo &&
-                                x.Id != existingRecord.Id &&
-                                x.Status)
-                            .ToListAsync();
+                    existingRecord.Steps = 2; // Tools.Models.PipelineNavigator.STEP_ENV_BREAKING
 
-                        foreach (var row in sameCatchRows)
-                        {
-                            row.Steps = Tools.Models.PipelineNavigator.STEP_ENV_BREAKING;
-                            _context.NRDatas.Update(row);
-                        }
-                    }
-
-                    // Reset all remaining records in project to STEP_AWAITING_EXTRA
-                    await _context.NRDatas
-                        .Where(x =>
-                            x.ProjectId == existingRecord.ProjectId &&
-                            x.Id != existingRecord.Id &&
-                            (string.IsNullOrWhiteSpace(catchNo) || x.CatchNo != catchNo) &&
-                            x.Status &&
-                            x.Steps > Tools.Models.PipelineNavigator.STEP_AWAITING_EXTRA)
-                        .ExecuteUpdateAsync(s =>
-                            s.SetProperty(
-                                x => x.Steps,
-                                Tools.Models.PipelineNavigator.STEP_AWAITING_EXTRA
-                            ));
-                }
-                // =========================================================
-                // SPECIAL PROPAGATION FOR ENV BREAKING FIELD CHANGES
-                // =========================================================
-                if (shouldResetToStepEnvBreaking && !quantityChanged && !nodalChanged)
-                {
-                    bool isBothSerialsPositive = config != null && config.OmrSerialNumber > 0 && (config.BookletSerialNumber ?? 0) > 0;
-                    
                     if (!string.IsNullOrWhiteSpace(catchNo))
                     {
                         var sameCatchRows = await _context.NRDatas
@@ -1034,6 +975,181 @@ namespace Tools.Controllers
                             .ToListAsync();
 
                         foreach (var row in sameCatchRows)
+                        {
+                            row.Steps = 3; // Tools.Models.PipelineNavigator.STEP_AWAITING_EXTRA
+                            _context.NRDatas.Update(row);
+                        }
+                    }
+
+                    if (existingRecord.LotNo >= 0)
+                    {
+                        await _context.NRDatas
+                            .Where(x => x.ProjectId == existingRecord.ProjectId && x.LotNo == existingRecord.LotNo && (string.IsNullOrWhiteSpace(catchNo) || x.CatchNo != catchNo) && x.Status && x.Steps > 5)
+                            .ExecuteUpdateAsync(s => s.SetProperty(x => x.Steps, 5));
+                    }
+                }
+
+                if (NrQuantityChanged)
+                {
+                    existingRecord.Steps = 1; // Tools.Models.PipelineNavigator.STEP_ENV_BREAKING
+
+                    if (!string.IsNullOrWhiteSpace(catchNo))
+                    {
+                        var sameCatchRows = await _context.NRDatas
+                            .Where(x => x.ProjectId == existingRecord.ProjectId && x.CatchNo == catchNo && x.Id != existingRecord.Id && x.Status)
+                            .ToListAsync();
+
+                        foreach (var row in sameCatchRows)
+                        {
+                            row.Steps = 3; // Tools.Models.PipelineNavigator.STEP_AWAITING_EXTRA
+                            _context.NRDatas.Update(row);
+                        }
+                    }
+
+                    if (existingRecord.LotNo >= 0)
+                    {
+                        await _context.NRDatas
+                            .Where(x => x.ProjectId == existingRecord.ProjectId && x.LotNo == existingRecord.LotNo && (string.IsNullOrWhiteSpace(catchNo) || x.CatchNo != catchNo) && x.Status && x.Steps > 5)
+                            .ExecuteUpdateAsync(s => s.SetProperty(x => x.Steps, 5));
+                    }
+                }
+                else if (!isBothSerialsPositive && changedFields.Any())
+                {
+                    existingRecord.Steps = 4; // Tools.Models.PipelineNavigator.STEP_AWAITING_EXTRA
+
+                    if (!string.IsNullOrWhiteSpace(catchNo))
+                    {
+                        var sameCatchRows = await _context.NRDatas
+                            .Where(x => x.ProjectId == existingRecord.ProjectId && x.CatchNo == catchNo && x.Id != existingRecord.Id && x.Status)
+                            .ToListAsync();
+
+                        foreach (var row in sameCatchRows)
+                        {
+                            row.Steps = 4;
+                            _context.NRDatas.Update(row);
+                        }
+                    }
+
+                    if (existingRecord.LotNo >= 0)
+                    {
+                        await _context.NRDatas
+                            .Where(x => x.ProjectId == existingRecord.ProjectId && x.LotNo == existingRecord.LotNo && (string.IsNullOrWhiteSpace(catchNo) || x.CatchNo != catchNo) && x.Status && x.Steps > 5)
+                            .ExecuteUpdateAsync(s => s.SetProperty(x => x.Steps, 5));
+                    }
+                }
+                else
+                {
+                    // Nodal change overrides everything
+                    if (nodalChanged)
+                    {
+                        existingRecord.Steps =
+                            Tools.Models.PipelineNavigator.STEP_ENHANCEMENT;
+                    }
+                    else if (shouldResetToStepEnvBreaking)
+                    {
+                        existingRecord.Steps = 4; // Tools.Models.PipelineNavigator.STEP_AWAITING_EXTRA
+                    }
+                    else if (shouldResetToStepAwaitingEnv)
+                    {
+                        existingRecord.Steps =
+                            Tools.Models.PipelineNavigator.STEP_AWAITING_ENV;
+                    }
+                    else if (shouldResetToStepAwaitingBox)
+                    {
+                        existingRecord.Steps =
+                            Tools.Models.PipelineNavigator.STEP_AWAITING_BOX;
+                    }
+
+                    // =========================================================
+                    // =========================================================
+                    // PROPAGATION RULES
+                    // =========================================================
+
+                    // SPECIAL PROPAGATION FOR ENV BREAKING FIELD CHANGES
+                    if (shouldResetToStepEnvBreaking && !nodalChanged)
+                    {
+                        if (!string.IsNullOrWhiteSpace(catchNo))
+                        {
+                            var sameCatchRows = await _context.NRDatas
+                                .Where(x => x.ProjectId == existingRecord.ProjectId && x.CatchNo == catchNo && x.Id != existingRecord.Id && x.Status)
+                                .ToListAsync();
+
+                            foreach (var row in sameCatchRows)
+                            {
+                                bool rowChanged = false;
+
+                                if (hasUniqueFieldsEdited)
+                                {
+                                    foreach (var field in changedFields
+                                        .Where(f => normalizedUniqueFields.Contains(f)))
+                                    {
+                                        if (properties.TryGetValue(field, out var propInfo))
+                                        {
+                                            var val = propInfo.GetValue(existingRecord);
+                                            propInfo.SetValue(row, val);
+                                            rowChanged = true;
+                                        }
+                                    }
+
+                                    row.NRDatas = JsonSerializer.Serialize(existingExtraData);
+                                    rowChanged = true;
+                                }
+
+                                if (envelopeFieldAffected)
+                                {
+                                    foreach (var field in changedFields
+                                        .Where(f => envelopeFieldNames.Contains(f)))
+                                    {
+                                        if (normalizedUniqueFields.Contains(field) && properties.TryGetValue(field, out var propInfo))
+                                        {
+                                            var val = propInfo.GetValue(existingRecord);
+                                            propInfo.SetValue(row, val);
+                                            rowChanged = true;
+                                        }
+                                    }
+                                }
+
+                                row.Steps = 4;
+                                rowChanged = true;
+
+                                if (rowChanged)
+                                {
+                                    _context.NRDatas.Update(row);
+                                }
+                            }
+                        }
+
+                        if (isBothSerialsPositive && !config.ResetOmrSerialOnCatchChange)
+                        {
+                            await _context.NRDatas
+                                .Where(x => x.ProjectId == existingRecord.ProjectId && x.Id != existingRecord.Id && x.Status && x.Steps > 4)
+                                .ExecuteUpdateAsync(s => s.SetProperty(x => x.Steps, 4));
+                        }
+                        else
+                        {
+                            if (existingRecord.LotNo >= 0)
+                            {
+                                await _context.NRDatas
+                                    .Where(x => x.ProjectId == existingRecord.ProjectId && x.LotNo == existingRecord.LotNo && (string.IsNullOrWhiteSpace(catchNo) || x.CatchNo != catchNo) && x.Status && x.Steps > 5)
+                                    .ExecuteUpdateAsync(s => s.SetProperty(x => x.Steps, 5));
+                            }
+                        }
+                    }
+                    // =========================================================
+                    // PROPAGATION & STEP RESET RULES FOR SAME CATCH (NON-QUANTITY CHANGES)
+                    // =========================================================
+                    else if ((nodalChanged || shouldResetToStepAwaitingEnv || shouldResetToStepAwaitingBox) &&
+                        !string.IsNullOrWhiteSpace(catchNo))
+                    {
+                        var rows = await _context.NRDatas
+                            .Where(x =>
+                                x.ProjectId == existingRecord.ProjectId &&
+                                x.CatchNo == catchNo &&
+                                x.Id != existingRecord.Id &&
+                                x.Status)
+                            .ToListAsync();
+
+                        foreach (var row in rows)
                         {
                             bool rowChanged = false;
 
@@ -1050,7 +1166,8 @@ namespace Tools.Controllers
                                     }
                                 }
 
-                                row.NRDatas = JsonSerializer.Serialize(existingExtraData);
+                                row.NRDatas =
+                                    JsonSerializer.Serialize(existingExtraData);
                                 rowChanged = true;
                             }
 
@@ -1059,6 +1176,7 @@ namespace Tools.Controllers
                                 foreach (var field in changedFields
                                     .Where(f => envelopeFieldNames.Contains(f)))
                                 {
+                                    // Only propagate the value if the field is unique
                                     if (normalizedUniqueFields.Contains(field) && properties.TryGetValue(field, out var propInfo))
                                     {
                                         var val = propInfo.GetValue(existingRecord);
@@ -1068,111 +1186,35 @@ namespace Tools.Controllers
                                 }
                             }
 
-                            row.Steps = 4;
-                            rowChanged = true;
+                            if (nodalChanged || shouldResetToStepEnvBreaking || shouldResetToStepAwaitingEnv || shouldResetToStepAwaitingBox)
+                            {
+                                // Reset related catch rows' steps to match the edited record's step
+                                row.Steps = existingRecord.Steps;
+                                rowChanged = true;
+                            }
 
                             if (rowChanged)
                             {
                                 _context.NRDatas.Update(row);
                             }
                         }
-                    }
 
-                    if (isBothSerialsPositive && !config.ResetOmrSerialOnCatchChange)
-                    {
-                        await _context.NRDatas
-                            .Where(x => x.ProjectId == existingRecord.ProjectId && x.Id != existingRecord.Id && x.Status && x.Steps != 4)
-                            .ExecuteUpdateAsync(s => s.SetProperty(x => x.Steps, 4));
-                    }
-                    else
-                    {
-                        if (existingRecord.LotNo > 0)
+                        // Reset all remaining project records
+                        var stepResetTriggered = nodalChanged || shouldResetToStepAwaitingEnv || shouldResetToStepAwaitingBox;
+                        if (stepResetTriggered)
                         {
                             await _context.NRDatas
-                                .Where(x => x.ProjectId == existingRecord.ProjectId && x.LotNo == existingRecord.LotNo && (string.IsNullOrWhiteSpace(catchNo) || x.CatchNo != catchNo) && x.Status)
-                                .ExecuteUpdateAsync(s => s.SetProperty(x => x.Steps, 5));
+                                .Where(x =>
+                                    x.ProjectId == existingRecord.ProjectId &&
+                                    x.Id != existingRecord.Id &&
+                                    x.Status &&
+                                    x.Steps > existingRecord.Steps)
+                                .ExecuteUpdateAsync(s =>
+                                    s.SetProperty(
+                                        x => x.Steps,
+                                        existingRecord.Steps
+                                    ));
                         }
-                    }
-                }
-                // =========================================================
-                // PROPAGATION & STEP RESET RULES FOR SAME CATCH (NON-QUANTITY CHANGES)
-                // =========================================================
-                else if ((nodalChanged || shouldResetToStepAwaitingEnv || shouldResetToStepAwaitingBox) &&
-                    !string.IsNullOrWhiteSpace(catchNo))
-                {
-                    var rows = await _context.NRDatas
-                        .Where(x =>
-                            x.ProjectId == existingRecord.ProjectId &&
-                            x.CatchNo == catchNo &&
-                            x.Id != existingRecord.Id &&
-                            x.Status)
-                        .ToListAsync();
-
-                    foreach (var row in rows)
-                    {
-                        bool rowChanged = false;
-
-                        if (hasUniqueFieldsEdited)
-                        {
-                            foreach (var field in changedFields
-                                .Where(f => normalizedUniqueFields.Contains(f)))
-                            {
-                                if (properties.TryGetValue(field, out var propInfo))
-                                {
-                                    var val = propInfo.GetValue(existingRecord);
-                                    propInfo.SetValue(row, val);
-                                    rowChanged = true;
-                                }
-                            }
-
-                            row.NRDatas =
-                                JsonSerializer.Serialize(existingExtraData);
-                            rowChanged = true;
-                        }
-
-                        if (envelopeFieldAffected)
-                        {
-                            foreach (var field in changedFields
-                                .Where(f => envelopeFieldNames.Contains(f)))
-                            {
-                                // Only propagate the value if the field is unique
-                                if (normalizedUniqueFields.Contains(field) && properties.TryGetValue(field, out var propInfo))
-                                {
-                                    var val = propInfo.GetValue(existingRecord);
-                                    propInfo.SetValue(row, val);
-                                    rowChanged = true;
-                                }
-                            }
-                        }
-
-                        if (nodalChanged || shouldResetToStepEnvBreaking || shouldResetToStepAwaitingEnv || shouldResetToStepAwaitingBox)
-                        {
-                            // Reset related catch rows' steps to match the edited record's step
-                            row.Steps = existingRecord.Steps;
-                            rowChanged = true;
-                        }
-
-                        if (rowChanged)
-                        {
-                            _context.NRDatas.Update(row);
-                        }
-                    }
-
-                    // Reset all remaining project records
-                    var stepResetTriggered = nodalChanged || shouldResetToStepAwaitingEnv || shouldResetToStepAwaitingBox;
-                    if (stepResetTriggered)
-                    {
-                        await _context.NRDatas
-                            .Where(x =>
-                                x.ProjectId == existingRecord.ProjectId &&
-                                x.Id != existingRecord.Id &&
-                                x.Status &&
-                                x.Steps > existingRecord.Steps)
-                            .ExecuteUpdateAsync(s =>
-                                s.SetProperty(
-                                    x => x.Steps,
-                                    existingRecord.Steps
-                                ));
                     }
                 }
 
@@ -1591,7 +1633,7 @@ namespace Tools.Controllers
                 {
                     return BadRequest("Record already exists with same duplicate criteria.");
                 }
-                nRData.Steps = PipelineNavigator.STEP_DUP_PARTIAL;
+                nRData.Steps = 2; // Tools.Models.PipelineNavigator.STEP_ENV_BREAKING
                 nRData.Status = true;
 
                 // Save
@@ -1613,33 +1655,36 @@ namespace Tools.Controllers
 
                     foreach (var row in sameCatchRows)
                     {
-                        row.Steps = PipelineNavigator.STEP_AWAITING_EXTRA;
+                        row.Steps = 3; // Tools.Models.PipelineNavigator.STEP_AWAITING_EXTRA
                         _context.NRDatas.Update(row);
                     }
                 }
 
-                int resetStep = PipelineNavigator.STEP_AWAITING_ENV;
+                int resetStep = 5;
                 bool isBothSerialsPositive = projectConfig != null && projectConfig.OmrSerialNumber > 0 && (projectConfig.BookletSerialNumber ?? 0) > 0;
                 bool resetBookletSerial = projectConfig?.ResetBookletSerialOnCatchChange ?? false;
 
                 if (isBothSerialsPositive && !resetBookletSerial)
                 {
-                    resetStep = PipelineNavigator.STEP_AWAITING_EXTRA;
+                    resetStep = 4;
                 }
 
-                // Reset all remaining records in project
-                await _context.NRDatas
-                    .Where(x =>
-                        x.ProjectId == projectId &&
-                        x.Id != nRData.Id &&
-                        (string.IsNullOrWhiteSpace(catchNo) || x.CatchNo != catchNo) &&
-                        x.Status &&
-                        x.Steps > resetStep)
-                    .ExecuteUpdateAsync(s =>
-                        s.SetProperty(
-                            x => x.Steps,
-                            resetStep
-                        ));
+                if (nRData.LotNo >= 0)
+                {
+                    // Reset all remaining records in that lot to resetStep (if further along)
+                    await _context.NRDatas
+                        .Where(x =>
+                            x.ProjectId == projectId &&
+                            x.LotNo == nRData.LotNo &&
+                            (string.IsNullOrWhiteSpace(catchNo) || x.CatchNo != catchNo) &&
+                            x.Status &&
+                            x.Steps > resetStep)
+                        .ExecuteUpdateAsync(s =>
+                            s.SetProperty(
+                                x => x.Steps,
+                                resetStep
+                            ));
+                }
 
                 await _loggerService.LogEventAsync($"Single Catch Processed (Batch {batchId})",
                     "NRData", LogHelper.GetTriggeredBy(User), projectId);
