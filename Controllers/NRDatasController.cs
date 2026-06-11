@@ -3726,9 +3726,55 @@ namespace Tools.Controllers
                     return NotFound();
                 }
 
+                var projectId = nRData.ProjectId;
+                var catchNo = nRData.CatchNo;
+                var lotNo = nRData.LotNo;
+
                 _context.NRDatas.Remove(nRData);
                 await _context.SaveChangesAsync();
-                await _loggerService.LogEventAsync($"Deleted NRdata of {id}", "NRData", LogHelper.GetTriggeredBy(User), nRData.ProjectId);
+
+                // Reset other records of same CatchNo to step 4
+                if (!string.IsNullOrWhiteSpace(catchNo))
+                {
+                    var sameCatchRows = await _context.NRDatas
+                        .Where(x => x.ProjectId == projectId && x.CatchNo == catchNo && x.Status)
+                        .ToListAsync();
+
+                    foreach (var row in sameCatchRows)
+                    {
+                        row.Steps = 4;
+                        _context.NRDatas.Update(row);
+                    }
+                }
+
+                // Reset remaining records of that lot to step 4 or 5 based on OMR/Booklet serial validation
+                var projectConfig = await _context.ProjectConfigs
+                    .FirstOrDefaultAsync(x => x.ProjectId == projectId);
+
+                int resetStep = 5;
+                bool isBothSerialsPositive = projectConfig != null && projectConfig.OmrSerialNumber > 0 && (projectConfig.BookletSerialNumber ?? 0) > 0;
+                bool resetBookletSerial = projectConfig?.ResetBookletSerialOnCatchChange ?? false;
+
+                if (isBothSerialsPositive && !resetBookletSerial)
+                {
+                    resetStep = 4;
+                }
+
+                if (lotNo >= 0)
+                {
+                    await _context.NRDatas
+                        .Where(x =>
+                            x.ProjectId == projectId &&
+                            x.LotNo == lotNo &&
+                            (string.IsNullOrWhiteSpace(catchNo) || x.CatchNo != catchNo) &&
+                            x.Status &&
+                            x.Steps > resetStep)
+                        .ExecuteUpdateAsync(s => s.SetProperty(x => x.Steps, resetStep));
+                }
+
+                await _context.SaveChangesAsync();
+
+                await _loggerService.LogEventAsync($"Deleted NRdata of {id}", "NRData", LogHelper.GetTriggeredBy(User), projectId);
                 return NoContent();
             }
             catch (Exception ex)
@@ -3864,25 +3910,32 @@ namespace Tools.Controllers
 
                 _context.BoxBreakingResults.RemoveRange(allBoxResults);
 
-                // 🔹 Reset other catches to step 4 (only box breaking will run again)
-                var otherCatchesInProject = await _context.NRDatas
+                // 🔹 Reset other catches lot-wise to step 6 / STEP_AWAITING_BOX (only box breaking will run again)
+                var affectedLotNos = allNrDataForCatch
+                    .Select(x => x.LotNo)
+                    .Distinct()
+                    .ToList();
+
+                var otherCatchesInLots = await _context.NRDatas
                     .Where(d => d.ProjectId == projectId &&
                                 d.CatchNo != catchNo &&
-                                d.Status == true)
+                                d.Status == true &&
+                                d.LotNo >= 0 &&
+                                affectedLotNos.Contains(d.LotNo))
                     .ToListAsync();
 
-                foreach (var nrData in otherCatchesInProject)
+                foreach (var nrData in otherCatchesInLots)
                 {
-                    if (nrData.Steps > Tools.Models.PipelineNavigator.STEP_AWAITING_BOX)
+                    if (nrData.Steps > Tools.Models.PipelineNavigator.STEP_AWAITING_ENV)
                     {
-                        nrData.Steps = Tools.Models.PipelineNavigator.STEP_AWAITING_BOX;
+                        nrData.Steps = Tools.Models.PipelineNavigator.STEP_AWAITING_ENV;
                     }
                 }
 
                 await _context.SaveChangesAsync();
 
                 await _loggerService.LogEventAsync(
-                    $"Deleted catch number {catchNo} from project {projectId}. Soft deleted {allNrDataForCatch.Count} NRData records. Reset steps for {otherCatchesInProject.Count} other catches to Box Breaking. Deleted all box breaking results and {envelopeResults.Count} envelope results.",
+                    $"Deleted catch number {catchNo} from project {projectId}. Soft deleted {allNrDataForCatch.Count} NRData records. Reset steps for {otherCatchesInLots.Count} other catches in affected lots to Box Breaking. Deleted all box breaking results and {envelopeResults.Count} envelope results.",
                     "NRData",
                     LogHelper.GetTriggeredBy(User),
                     projectId
@@ -3892,7 +3945,7 @@ namespace Tools.Controllers
                 {
                     message = $"Catch number {catchNo} deleted successfully",
                     catchDeleted = allNrDataForCatch.Count,
-                    otherCatchesReset = otherCatchesInProject.Count,
+                    otherCatchesReset = otherCatchesInLots.Count,
                     envelopeResultsDeleted = envelopeResults.Count,
                     boxResultsDeleted = allBoxResults.Count,
                     action = "Please re-run box breaking process"

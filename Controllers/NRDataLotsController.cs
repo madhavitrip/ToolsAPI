@@ -357,6 +357,44 @@ namespace Tools.Controllers
             if (rows.Count == 0)
                 return NotFound("No matching NRData rows found.");
 
+            // 🔹 OMR/Booklet serial validation
+            var projectConfig = await _context.ProjectConfigs
+                .FirstOrDefaultAsync(x => x.ProjectId == request.ProjectId);
+
+            int resetStep = 5;
+            bool isBothSerialsPositive = projectConfig != null && projectConfig.OmrSerialNumber > 0 && (projectConfig.BookletSerialNumber ?? 0) > 0;
+            bool resetBookletSerial = projectConfig?.ResetBookletSerialOnCatchChange ?? false;
+
+            if (isBothSerialsPositive && !resetBookletSerial)
+            {
+                resetStep = 4;
+            }
+
+            // 🔹 Detect changed or moved catches
+            var originalLotByCatch = rows
+                .Where(r => r.CatchNo != null)
+                .GroupBy(r => r.CatchNo)
+                .ToDictionary(g => g.Key, g => g.First().LotNo);
+
+            var changedCatchNos = new List<string>();
+            var affectedLotNos = new HashSet<int>();
+
+            foreach (var update in request.Updates)
+            {
+                if (string.IsNullOrWhiteSpace(update.CatchNo)) continue;
+
+                if (originalLotByCatch.TryGetValue(update.CatchNo, out var oldLotNo))
+                {
+                    if (oldLotNo != update.LotNo)
+                    {
+                        changedCatchNos.Add(update.CatchNo);
+                        affectedLotNos.Add(oldLotNo);
+                        affectedLotNos.Add(update.LotNo);
+                    }
+                }
+            }
+
+            // 🔹 Apply lot updates
             var updatesByCatch = request.Updates
                 .Where(u => !string.IsNullOrWhiteSpace(u.CatchNo))
                 .GroupBy(u => u.CatchNo)
@@ -371,9 +409,37 @@ namespace Tools.Controllers
                 }
             }
 
+            // 🔹 Reset steps if there were changes/moves
+            if (changedCatchNos.Any())
+            {
+                // Reset all records of the moved/changed catches
+                foreach (var row in rows)
+                {
+                    if (row.CatchNo != null && changedCatchNos.Contains(row.CatchNo) && row.Steps > resetStep)
+                    {
+                        row.Steps = resetStep;
+                    }
+                }
+
+                // Reset other records in the affected lots
+                var lotRecordsToReset = await _context.NRDatas
+                    .Where(x => x.ProjectId == request.ProjectId &&
+                                x.LotNo >= 0 &&
+                                affectedLotNos.Contains(x.LotNo) &&
+                                (x.CatchNo == null || !changedCatchNos.Contains(x.CatchNo)) &&
+                                x.Status &&
+                                x.Steps > resetStep)
+                    .ToListAsync();
+
+                foreach (var row in lotRecordsToReset)
+                {
+                    row.Steps = resetStep;
+                }
+            }
+
             await _context.SaveChangesAsync();
             await _loggerService.LogEventAsync(
-                $"Updated LotNo for {rows.Count} NRData rows (ProjectId {request.ProjectId})",
+                $"Updated LotNo for {rows.Count} NRData rows (ProjectId {request.ProjectId}). Moved catches: {string.Join(", ", changedCatchNos)}.",
                 "NRDataLots",
                 LogHelper.GetTriggeredBy(User),
                 request.ProjectId
@@ -382,7 +448,8 @@ namespace Tools.Controllers
             return Ok(new
             {
                 message = "Lot numbers updated successfully.",
-                updatedCount = rows.Count
+                updatedCount = rows.Count,
+                movedCatchesCount = changedCatchNos.Count
             });
         }
     }
