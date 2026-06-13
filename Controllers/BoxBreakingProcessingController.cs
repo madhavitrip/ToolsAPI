@@ -829,27 +829,29 @@ namespace Tools.Controllers
             try
             {
                 using var client = new HttpClient();
-                var query = string.Join("&", lotNumbers.Select(l => $"LotNo={Uri.EscapeDataString(l.ToString())}"));
-                var url = $"{_apiSettings.BoxBreaking}?ProjectId={projectId}&{query}";
-                var response = await client.GetAsync(url);
+                foreach (var lot in lotNumbers)
+                {
+                    var url = $"{_apiSettings.BoxBreaking}?ProjectId={projectId}&LotNo={lot}";
+                    var response = await client.GetAsync(url);
 
-                if (!response.IsSuccessStatusCode)
-                {
-                    await _loggerService.LogErrorAsync("Failed to generate box breaking report", $"Status: {response.StatusCode}", nameof(BoxBreakingProcessingController));
-                }
-                else
-                {
-                    await _loggerService.LogEventAsync("Box breaking report generated successfully", "BoxBreakingProcessing", 0, projectId);
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        await _loggerService.LogErrorAsync($"Failed to generate box breaking report for Lot {lot}", $"Status: {response.StatusCode}", nameof(BoxBreakingProcessingController));
+                    }
+                    else
+                    {
+                        await _loggerService.LogEventAsync($"Box breaking report for Lot {lot} generated successfully", "BoxBreakingProcessing", 0, projectId);
+                    }
                 }
             }
             catch (Exception ex)
             {
-                await _loggerService.LogErrorAsync("Error generating box breaking report", ex.Message, nameof(BoxBreakingProcessingController));
+                await _loggerService.LogErrorAsync("Error generating box breaking report(s)", ex.Message, nameof(BoxBreakingProcessingController));
             }
         }
 
         [HttpGet("GetBoxBreakingReport")]
-        public async Task<IActionResult> GetBoxBreakingReport(int ProjectId, [FromQuery] int? LotNo, [FromQuery] int? uploadId = null)
+        public async Task<IActionResult> GetBoxBreakingReport(int ProjectId, [FromQuery] List<int> LotNo, [FromQuery] int? uploadId = null)
         {
             try
             {
@@ -862,9 +864,9 @@ namespace Tools.Controllers
                     var all = await nrDataQuery.ToListAsync();
                     nrData = all.Where(x => x.UploadList != null && x.UploadList.Contains(uploadId.Value)).ToList();
                 }
-                else if (LotNo.HasValue)
+                else if (LotNo != null && LotNo.Any())
                 {
-                    nrData = await nrDataQuery.Where(p => p.Status == true && p.LotNo == LotNo.Value).ToListAsync();
+                    nrData = await nrDataQuery.Where(p => p.Status == true && LotNo.Contains(p.LotNo)).ToListAsync();
                 }
                 else
                 {
@@ -872,7 +874,7 @@ namespace Tools.Controllers
                 }
 
                 if (!nrData.Any())
-                    return NotFound(uploadId.HasValue ? $"No NRData found for version {uploadId}" : $"No NRData found for Lot {LotNo}");
+                    return NotFound(uploadId.HasValue ? $"No NRData found for version {uploadId}" : $"No NRData found for Lot(s) {string.Join(", ", LotNo)}");
 
                 var nrCatchNos = nrData.Select(n => n.CatchNo).ToHashSet();
 
@@ -893,7 +895,7 @@ namespace Tools.Controllers
                     .ToListAsync();
 
                 if (!boxResults.Any())
-                    return NotFound($"No box breaking results found for Lot {LotNo}");
+                    return NotFound($"No box breaking results found for Lot(s) {string.Join(", ", LotNo)}");
 
                 var projectconfig = await _context.ProjectConfigs
                     .FirstOrDefaultAsync(p => p.ProjectId == ProjectId);
@@ -936,8 +938,9 @@ namespace Tools.Controllers
 
                 if (!Directory.Exists(reportPath)) Directory.CreateDirectory(reportPath);
 
-                // ✅ One file per lot or version
-                var fileName = uploadId.HasValue ? $"BoxBreaking_v{uploadId}.xlsx" : ReportVersionHelper.GetNextVersionFileName(reportPath, $"BoxBreaking_{LotNo}.xlsx");
+                // ✅ One file per lot(s) selection or version
+                var lotStr = LotNo != null && LotNo.Any() ? string.Join("_", LotNo) : "All";
+                var fileName = uploadId.HasValue ? $"BoxBreaking_v{uploadId}.xlsx" : ReportVersionHelper.GetNextVersionFileName(reportPath, $"BoxBreaking_{lotStr}.xlsx");
                 var filePath = Path.Combine(reportPath, fileName);
 
                 using (var package = new ExcelPackage())
