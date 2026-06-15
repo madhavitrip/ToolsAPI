@@ -963,6 +963,8 @@ namespace Tools.Controllers
                 bool shouldResetToStepAwaitingBox = labelFieldAffected;
 
                 bool isBothSerialsPositive = config != null && config.OmrSerialNumber > 0 && (config.BookletSerialNumber ?? 0) > 0;
+                bool resetBookletSerial = config?.ResetBookletSerialOnCatchChange ?? false;
+                int resetStep = (isBothSerialsPositive && !resetBookletSerial) ? 4 : 5;
 
                 if (quantityChanged)
                 {
@@ -981,12 +983,12 @@ namespace Tools.Controllers
                         }
                     }
 
-                    if (existingRecord.LotNo >= 0)
-                    {
-                        await _context.NRDatas
-                            .Where(x => x.ProjectId == existingRecord.ProjectId && x.LotNo == existingRecord.LotNo && (string.IsNullOrWhiteSpace(catchNo) || x.CatchNo != catchNo) && x.Status && x.Steps > 5)
-                            .ExecuteUpdateAsync(s => s.SetProperty(x => x.Steps, 5));
-                    }
+                     if (existingRecord.LotNo >= 0)
+                     {
+                         await _context.NRDatas
+                             .Where(x => x.ProjectId == existingRecord.ProjectId && x.LotNo == existingRecord.LotNo && (string.IsNullOrWhiteSpace(catchNo) || x.CatchNo != catchNo) && x.Status && x.Steps > resetStep)
+                             .ExecuteUpdateAsync(s => s.SetProperty(x => x.Steps, resetStep));
+                     }
                 }
 
                 if (NrQuantityChanged)
@@ -1006,12 +1008,12 @@ namespace Tools.Controllers
                         }
                     }
 
-                    if (existingRecord.LotNo >= 0)
-                    {
-                        await _context.NRDatas
-                            .Where(x => x.ProjectId == existingRecord.ProjectId && x.LotNo == existingRecord.LotNo && (string.IsNullOrWhiteSpace(catchNo) || x.CatchNo != catchNo) && x.Status && x.Steps > 5)
-                            .ExecuteUpdateAsync(s => s.SetProperty(x => x.Steps, 5));
-                    }
+                     if (existingRecord.LotNo >= 0)
+                     {
+                         await _context.NRDatas
+                             .Where(x => x.ProjectId == existingRecord.ProjectId && x.LotNo == existingRecord.LotNo && (string.IsNullOrWhiteSpace(catchNo) || x.CatchNo != catchNo) && x.Status && x.Steps > resetStep)
+                             .ExecuteUpdateAsync(s => s.SetProperty(x => x.Steps, resetStep));
+                     }
                 }
                 else if (!isBothSerialsPositive && changedFields.Any())
                 {
