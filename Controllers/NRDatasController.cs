@@ -1808,6 +1808,7 @@ namespace Tools.Controllers
                 maxStep,
                 totalActive = activeSteps.Count,
                 // Helpful flags for the UI to disable/enable specific rerun buttons
+                duplicatePending = activeSteps.Any(s => s <= 1),
                 enhancementPending = activeSteps.Any(s => s <= 2),
                 extraPending = activeSteps.Any(s => s <= 3),
                 envelopePending = activeSteps.Any(s => s <= 4),
