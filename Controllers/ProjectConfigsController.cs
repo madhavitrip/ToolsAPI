@@ -158,12 +158,31 @@ namespace Tools.Controllers
                 return BadRequest();
             }
 
+            // Fetch existing config to determine if pipeline steps need to be reverted
+            var oldConfig = await _context.ProjectConfigs.AsNoTracking().FirstOrDefaultAsync(p => p.Id == id);
+            int minResetStep = -1;
+            var affectedModules = new List<string>();
+            
+            if (oldConfig != null)
+            {
+                minResetStep = GetMinResetStep(oldConfig, projectConfig);
+                affectedModules = GetAffectedModulesForStep(minResetStep);
+            }
+
             _context.Entry(projectConfig).State = EntityState.Modified;
 
             try
             {
                 await _context.SaveChangesAsync();
                 await ResetReportStatus(projectConfig.ProjectId);
+
+                if (minResetStep >= 0)
+                {
+                    await _context.NRDatas
+                        .Where(x => x.ProjectId == projectConfig.ProjectId && x.Status == true && x.Steps > minResetStep)
+                        .ExecuteUpdateAsync(s => s.SetProperty(x => x.Steps, minResetStep));
+                }
+
                 await _loggerService.LogEventAsync($"Updated ProjectConfig for {projectConfig.ProjectId}", "ProjectConfig", LogHelper.GetTriggeredBy(User), projectConfig.ProjectId);
             }
             catch (Exception ex)
@@ -181,7 +200,13 @@ namespace Tools.Controllers
                 }
             }
 
-            return NoContent();
+            return Ok(new
+            {
+                message = "Configuration updated successfully",
+                stepsReverted = minResetStep >= 0,
+                minResetStep = minResetStep,
+                affectedModules = affectedModules
+            });
         }
 
         // POST: api/ProjectConfigs
@@ -278,19 +303,21 @@ namespace Tools.Controllers
                 return StatusCode(500, "Internal server error");
             }
         }
+
         private Dictionary<string, string> GetModuleToReportKeyMap()
         {
             return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-    {
-        { "duplicate tool", "duplicate" },
-        { "extra configuration", "extra" },
-        { "envelope breaking", "envelope" },
-        { "box breaking", "box" },
-        { "envelope summary", "envelopeSummary" },
-        { "catch summary report", "catchSummary" },
-        { "catchomrserialingreport", "catchOmrSerialing" }
-    };
+            {
+                { "duplicate tool", "duplicate" },
+                { "extra configuration", "extra" },
+                { "envelope breaking", "envelope" },
+                { "box breaking", "box" },
+                { "envelope summary", "envelopeSummary" },
+                { "catch summary report", "catchSummary" },
+                { "catchomrserialingreport", "catchOmrSerialing" }
+            };
         }
+
         // DELETE: api/ProjectConfigs/5
         [HttpDelete("{id}")]
         public async Task<IActionResult> DeleteProjectConfig(int id)
@@ -321,6 +348,123 @@ namespace Tools.Controllers
             return _context.ProjectConfigs.Any(e => e.Id == id);
         }
 
+        private bool AreIntListsEqual(List<int>? list1, List<int>? list2)
+        {
+            if (list1 == null && list2 == null) return true;
+            if (list1 == null || list2 == null) return false;
+            return !list1.Except(list2).Any() && !list2.Except(list1).Any();
+        }
+
+        private List<string> GetAffectedModulesForStep(int minResetStep)
+        {
+            var affected = new List<string>();
+
+            switch (minResetStep)
+            {
+                case 0: // STEP_UPLOADED - all subsequent modules affected
+                    affected.Add("Duplicate Tool");
+                    affected.Add("Envelope Setup and Enhancement");
+                    affected.Add("Envelope Breaking");
+                    affected.Add("Extra Configuration");
+                    affected.Add("Box Breaking");
+                    break;
+                case 1: // STEP_DUP_PARTIAL
+                    affected.Add("Envelope Setup and Enhancement");
+                    affected.Add("Envelope Breaking");
+                    affected.Add("Extra Configuration");
+                    affected.Add("Box Breaking");
+                    break;
+                case 2: // STEP_ENHANCEMENT
+                    affected.Add("Envelope Breaking");
+                    affected.Add("Extra Configuration");
+                    affected.Add("Box Breaking");
+                    break;
+                case 3: // STEP_ENV_BREAKING
+                    affected.Add("Extra Configuration");
+                    affected.Add("Box Breaking");
+                    break;
+                case 4: // STEP_AWAITING_EXTRA
+                    affected.Add("Box Breaking");
+                    break;
+                case 5: // STEP_AWAITING_ENV
+                    affected.Add("Box Breaking");
+                    break;
+            }
+
+            return affected;
+        }
+
+        private int GetMinResetStep(ProjectConfig oldConfig, ProjectConfig newConfig)
+        {
+            int resetStep = -1;
+
+            // Check for module-specific changes and determine reset step
+            // Module 1 = Duplicate Tool (Step 0)
+            if (!AreIntListsEqual(oldConfig.DuplicateCriteria, newConfig.DuplicateCriteria) ||
+                !AreIntListsEqual(oldConfig.DuplicateRemoveFields, newConfig.DuplicateRemoveFields))
+            {
+                resetStep = 0; // STEP_UPLOADED
+            }
+
+            // Module 2 = Enhancement / Envelope Setup (Step 1)
+            if (oldConfig.Enhancement != newConfig.Enhancement ||
+                oldConfig.RoundOffBeforeEnhancement != newConfig.RoundOffBeforeEnhancement ||
+                oldConfig.Envelope != newConfig.Envelope)
+            {
+                resetStep = Math.Max(resetStep, 1); // STEP_DUP_PARTIAL
+            }
+
+            // Module 3 = Envelope Breaking / Making (Step 2)
+            if (!AreIntListsEqual(oldConfig.EnvelopeMakingCriteria, newConfig.EnvelopeMakingCriteria) ||
+                oldConfig.ResetOnSymbolChange != newConfig.ResetOnSymbolChange ||
+                !AreIntListsEqual(oldConfig.MssTypes, newConfig.MssTypes) ||
+                oldConfig.MssAttached != newConfig.MssAttached ||
+                oldConfig.OmrSerialNumber != newConfig.OmrSerialNumber ||
+                oldConfig.BookletSerialNumber != newConfig.BookletSerialNumber ||
+                oldConfig.ResetOmrSerialOnCatchChange != newConfig.ResetOmrSerialOnCatchChange ||
+                oldConfig.ResetBookletSerialOnCatchChange != newConfig.ResetBookletSerialOnCatchChange)
+            {
+                resetStep = Math.Max(resetStep, 2); // STEP_ENHANCEMENT
+            }
+
+            // Module 4 = Extra Configuration (Step 4)
+            // No specific config fields for this module in current ProjectConfig model
+            // If module toggle changes, check if it was disabled (removed from Modules list)
+            if (!AreIntListsEqual(oldConfig.Modules, newConfig.Modules))
+            {
+                var oldHasModule4 = oldConfig.Modules?.Contains(4) ?? false;
+                var newHasModule4 = newConfig.Modules?.Contains(4) ?? false;
+
+                if (oldHasModule4 && !newHasModule4)
+                {
+                    // Module 4 was disabled - no step reversion needed
+                }
+                else if (!oldHasModule4 && newHasModule4)
+                {
+                    // Module 4 was enabled - data can proceed as-is
+                }
+                else if (oldHasModule4 && newHasModule4)
+                {
+                    // Module 4 remains enabled but other modules may have changed
+                    // Handle module re-ordering or duplication changes
+                    resetStep = Math.Max(resetStep, 4); // STEP_AWAITING_EXTRA
+                }
+            }
+
+            // Module 5 = Box Breaking (Step 5)
+            if (oldConfig.BoxCapacity != newConfig.BoxCapacity ||
+                oldConfig.BoxNumber != newConfig.BoxNumber ||
+                !AreIntListsEqual(oldConfig.BoxBreakingCriteria, newConfig.BoxBreakingCriteria) ||
+                !AreIntListsEqual(oldConfig.SortingBoxReport, newConfig.SortingBoxReport) ||
+                oldConfig.IsInnerBundlingDone != newConfig.IsInnerBundlingDone ||
+                !AreIntListsEqual(oldConfig.InnerBundlingCriteria, newConfig.InnerBundlingCriteria))
+            {
+                resetStep = Math.Max(resetStep, 5); // STEP_AWAITING_ENV
+            }
+
+            return resetStep;
+        }
+
         private async Task ResetReportStatus(int projectId)
         {
             try
@@ -336,4 +480,3 @@ namespace Tools.Controllers
         }
     }
 }
-
