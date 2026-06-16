@@ -174,10 +174,11 @@ namespace Tools.Controllers
             try
             {
                 await _context.SaveChangesAsync();
-                await ResetReportStatus(projectConfig.ProjectId);
-
+                
                 if (minResetStep >= 0)
                 {
+                    await ResetAndCleanAffectedReports(projectConfig.ProjectId, affectedModules);
+
                     await _context.NRDatas
                         .Where(x => x.ProjectId == projectConfig.ProjectId && x.Status == true && x.Steps > minResetStep)
                         .ExecuteUpdateAsync(s => s.SetProperty(x => x.Steps, minResetStep));
@@ -196,7 +197,6 @@ namespace Tools.Controllers
                 {
                     await _loggerService.LogErrorAsync("Error updating ProjectConfigs", ex.Message, nameof(ProjectConfigsController));
                     return StatusCode(500, "Internal server error");
-
                 }
             }
 
@@ -216,24 +216,52 @@ namespace Tools.Controllers
         {
             try
             {
-                var config = await _context.ProjectConfigs.Where(p => p.ProjectId == projectConfig.ProjectId).FirstOrDefaultAsync();
-                
-                if (config != null)
+                var oldConfig = await _context.ProjectConfigs.AsNoTracking().Where(p => p.ProjectId == projectConfig.ProjectId).FirstOrDefaultAsync();
+                int minResetStep = -1;
+                var affectedModules = new List<string>();
+
+                if (oldConfig != null)
                 {
-                    await _loggerService.LogEventAsync($"ProjectConfig for {config.ProjectId} already exists", "ProjectConfig", LogHelper.GetTriggeredBy(User), projectConfig.ProjectId);
-                   
-                    _context.ProjectConfigs.Remove(config);
-                    await _context.SaveChangesAsync();
+                    await _loggerService.LogEventAsync($"ProjectConfig for {oldConfig.ProjectId} already exists. Replacing config.", "ProjectConfig", LogHelper.GetTriggeredBy(User), projectConfig.ProjectId);
+                    
+                    minResetStep = GetMinResetStep(oldConfig, projectConfig);
+                    affectedModules = GetAffectedModulesForStep(minResetStep);
+
+                    // Remove existing config first
+                    var trackingConfig = await _context.ProjectConfigs.FirstOrDefaultAsync(p => p.ProjectId == projectConfig.ProjectId);
+                    if (trackingConfig != null)
+                    {
+                        _context.ProjectConfigs.Remove(trackingConfig);
+                        await _context.SaveChangesAsync();
+                    }
                 }
+
                 _context.ProjectConfigs.Add(projectConfig);
                 await _context.SaveChangesAsync();
-                await ResetReportStatus(projectConfig.ProjectId);
-                await _loggerService.LogEventAsync($"Created a new ProjectConfig with ID {projectConfig.ProjectId}", "ProjectConfig", LogHelper.GetTriggeredBy(User), projectConfig.ProjectId);
+
+                if (oldConfig != null)
+                {
+                    if (minResetStep >= 0)
+                    {
+                        await ResetAndCleanAffectedReports(projectConfig.ProjectId, affectedModules);
+                        
+                        await _context.NRDatas
+                            .Where(x => x.ProjectId == projectConfig.ProjectId && x.Status == true && x.Steps > minResetStep)
+                            .ExecuteUpdateAsync(s => s.SetProperty(x => x.Steps, minResetStep));
+                    }
+                }
+                else
+                {
+                    // Brand new configuration, clear all template statuses just in case
+                    await ResetReportStatus(projectConfig.ProjectId);
+                }
+
+                await _loggerService.LogEventAsync($"Created/Updated ProjectConfig with ID {projectConfig.ProjectId}", "ProjectConfig", LogHelper.GetTriggeredBy(User), projectConfig.ProjectId);
                 return CreatedAtAction("GetProjectConfig", new { id = projectConfig.Id }, projectConfig);
             }
             catch (Exception ex)
             {
-                await _loggerService.LogErrorAsync("Error creating ProjectConfigs", ex.Message, nameof(ProjectConfigsController));
+                await _loggerService.LogErrorAsync("Error creating/updating ProjectConfigs", ex.Message, nameof(ProjectConfigsController));
                 return StatusCode(500, "Internal server error");
             }
         }
@@ -414,6 +442,11 @@ namespace Tools.Controllers
                 resetStep = Math.Max(resetStep, 1); // STEP_DUP_PARTIAL
             }
 
+            if (oldConfig.Envelope != newConfig.Envelope)
+            {
+                resetStep = Math.Max(resetStep, 2); // STEP_DUP_PARTIAL
+            }
+
             // Module 3 = Envelope Breaking / Making (Step 2)
             if (!AreIntListsEqual(oldConfig.EnvelopeMakingCriteria, newConfig.EnvelopeMakingCriteria) ||
                 oldConfig.ResetOnSymbolChange != newConfig.ResetOnSymbolChange ||
@@ -424,7 +457,7 @@ namespace Tools.Controllers
                 oldConfig.ResetOmrSerialOnCatchChange != newConfig.ResetOmrSerialOnCatchChange ||
                 oldConfig.ResetBookletSerialOnCatchChange != newConfig.ResetBookletSerialOnCatchChange)
             {
-                resetStep = Math.Max(resetStep, 2); // STEP_ENHANCEMENT
+                resetStep = Math.Max(resetStep, 4); // STEP_ENHANCEMENT
             }
 
             // Module 4 = Extra Configuration (Step 4)
@@ -447,7 +480,7 @@ namespace Tools.Controllers
                 {
                     // Module 4 remains enabled but other modules may have changed
                     // Handle module re-ordering or duplication changes
-                    resetStep = Math.Max(resetStep, 4); // STEP_AWAITING_EXTRA
+                    resetStep = Math.Max(resetStep, 3); // STEP_AWAITING_EXTRA
                 }
             }
 
@@ -463,6 +496,87 @@ namespace Tools.Controllers
             }
 
             return resetStep;
+        }
+
+        private async Task ResetAndCleanAffectedReports(int projectId, List<string> affectedModules)
+        {
+            try
+            {
+                // 1. Reset template statuses in database
+                var dbModules = await _context.Modules.ToListAsync();
+                var affectedModuleIds = dbModules
+                    .Where(m => affectedModules.Contains(m.Name, StringComparer.OrdinalIgnoreCase))
+                    .Select(m => m.Id)
+                    .ToList();
+
+                if (affectedModuleIds.Any())
+                {
+                    // Fetch templates for project
+                    var templates = await _context.RPTTemplates
+                        .Where(t => t.ProjectId == projectId && t.ReportStatus)
+                        .ToListAsync();
+
+                    var templatesToReset = templates
+                        .Where(t => t.ModuleIds != null && t.ModuleIds.Any(id => affectedModuleIds.Contains(id)))
+                        .ToList();
+
+                    if (templatesToReset.Any())
+                    {
+                        foreach (var t in templatesToReset)
+                        {
+                            t.ReportStatus = false;
+                        }
+                        await _context.SaveChangesAsync();
+                    }
+                }
+
+                // 2. Clean physical report files
+                var moduleToReportKeyMap = GetModuleToReportKeyMap();
+                var reportKeys = affectedModules
+                    .Select(name => name?.Trim().ToLower())
+                    .Where(name => name != null && moduleToReportKeyMap.ContainsKey(name))
+                    .Select(name => moduleToReportKeyMap[name])
+                    .Distinct()
+                    .ToList();
+
+                // If "Envelope Breaking" is affected, we should also delete envelopeSummary
+                if (affectedModules.Contains("Envelope Breaking", StringComparer.OrdinalIgnoreCase))
+                {
+                    reportKeys.Add("envelopeSummary");
+                }
+                // If "Box Breaking" is affected, we should also delete catchSummary and catchOmrSerialing
+                if (affectedModules.Contains("Box Breaking", StringComparer.OrdinalIgnoreCase))
+                {
+                    reportKeys.Add("catchSummary");
+                    reportKeys.Add("catchOmrSerialing");
+                }
+
+                reportKeys = reportKeys.Distinct().ToList();
+
+                var basePath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", projectId.ToString());
+                if (Directory.Exists(basePath))
+                {
+                    foreach (var key in reportKeys)
+                    {
+                        var files = Directory.GetFiles(basePath, $"{key}*");
+                        foreach (var file in files)
+                        {
+                            try
+                            {
+                                System.IO.File.Delete(file);
+                            }
+                            catch (Exception ex)
+                            {
+                                await _loggerService.LogErrorAsync($"Error deleting file: {file}", ex.Message, nameof(ProjectConfigsController));
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                await _loggerService.LogErrorAsync("Error resetting affected reports", ex.Message, nameof(ProjectConfigsController));
+            }
         }
 
         private async Task ResetReportStatus(int projectId)

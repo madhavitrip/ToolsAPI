@@ -76,10 +76,62 @@ namespace Tools.Controllers
             string? search = null,
             string? key = null,
             string? sortField = null,
-            string? sortOrder = null)
+            string? sortOrder = null,
+            string? filters = null)
         {
             IQueryable<NRData> query = _context.NRDatas
              .Where(d => d.ProjectId == projectId && d.Status == true);
+
+            // Apply combination filters if provided
+            if (!string.IsNullOrWhiteSpace(filters))
+            {
+                try
+                {
+                    var filterDict = JsonSerializer.Deserialize<Dictionary<string, string>>(filters);
+                    if (filterDict != null)
+                    {
+                        foreach (var kvp in filterDict)
+                        {
+                            var filterKey = kvp.Key;
+                            var filterVal = kvp.Value?.Trim().ToLowerInvariant();
+
+                            if (string.IsNullOrWhiteSpace(filterVal))
+                                continue;
+
+                            var prop = typeof(NRData).GetProperties()
+                                .FirstOrDefault(p => p.Name.Equals(filterKey, StringComparison.OrdinalIgnoreCase));
+
+                            if (prop != null)
+                            {
+                                query = prop.Name.ToLowerInvariant() switch
+                                {
+                                    "catchno" => query.Where(d => d.CatchNo != null && d.CatchNo.ToLower().Contains(filterVal)),
+                                    "centercode" => query.Where(d => d.CenterCode != null && d.CenterCode.ToLower().Contains(filterVal)),
+                                    "subjectname" => query.Where(d => d.SubjectName != null && d.SubjectName.ToLower().Contains(filterVal)),
+                                    "coursename" => query.Where(d => d.CourseName != null && d.CourseName.ToLower().Contains(filterVal)),
+                                    "nodalcode" => query.Where(d => d.NodalCode != null && d.NodalCode.ToLower().Contains(filterVal)),
+                                    "route" => query.Where(d => d.Route != null && d.Route.ToLower().Contains(filterVal)),
+                                    "examdate" => query.Where(d => d.ExamDate != null && d.ExamDate.ToLower().Contains(filterVal)),
+                                    "examtime" => query.Where(d => d.ExamTime != null && d.ExamTime.ToLower().Contains(filterVal)),
+                                    "symbol" => query.Where(d => d.Symbol != null && d.Symbol.ToLower().Contains(filterVal)),
+                                    _ => query
+                                };
+                            }
+                            else
+                            {
+                                // Check dynamic fields in NRDatas JSON
+                                var likePattern = $"%\"{filterKey}\":%";
+                                var valLikePattern = $"%\"{filterKey}\":\"%{filterVal}%\"%";
+                                query = query.Where(d => d.NRDatas != null && EF.Functions.Like(d.NRDatas, likePattern) && EF.Functions.Like(d.NRDatas, valLikePattern));
+                            }
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    await _loggerService.LogErrorAsync("Error parsing filters in GetByProjectId", ex.Message, nameof(NRDatasController));
+                }
+            }
 
             // Apply column-specific search when both search text and key are provided.
             // Apply global search when only search text is provided.
@@ -125,20 +177,20 @@ namespace Tools.Controllers
                 }
             }
             else if (!string.IsNullOrEmpty(search))
-{
-    search = search.ToLower();
+            {
+                search = search.ToLower();
 
-    query = query.Where(n =>
-        (n.CatchNo ?? "").ToLower().Contains(search) ||
-        (n.CenterCode ?? "").ToLower().Contains(search) ||
-        (n.SubjectName ?? "").ToLower().Contains(search) ||
-        (n.CourseName ?? "").ToLower().Contains(search) ||
-        (n.NodalCode ?? "").ToLower().Contains(search) ||
-        (n.Route ?? "").ToLower().Contains(search) ||
-        (n.Symbol ?? "").ToLower().Contains(search) ||
-        (n.NRDatas ?? "").ToLower().Contains(search)
-    );
-}
+                query = query.Where(n =>
+                    (n.CatchNo ?? "").ToLower().Contains(search) ||
+                    (n.CenterCode ?? "").ToLower().Contains(search) ||
+                    (n.SubjectName ?? "").ToLower().Contains(search) ||
+                    (n.CourseName ?? "").ToLower().Contains(search) ||
+                    (n.NodalCode ?? "").ToLower().Contains(search) ||
+                    (n.Route ?? "").ToLower().Contains(search) ||
+                    (n.Symbol ?? "").ToLower().Contains(search) ||
+                    (n.NRDatas ?? "").ToLower().Contains(search)
+                );
+            }
 
             // Server-side sorting so it works across all pages.
             var normalizedSortField = NormalizeText(sortField);
@@ -606,6 +658,104 @@ namespace Tools.Controllers
                 await _loggerService.LogErrorAsync("Error fetching upload versions", ex.Message, nameof(NRDatasController));
                 return StatusCode(500, "Internal Server Error");
             }
+        }
+
+        [HttpGet("CheckValueExists/{projectId}")]
+        public async Task<IActionResult> CheckValueExists(int projectId, [FromQuery] string fieldName, [FromQuery] string value)
+        {
+            if (string.IsNullOrWhiteSpace(fieldName) || string.IsNullOrWhiteSpace(value))
+            {
+                return BadRequest("fieldName and value are required.");
+            }
+
+            var normalizedValue = value.Trim().ToLowerInvariant();
+
+            // 1. Check if standard property
+            var prop = typeof(NRData).GetProperties()
+                .FirstOrDefault(p => p.Name.Equals(fieldName, StringComparison.OrdinalIgnoreCase));
+
+            if (prop != null)
+            {
+                bool exists = false;
+                var query = _context.NRDatas.Where(d => d.ProjectId == projectId && d.Status == true);
+
+                switch (prop.Name.ToLowerInvariant())
+                {
+                    case "centercode":
+                        exists = await query.AnyAsync(d => d.CenterCode != null && d.CenterCode.ToLower() == normalizedValue);
+                        break;
+                    case "subjectname":
+                        exists = await query.AnyAsync(d => d.SubjectName != null && d.SubjectName.ToLower() == normalizedValue);
+                        break;
+                    case "coursename":
+                        exists = await query.AnyAsync(d => d.CourseName != null && d.CourseName.ToLower() == normalizedValue);
+                        break;
+                    case "nodalcode":
+                        exists = await query.AnyAsync(d => d.NodalCode != null && d.NodalCode.ToLower() == normalizedValue);
+                        break;
+                    case "route":
+                        exists = await query.AnyAsync(d => d.Route != null && d.Route.ToLower() == normalizedValue);
+                        break;
+                    case "examdate":
+                        exists = await query.AnyAsync(d => d.ExamDate != null && d.ExamDate.ToLower() == normalizedValue);
+                        break;
+                    case "examtime":
+                        exists = await query.AnyAsync(d => d.ExamTime != null && d.ExamTime.ToLower() == normalizedValue);
+                        break;
+                    case "symbol":
+                        exists = await query.AnyAsync(d => d.Symbol != null && d.Symbol.ToLower() == normalizedValue);
+                        break;
+                    case "catchno":
+                        exists = await query.AnyAsync(d => d.CatchNo != null && d.CatchNo.ToLower() == normalizedValue);
+                        break;
+                    default:
+                        if (prop.PropertyType == typeof(string))
+                        {
+                            exists = await query.AnyAsync(d => EF.Property<string>(d, prop.Name) != null && EF.Property<string>(d, prop.Name).ToLower() == normalizedValue);
+                        }
+                        break;
+                }
+
+                return Ok(new { exists });
+            }
+
+            // 2. Check dynamic fields in NRDatas JSON
+            var likePattern = $"%\"{fieldName}\":%";
+            var jsonRecords = await _context.NRDatas
+                .Where(d => d.ProjectId == projectId && d.Status == true && d.NRDatas != null && EF.Functions.Like(d.NRDatas, likePattern))
+                .Select(d => d.NRDatas)
+                .ToListAsync();
+
+            bool jsonExists = false;
+            foreach (var jsonStr in jsonRecords)
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(jsonStr);
+                    if (doc.RootElement.TryGetProperty(fieldName, out var propVal))
+                    {
+                        if (propVal.ToString().Trim().ToLowerInvariant() == normalizedValue)
+                        {
+                            jsonExists = true;
+                            break;
+                        }
+                    }
+                    else
+                    {
+                        foreach (var jp in doc.RootElement.EnumerateObject())
+                        {
+                            if (jp.Name.Equals(fieldName, StringComparison.OrdinalIgnoreCase) && jp.Value.ToString().Trim().ToLowerInvariant() == normalizedValue)
+                            {
+                                jsonExists = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                catch { }
+            }
+
+            return Ok(new { exists = jsonExists });
         }
 
         [HttpPost("merge-catchnos")]
