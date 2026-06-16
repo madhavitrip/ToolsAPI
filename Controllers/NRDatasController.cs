@@ -81,7 +81,8 @@ namespace Tools.Controllers
             IQueryable<NRData> query = _context.NRDatas
              .Where(d => d.ProjectId == projectId && d.Status == true);
 
-            // ? APPLY SEARCH IF KEY + SEARCH PROVIDED
+            // Apply column-specific search when both search text and key are provided.
+            // Apply global search when only search text is provided.
             if (!string.IsNullOrWhiteSpace(search) && !string.IsNullOrWhiteSpace(key))
             {
                 search = search.ToLower();
@@ -123,6 +124,21 @@ namespace Tools.Controllers
                         return BadRequest($"Key '{key}' is not searchable.");
                 }
             }
+            else if (!string.IsNullOrEmpty(search))
+{
+    search = search.ToLower();
+
+    query = query.Where(n =>
+        (n.CatchNo ?? "").ToLower().Contains(search) ||
+        (n.CenterCode ?? "").ToLower().Contains(search) ||
+        (n.SubjectName ?? "").ToLower().Contains(search) ||
+        (n.CourseName ?? "").ToLower().Contains(search) ||
+        (n.NodalCode ?? "").ToLower().Contains(search) ||
+        (n.Route ?? "").ToLower().Contains(search) ||
+        (n.Symbol ?? "").ToLower().Contains(search) ||
+        (n.NRDatas ?? "").ToLower().Contains(search)
+    );
+}
 
             // Server-side sorting so it works across all pages.
             var normalizedSortField = NormalizeText(sortField);
@@ -190,9 +206,9 @@ namespace Tools.Controllers
 
                 return Ok(new
                 {
-                    data = new List<object>(),
+                    items = new List<object>(),
                     columns = allColumns,
-                    totalRecords = 0,
+                    totalCount = 0,
                     totalPages = 0
                 });
             }
@@ -221,162 +237,178 @@ namespace Tools.Controllers
 
         [HttpGet("GetUniqueByProjectId/{projectId}")]
         public async Task<ActionResult> GetUniqueByProjectId(
-    int projectId,
-    int pageSize,
-    int pageNo,
-    string? search = null,
-    string? key = null,
-    string? sortField = null,
-    string? sortOrder = null,
-    int? lotNo = null,
-    bool? assigned = null,
-    bool? missingExamDate = null)
+      int projectId,
+      int pageSize,
+      int pageNo,
+      string? search = null,
+      string? key = null,
+      string? sortField = null,
+      string? sortOrder = null,
+      int? lotNo = null,
+      bool? assigned = null,
+      bool? missingExamDate = null)
         {
             IQueryable<NRData> query = _context.NRDatas
                 .Where(d => d.ProjectId == projectId && d.Status == true);
+
 
             if (lotNo.HasValue)
             {
                 query = query.Where(d => d.LotNo == lotNo.Value);
             }
 
+
             if (assigned.HasValue)
             {
-                if (assigned.Value)
-                {
-                    query = query.Where(d => d.LotNo > 0);
-                }
-                else
-                {
-                    query = query.Where(d => d.LotNo <= 0);
-                }
+                query = assigned.Value
+                    ? query.Where(d => d.LotNo > 0)
+                    : query.Where(d => d.LotNo <= 0);
             }
+
 
             if (missingExamDate.HasValue && missingExamDate.Value)
             {
-                query = query.Where(d => d.ExamDate == null || d.ExamDate == "" || d.ExamDate == "null" || d.ExamDate == "undefined");
+                query = query.Where(d =>
+                    d.ExamDate == null ||
+                    d.ExamDate == "" ||
+                    d.ExamDate == "null" ||
+                    d.ExamDate == "undefined");
             }
 
-            // Search
-            if (!string.IsNullOrWhiteSpace(search) && !string.IsNullOrWhiteSpace(key))
+
+            // SEARCH
+            if (!string.IsNullOrWhiteSpace(search) &&
+                !string.IsNullOrWhiteSpace(key))
             {
                 search = search.ToLower();
 
-                switch (key)
+                query = key switch
                 {
-                    case "CatchNo":
-                        query = query.Where(d => d.CatchNo != null &&
-                                                 d.CatchNo.ToLower().Contains(search));
-                        break;
-                  
+                    "CatchNo" =>
+                        query.Where(d => d.CatchNo != null &&
+                                         d.CatchNo.ToLower().Contains(search)),
 
-                    case "SubjectName":
-                        query = query.Where(d => d.SubjectName != null &&
-                                                 d.SubjectName.ToLower().Contains(search));
-                        break;
+                    "SubjectName" =>
+                        query.Where(d => d.SubjectName != null &&
+                                         d.SubjectName.ToLower().Contains(search)),
 
-                    case "CourseName":
-                        query = query.Where(d => d.CourseName != null &&
-                                                 d.CourseName.ToLower().Contains(search));
-                        break;
+                    "CourseName" =>
+                        query.Where(d => d.CourseName != null &&
+                                         d.CourseName.ToLower().Contains(search)),
 
-                    case "NodalCode":
-                        query = query.Where(d => d.NodalCode != null &&
-                                                 d.NodalCode.ToLower().Contains(search));
-                        break;
+                    "NodalCode" =>
+                        query.Where(d => d.NodalCode != null &&
+                                         d.NodalCode.ToLower().Contains(search)),
 
-                    case "Route":
-                        query = query.Where(d => d.Route != null &&
-                                                 d.Route.ToLower().Contains(search));
-                        break;
+                    "Route" =>
+                        query.Where(d => d.Route != null &&
+                                         d.Route.ToLower().Contains(search)),
 
-                    case "ExamDate":
-                        query = query.Where(d => d.ExamDate.ToString().Contains(search));
-                        break;
+                    "ExamDate" =>
+                        query.Where(d => d.ExamDate.Contains(search)),
 
-                    case "ExamTime":
-                        query = query.Where(d => d.ExamTime.ToString().Contains(search));
-                        break;
+                    "ExamTime" =>
+                        query.Where(d => d.ExamTime.Contains(search)),
 
-                    case "NRQuantity":
-                        query = query.Where(d => d.NRQuantity.ToString().Contains(search));
-                        break;
+                    "NRQuantity" =>
+                        query.Where(d => d.NRQuantity.ToString().Contains(search)),
 
-                    case "Quantity":
-                        query = query.Where(d => d.Quantity.ToString().Contains(search));
-                        break;
+                    "Quantity" =>
+                        query.Where(d => d.Quantity.ToString().Contains(search)),
 
-                    default:
-                        return BadRequest($"Key '{key}' is not searchable.");
-                }
+                    _ => throw new Exception($"Key '{key}' is not searchable.")
+                };
             }
 
-            // Group by CatchNo using aggregate functions so that MySQL can execute it in one fast pass
+
+
+            // GROUP
             var groupedQuery = query
                 .GroupBy(x => x.CatchNo)
                 .Select(g => new
                 {
                     Id = g.Min(x => x.Id),
                     CatchNo = g.Key,
+
                     ExamDate = g.Min(x => x.ExamDate),
                     ExamTime = g.Min(x => x.ExamTime),
+
                     SubjectName = g.Min(x => x.SubjectName),
                     CourseName = g.Min(x => x.CourseName),
+
                     NRQuantity = g.Sum(x => x.NRQuantity),
                     Quantity = g.Sum(x => x.Quantity),
+
                     Pages = g.Min(x => x.Pages),
                     Symbol = g.Min(x => x.Symbol),
+
                     LotNo = g.Min(x => x.LotNo),
+
                     CenterCode = g.Min(x => x.CenterCode),
+
                     NRDatas = g.Min(x => x.NRDatas),
+
                     RecordCount = g.Count()
                 });
 
-            // Sorting (on IQueryable, so it runs on database)
-            var normalizedSortField = NormalizeText(sortField);
-            var normalizedSortOrder = NormalizeText(sortOrder).ToLowerInvariant();
-            var isAscending = normalizedSortOrder != "descend";
 
-            if (!string.IsNullOrWhiteSpace(normalizedSortField))
+
+            // SORT
+            var normalizedSortField = NormalizeText(sortField);
+            var normalizedSortOrder = NormalizeText(sortOrder)
+                                        .ToLowerInvariant();
+
+            bool asc = normalizedSortOrder != "descend";
+
+
+            groupedQuery = normalizedSortField switch
             {
-                groupedQuery = normalizedSortField switch
-                {
-                    "CatchNo" => isAscending
-                        ? groupedQuery.OrderBy(x => x.CatchNo)
+                "CatchNo" =>
+                    asc ? groupedQuery.OrderBy(x => x.CatchNo)
                         : groupedQuery.OrderByDescending(x => x.CatchNo),
-                    "ExamDate" => isAscending
-                        ? groupedQuery.OrderBy(x => x.ExamDate)
+
+                "ExamDate" =>
+                    asc ? groupedQuery.OrderBy(x => x.ExamDate)
                         : groupedQuery.OrderByDescending(x => x.ExamDate),
-                    "ExamTime" => isAscending
-                        ? groupedQuery.OrderBy(x => x.ExamTime)
+
+                "ExamTime" =>
+                    asc ? groupedQuery.OrderBy(x => x.ExamTime)
                         : groupedQuery.OrderByDescending(x => x.ExamTime),
-                    "NRQuantity" => isAscending
-                        ? groupedQuery.OrderBy(x => x.NRQuantity)
+
+                "NRQuantity" =>
+                    asc ? groupedQuery.OrderBy(x => x.NRQuantity)
                         : groupedQuery.OrderByDescending(x => x.NRQuantity),
-                    "Quantity" => isAscending
-                        ? groupedQuery.OrderBy(x => x.Quantity)
+
+                "Quantity" =>
+                    asc ? groupedQuery.OrderBy(x => x.Quantity)
                         : groupedQuery.OrderByDescending(x => x.Quantity),
-                    "CourseName" => isAscending
-                        ? groupedQuery.OrderBy(x => x.CourseName)
+
+                "CourseName" =>
+                    asc ? groupedQuery.OrderBy(x => x.CourseName)
                         : groupedQuery.OrderByDescending(x => x.CourseName),
-                    "SubjectName" => isAscending
-                        ? groupedQuery.OrderBy(x => x.SubjectName)
+
+                "SubjectName" =>
+                    asc ? groupedQuery.OrderBy(x => x.SubjectName)
                         : groupedQuery.OrderByDescending(x => x.SubjectName),
-                    _ => groupedQuery.OrderBy(x => x.Id)
-                };
-            }
-            else
-            {
-                groupedQuery = groupedQuery.OrderBy(x => x.Id);
-            }
+
+                _ => groupedQuery.OrderBy(x => x.Id)
+            };
+
+
 
             int totalCount = await groupedQuery.CountAsync();
-            int totalPages = (int)Math.Ceiling(totalCount / (double)pageSize);
+
+            int totalPages = (int)Math.Ceiling(
+                totalCount / (double)pageSize);
+
+
 
             var data = await groupedQuery
                 .Skip((pageNo - 1) * pageSize)
                 .Take(pageSize)
                 .ToListAsync();
+
+
 
             if (!data.Any())
             {
@@ -389,55 +421,73 @@ namespace Tools.Controllers
                 });
             }
 
-            var properties = data.First().GetType().GetProperties();
 
+
+            // GET UNIQUE FIELDS
             var uniqueFieldNames = await _context.Fields
                 .Where(f => f.IsUnique)
                 .Select(f => f.Name.ToLowerInvariant())
                 .ToListAsync();
 
+
+
+            var properties = data.First()
+                .GetType()
+                .GetProperties();
+
+
+
+            // ONLY UNIQUE COLUMNS + SYSTEM FIELDS
+            var columns = properties
+                .Where(p =>
+                    uniqueFieldNames.Contains(
+                        p.Name.ToLowerInvariant())
+                    ||
+                    p.Name.Equals("Id",
+                        StringComparison.OrdinalIgnoreCase)
+                    ||
+                    p.Name.Equals("CatchNo",
+                        StringComparison.OrdinalIgnoreCase)
+                    ||
+                    p.Name.Equals("RecordCount",
+                        StringComparison.OrdinalIgnoreCase)
+                    ||
+                    p.Name.Equals("NRDatas",
+                        StringComparison.OrdinalIgnoreCase)
+                )
+                .Select(p => p.Name)
+                .ToList();
+
+
+
             var result = data.Select(d =>
             {
                 var dict = new Dictionary<string, object?>();
-                foreach (var prop in properties)
+
+
+                foreach (var col in columns)
                 {
-                    var name = prop.Name;
-                    var value = prop.GetValue(d);
+                    var prop = properties
+                        .First(x => x.Name == col);
 
-                    var isSystemProp = name.Equals("Id", StringComparison.OrdinalIgnoreCase) ||
-                                       name.Equals("CatchNo", StringComparison.OrdinalIgnoreCase) ||
-                                       name.Equals("RecordCount", StringComparison.OrdinalIgnoreCase) ||
-                                       name.Equals("NRDatas", StringComparison.OrdinalIgnoreCase);
-
-                    if (isSystemProp)
-                    {
-                        dict[name] = value;
-                    }
-                    else
-                    {
-                        if (uniqueFieldNames.Contains(name.ToLowerInvariant()))
-                        {
-                            dict[name] = value;
-                        }
-                        else
-                        {
-                            dict[name] = null;
-                        }
-                    }
+                    dict[col] = prop.GetValue(d);
                 }
+
+
                 return dict;
-            });
+
+            }).ToList();
+
+
 
             return Ok(new
             {
                 items = result,
-                columns = properties.Select(p => p.Name).ToList(),
-                uniqueColumns = uniqueFieldNames,
-                totalCount = totalCount,
-                totalPages = totalPages
+                columns = columns,
+                totalCount,
+                totalPages
             });
-         }
-
+        }
         [HttpGet("UploadVersions/{projectId}")]
         public async Task<IActionResult> GetUploadVersions(int projectId)
         {
@@ -4815,4 +4865,3 @@ namespace Tools.Controllers
         }
     }
 }
-
