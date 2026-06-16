@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk.Web">
+<Project Sdk="Microsoft.NET.Sdk.Web">
 
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
@@ -27,16 +27,23 @@
   </ItemGroup>
 
   <!-- Exclude files from publish -->
+  <PropertyGroup>
+    <IsTransformWebConfigDisabled>true</IsTransformWebConfigDisabled>
+  </PropertyGroup>
+
   <ItemGroup>
+    <!-- Exclude wwwroot folder -->
     <Content Remove="wwwroot\**" />
-  </ItemGroup>
+    <None Remove="wwwroot\**" />
+    <ResolvedFileToPublish Remove="wwwroot\**" />
 
-  <!-- Exclude appsettings files from publish (they should be managed separately in production) -->
-  <ItemGroup>
-   <None Remove="appsettings.json" />
-   <None Remove="appsettings.Development.json" /> <None Remove="appsettings.json" />
-    <None Remove="appsettings.Development.json" />
-    <None Remove="web.config" />
-  </ItemGroup>
+    <!-- Exclude appsettings.Production.json -->
+    <Content Update="appsettings.Production.json" CopyToPublishDirectory="Never" />
+    <ResolvedFileToPublish Remove="appsettings.Production.json" />
 
+    <!-- Exclude web.config -->
+    <Content Update="web.config" CopyToPublishDirectory="Never" />
+    <None Update="web.config" CopyToPublishDirectory="Never" />
+    <ResolvedFileToPublish Remove="web.config" />
+  </ItemGroup>
 </Project>

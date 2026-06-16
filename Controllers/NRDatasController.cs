@@ -296,25 +296,14 @@ namespace Tools.Controllers
                         query.Where(d => d.CourseName != null &&
                                          d.CourseName.ToLower().Contains(search)),
 
-                    "NodalCode" =>
-                        query.Where(d => d.NodalCode != null &&
-                                         d.NodalCode.ToLower().Contains(search)),
-
-                    "Route" =>
-                        query.Where(d => d.Route != null &&
-                                         d.Route.ToLower().Contains(search)),
-
+                 
                     "ExamDate" =>
                         query.Where(d => d.ExamDate.Contains(search)),
 
                     "ExamTime" =>
                         query.Where(d => d.ExamTime.Contains(search)),
 
-                    "NRQuantity" =>
-                        query.Where(d => d.NRQuantity.ToString().Contains(search)),
-
-                    "Quantity" =>
-                        query.Where(d => d.Quantity.ToString().Contains(search)),
+                 
 
                     _ => throw new Exception($"Key '{key}' is not searchable.")
                 };
@@ -346,7 +335,7 @@ namespace Tools.Controllers
 
                     CenterCode = g.Min(x => x.CenterCode),
 
-                    NRDatas = g.Min(x => x.NRDatas),
+                    NRDatas = g.Select(x => x.NRDatas).FirstOrDefault(),
 
                     RecordCount = g.Count()
                 });
@@ -454,25 +443,96 @@ namespace Tools.Controllers
                     ||
                     p.Name.Equals("NRDatas",
                         StringComparison.OrdinalIgnoreCase)
+                    ||
+                    p.Name.Equals("Quantity",
+                        StringComparison.OrdinalIgnoreCase)
                 )
                 .Select(p => p.Name)
                 .ToList();
 
-
+            // Add unique fields from NRDatas JSON
+            foreach (var field in uniqueFieldNames)
+            {
+                if (!columns.Any(c =>
+                    c.Equals(field,
+                    StringComparison.OrdinalIgnoreCase)))
+                {
+                    columns.Add(field);
+                }
+            }
 
             var result = data.Select(d =>
             {
-                var dict = new Dictionary<string, object?>();
+                var dict = new Dictionary<string, object?>(
+                    StringComparer.OrdinalIgnoreCase);
 
-
+                // Existing properties
                 foreach (var col in columns)
                 {
                     var prop = properties
-                        .First(x => x.Name == col);
+                        .FirstOrDefault(x =>
+                            x.Name.Equals(col,
+                            StringComparison.OrdinalIgnoreCase));
 
-                    dict[col] = prop.GetValue(d);
+                    if (prop != null)
+                    {
+                        dict[col] = prop.GetValue(d);
+                    }
                 }
 
+                // Read unique fields from NRDatas JSON
+                var nrDatasValue = properties
+                    .FirstOrDefault(x => x.Name == "NRDatas")
+                    ?.GetValue(d)?
+                    .ToString();
+
+                if (!string.IsNullOrWhiteSpace(nrDatasValue))
+                {
+                    try
+                    {
+                        using var jsonDoc =
+                            JsonDocument.Parse(nrDatasValue);
+
+                        foreach (var uniqueField in uniqueFieldNames)
+                        {
+                            foreach (var property in jsonDoc.RootElement.EnumerateObject())
+                            {
+                                if (property.Name.Equals(
+                                    uniqueField,
+                                    StringComparison.OrdinalIgnoreCase))
+                                {
+                                    dict[property.Name] =
+                                        property.Value.ValueKind switch
+                                        {
+                                            JsonValueKind.String =>
+                                                property.Value.GetString(),
+
+                                            JsonValueKind.Number =>
+                                                property.Value.ToString(),
+
+                                            JsonValueKind.True =>
+                                                true,
+
+                                            JsonValueKind.False =>
+                                                false,
+
+                                            JsonValueKind.Null =>
+                                                null,
+
+                                            _ =>
+                                                property.Value.ToString()
+                                        };
+
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    catch
+                    {
+                        // Ignore invalid JSON
+                    }
+                }
 
                 return dict;
 
@@ -480,10 +540,44 @@ namespace Tools.Controllers
 
 
 
+            var finalColumns = new List<string>();
+            foreach (var col in columns)
+            {
+                if (col.Equals("Id", StringComparison.OrdinalIgnoreCase) ||
+                    col.Equals("CatchNo", StringComparison.OrdinalIgnoreCase) ||
+                    col.Equals("RecordCount", StringComparison.OrdinalIgnoreCase) ||
+                    col.Equals("Quantity", StringComparison.OrdinalIgnoreCase))
+                {
+                    finalColumns.Add(col);
+                    continue;
+                }
+
+                if (col.Equals("NRDatas", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Skip adding to columns list returned in response header, but keep in data dictionary
+                    continue;
+                }
+
+                bool hasData = result.Any(d =>
+                {
+                    if (d.TryGetValue(col, out var val) && val != null)
+                    {
+                        var str = val.ToString()?.Trim();
+                        return !string.IsNullOrEmpty(str) && str != "-";
+                    }
+                    return false;
+                });
+
+                if (hasData)
+                {
+                    finalColumns.Add(col);
+                }
+            }
+
             return Ok(new
             {
                 items = result,
-                columns = columns,
+                columns = finalColumns,
                 totalCount,
                 totalPages
             });
