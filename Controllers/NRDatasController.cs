@@ -34,12 +34,16 @@ namespace Tools.Controllers
         private readonly ERPToolsDbContext _context;
         private readonly ILoggerService _loggerService;
         private readonly TemplateRegenerationService _templateRegenerationService;
+        private readonly Microsoft.Extensions.Options.IOptions<ApiSettings> _apiSettings;
+        private readonly IDispatchService _dispatchService;
 
-        public NRDatasController(ERPToolsDbContext context, ILoggerService loggerService)
+        public NRDatasController(ERPToolsDbContext context, ILoggerService loggerService, Microsoft.Extensions.Options.IOptions<ApiSettings> apiSettings, IDispatchService dispatchService)
         {
             _context = context;
             _loggerService = loggerService;
             _templateRegenerationService = new TemplateRegenerationService(context, loggerService);
+            _apiSettings = apiSettings;
+            _dispatchService = dispatchService;
         }
 
         // GET: api/NRDatas
@@ -691,7 +695,7 @@ namespace Tools.Controllers
                         Symbol = primaryRow.Symbol,
                         Status = true,
                         NRDataId = null,
-                        Steps = 3, // Tools.Models.PipelineNavigator.STEP_ENV_BREAKING
+                        Steps = 2, // Tools.Models.PipelineNavigator.STEP_ENHANCEMENT
                         UploadList = primaryRow.UploadList != null
                             ? new List<int>(primaryRow.UploadList)
                             : new List<int>(),
@@ -716,6 +720,9 @@ namespace Tools.Controllers
 
                 await _context.SaveChangesAsync();
 
+                var envController = new EnvelopeBreakagesController(_context, _loggerService, _apiSettings, _dispatchService);
+                await envController.EnvelopeConfiguration(ProjectId);
+
                 foreach (var link in rowsToLink)
                 {
                     if (mergedRowByCenter.TryGetValue(link.CenterKey, out var mergedRow))
@@ -726,6 +733,12 @@ namespace Tools.Controllers
 
                 var projectConfig = await _context.ProjectConfigs
                     .FirstOrDefaultAsync(x => x.ProjectId == ProjectId);
+
+                var nextStep = Tools.Models.PipelineNavigator.GetNextStep(Tools.Models.PipelineNavigator.STEP_ENV_BREAKING, projectConfig?.Modules);
+                foreach (var row in newMergedRows)
+                {
+                    row.Steps = nextStep;
+                }
 
                 var affectedLotNos = newMergedRows
                     .Where(x => x.LotNo != null)
