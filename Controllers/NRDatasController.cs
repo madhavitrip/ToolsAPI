@@ -1359,7 +1359,7 @@ namespace Tools.Controllers
                     // =========================================================
                     // PROPAGATION & STEP RESET RULES FOR SAME CATCH (NON-QUANTITY CHANGES)
                     // =========================================================
-                    else if ((nodalChanged || shouldResetToStepAwaitingEnv || shouldResetToStepAwaitingBox) &&
+                    else if ((nodalChanged || shouldResetToStepAwaitingEnv || shouldResetToStepAwaitingBox || hasUniqueFieldsEdited) &&
                         !string.IsNullOrWhiteSpace(catchNo))
                     {
                         var rows = await _context.NRDatas
@@ -1459,6 +1459,237 @@ namespace Tools.Controllers
                 return Ok(new
                 {
                     message = "Data updated successfully",
+                    data = existingRecord
+                });
+            }
+            catch (Exception ex)
+            {
+                await transaction.RollbackAsync();
+                return StatusCode(500, ex.Message);
+            }
+        }
+
+
+        // PUT: api/NRDatas/UpdateCatchwise/{catchNo}
+        [HttpPut("UpdateCatchwise/{catchNo}")]
+        public async Task<IActionResult> UpdateCatchwiseNRData(string catchNo, [FromBody] JsonElement inputData)
+        {
+            using var transaction = await _context.Database.BeginTransactionAsync();
+
+            try
+            {
+                int projectId = 0;
+                if (inputData.TryGetProperty("projectId", out var projProp))
+                {
+                    projectId = projProp.GetInt32();
+                }
+
+                var records = await _context.NRDatas
+                    .Where(x => x.CatchNo == catchNo && (projectId == 0 || x.ProjectId == projectId) && x.Status)
+                    .ToListAsync();
+
+                if (!records.Any())
+                    return NotFound($"No active NRData records found for catch {catchNo}");
+
+                var firstRecord = records.First();
+                var existingRecord = firstRecord;
+                projectId = firstRecord.ProjectId;
+
+                var properties = typeof(NRData)
+                    .GetProperties()
+                    .ToDictionary(p => p.Name.ToLower(), p => p);
+
+                static string NormalizeKey(string key) =>
+                    string.IsNullOrWhiteSpace(key)
+                        ? string.Empty
+                        : key.Replace(" ", "").ToLowerInvariant();
+
+                var uniqueFieldsFromDb = await _context.Fields
+                    .Where(f => f.IsUnique)
+                    .Select(f => f.Name)
+                    .ToListAsync();
+
+                var normalizedUniqueFields = new HashSet<string>(
+                    uniqueFieldsFromDb.Select(NormalizeKey)
+                );
+
+                var extraData = new Dictionary<string, string>();
+                var changedFields = new List<string>();
+
+                // We will collect the original dynamic properties of the first record to merge input changes
+                Dictionary<string, string> existingExtraData = new();
+                if (!string.IsNullOrWhiteSpace(firstRecord.NRDatas))
+                {
+                    try
+                    {
+                        existingExtraData =
+                            JsonSerializer.Deserialize<Dictionary<string, string>>(firstRecord.NRDatas)
+                            ?? new Dictionary<string, string>();
+                    }
+                    catch { }
+                }
+
+                bool hasUniqueFieldsEdited = false;
+
+                // Identify changed fields and gather extra data from input
+                foreach (var prop in inputData.EnumerateObject())
+                {
+                    string key = NormalizeKey(prop.Name);
+                    string value = prop.Value.ToString();
+
+                    if (key == "id" || key == "projectid")
+                        continue;
+
+                    if (properties.TryGetValue(key, out var propInfo))
+                    {
+                        var currentValue = propInfo.GetValue(firstRecord)?.ToString() ?? "";
+
+                        if (currentValue != value)
+                        {
+                            changedFields.Add(key);
+                            if (normalizedUniqueFields.Contains(key))
+                            {
+                                hasUniqueFieldsEdited = true;
+                            }
+                        }
+                    }
+                    else
+                    {
+                        changedFields.Add(key);
+                        extraData[prop.Name] = value;
+                        if (normalizedUniqueFields.Contains(key))
+                        {
+                            hasUniqueFieldsEdited = true;
+                        }
+                    }
+                }
+
+                // Merge dynamic JSON data
+                foreach (var kv in extraData)
+                {
+                    var matchedKey = existingExtraData.Keys
+                        .FirstOrDefault(k => NormalizeKey(k) == NormalizeKey(kv.Key))
+                        ?? kv.Key;
+
+                    existingExtraData[matchedKey] = kv.Value;
+                }
+
+                string serializedExtraData = JsonSerializer.Serialize(existingExtraData);
+
+                // Apply updates to all records of that catch
+                foreach (var record in records)
+                {
+                    foreach (var prop in inputData.EnumerateObject())
+                    {
+                        string key = NormalizeKey(prop.Name);
+                        string value = prop.Value.ToString();
+
+                        if (key == "id" || key == "projectid")
+                            continue;
+
+                        if (properties.TryGetValue(key, out var propInfo))
+                        {
+                            var targetType =
+                                Nullable.GetUnderlyingType(propInfo.PropertyType)
+                                ?? propInfo.PropertyType;
+
+                            object convertedValue = string.IsNullOrWhiteSpace(value)
+                                ? null
+                                : Convert.ChangeType(value, targetType);
+
+                            propInfo.SetValue(record, convertedValue);
+                        }
+                    }
+
+                    if (extraData.Any())
+                    {
+                        record.NRDatas = serializedExtraData;
+                    }
+
+                    _context.NRDatas.Update(record);
+                }
+
+                // Load config
+                var config = await _context.ProjectConfigs
+                    .FirstOrDefaultAsync(c => c.ProjectId == projectId);
+
+                var allFields = await _context.Fields.ToListAsync();
+
+                var envelopeFieldNames = allFields
+                    .Where(f =>
+                        (config.EnvelopeMakingCriteria ?? new List<int>())
+                        .Contains(f.FieldId))
+                    .Select(f => NormalizeKey(f.Name))
+                    .ToHashSet();
+
+                var boxFieldIds = new List<int>();
+                boxFieldIds.AddRange(config.BoxBreakingCriteria ?? new List<int>());
+                boxFieldIds.AddRange(config.SortingBoxReport ?? new List<int>());
+                boxFieldIds.AddRange(config.InnerBundlingCriteria ?? new List<int>());
+                boxFieldIds.AddRange(config.DuplicateRemoveFields ?? new List<int>());
+
+                var boxFieldNames = allFields
+                    .Where(f => boxFieldIds.Contains(f.FieldId))
+                    .Select(f => NormalizeKey(f.Name))
+                    .ToHashSet();
+
+                bool envelopeFieldAffected =
+                     changedFields.Any(f => envelopeFieldNames.Contains(f));
+
+                bool boxFieldAffected =
+                     changedFields.Any(f => boxFieldNames.Contains(f));
+
+                // Label affected means we definitely need to re-run Box Breaking (Step 5)
+                var requiredLabelFields = await GetRequiredLabelFields(existingRecord.ProjectId);
+                bool labelFieldAffected = changedFields.Any(f => requiredLabelFields.Any(rf => NormalizeKey(rf) == f));
+                bool isBothSerialsPositive = config != null && config.OmrSerialNumber > 0 && (config.BookletSerialNumber ?? 0) > 0;
+                bool resetBookletSerial = config?.ResetBookletSerialOnCatchChange ?? false;
+                int resetStep = (isBothSerialsPositive && !resetBookletSerial) ? 4 : 5;
+
+                // Reset step logic
+                if (envelopeFieldAffected || boxFieldAffected || labelFieldAffected)
+                {
+                    int targetStep = envelopeFieldAffected ? 4 : resetStep;
+
+                    existingRecord.Steps = targetStep;
+
+                    if (!string.IsNullOrWhiteSpace(catchNo))
+                    {
+                        var sameCatchRows = await _context.NRDatas
+                            .Where(x => x.ProjectId == projectId && x.CatchNo == catchNo && x.Id != existingRecord.Id && x.Status)
+                            .ToListAsync();
+
+                        foreach (var row in sameCatchRows)
+                        {
+                            row.Steps = targetStep;
+                            _context.NRDatas.Update(row);
+                        }
+                    }
+
+                    if (existingRecord.LotNo >= 0)
+                    {
+                        await _context.NRDatas
+                            .Where(x => x.ProjectId == projectId && x.LotNo == existingRecord.LotNo && (string.IsNullOrWhiteSpace(catchNo) || x.CatchNo != catchNo) && x.Status && x.Steps > resetStep)
+                            .ExecuteUpdateAsync(s => s.SetProperty(x => x.Steps, resetStep));
+                    }
+                }
+
+                _context.NRDatas.Update(existingRecord);
+
+                await _context.SaveChangesAsync();
+                await transaction.CommitAsync();
+
+                if (changedFields.Any() && existingRecord.ProjectId > 0)
+                {
+                    await _templateRegenerationService.HandleFieldChangeAndRegenerateTemplates(
+                        existingRecord.ProjectId,
+                        changedFields
+                    );
+                }
+
+                return Ok(new
+                {
+                    message = "Data updated catchwise successfully",
                     data = existingRecord
                 });
             }
