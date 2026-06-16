@@ -1137,6 +1137,7 @@ namespace Tools.Controllers
                 bool lotChanged = oldLot != existingRecord.LotNo;
                 bool pageChanged = oldPageNo != existingRecord.Pages;
                 bool quantityChanged = oldQuantity != existingRecord.Quantity;
+                Console.WriteLine(quantityChanged);
                 bool NrQuantityChanged = oldNRQuantity != existingRecord.NRQuantity;
                 var allFields = await _context.Fields.ToListAsync();
 
@@ -1209,8 +1210,7 @@ namespace Tools.Controllers
                              .ExecuteUpdateAsync(s => s.SetProperty(x => x.Steps, resetStep));
                      }
                 }
-
-                if (NrQuantityChanged)
+                else if (NrQuantityChanged)
                 {
                     existingRecord.Steps = 1; // Tools.Models.PipelineNavigator.STEP_ENV_BREAKING
 
@@ -2053,7 +2053,7 @@ namespace Tools.Controllers
                 maxStep,
                 totalActive = activeSteps.Count,
                 duplicatePending = activeSteps.Any(s => s == 0),
-                enhancementPending = activeSteps.Any(s => s <= 1),
+                enhancementPending = activeSteps.Any(s => s <= 2),
                 extraPending = activeSteps.Any(s => s <= 3),
                 envelopePending = activeSteps.Any(s => s <= 4),
                 boxPending = pendingBoxLots.Any(),
