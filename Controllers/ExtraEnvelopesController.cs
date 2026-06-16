@@ -367,14 +367,14 @@ namespace Tools.Controllers
 
                     await _context.ExtrasEnvelope.AddRangeAsync(envelopesToAdd);
 
-                    foreach (var nr in nrDataList)
-                        nr.Steps = Tools.Models.PipelineNavigator.GetNextStep(Tools.Models.PipelineNavigator.STEP_ENV_BREAKING, projectConfig?.Modules);
-
-                    await _context.SaveChangesAsync();
+                   
 
                     envelopesToUse = envelopesToAdd;
                 }
+                foreach (var nr in nrDataList)
+                    nr.Steps = Tools.Models.PipelineNavigator.GetNextStep(Tools.Models.PipelineNavigator.STEP_ENV_BREAKING, projectConfig?.Modules);
 
+                await _context.SaveChangesAsync();
                 // ================= EXCEL =================
                 var extraConfigs = await _context.ExtraConfigurations
                     .Where(x => x.ProjectId == ProjectId)

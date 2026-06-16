@@ -76,10 +76,10 @@ namespace ERPToolsAPI.Data
                 v => (v ?? new List<int>()).ToList()
             );
 
-            modelBuilder.Entity<NRData>()
+         /*   modelBuilder.Entity<NRData>()
                 .Property(e => e.UploadList)
                 .HasConversion(uploadListConverter)
-                .Metadata.SetValueComparer(uploadListComparer);
+                .Metadata.SetValueComparer(uploadListComparer);*/
         }
 
         private static List<int> DeserializeUploadList(string value)
