@@ -77,7 +77,8 @@ namespace Tools.Controllers
             IQueryable<NRData> query = _context.NRDatas
              .Where(d => d.ProjectId == projectId && d.Status == true);
 
-            // ? APPLY SEARCH IF KEY + SEARCH PROVIDED
+            // Apply column-specific search when both search text and key are provided.
+            // Apply global search when only search text is provided.
             if (!string.IsNullOrWhiteSpace(search) && !string.IsNullOrWhiteSpace(key))
             {
                 search = search.ToLower();
@@ -119,6 +120,21 @@ namespace Tools.Controllers
                         return BadRequest($"Key '{key}' is not searchable.");
                 }
             }
+            else if (!string.IsNullOrEmpty(search))
+{
+    search = search.ToLower();
+
+    query = query.Where(n =>
+        (n.CatchNo ?? "").ToLower().Contains(search) ||
+        (n.CenterCode ?? "").ToLower().Contains(search) ||
+        (n.SubjectName ?? "").ToLower().Contains(search) ||
+        (n.CourseName ?? "").ToLower().Contains(search) ||
+        (n.NodalCode ?? "").ToLower().Contains(search) ||
+        (n.Route ?? "").ToLower().Contains(search) ||
+        (n.Symbol ?? "").ToLower().Contains(search) ||
+        (n.NRDatas ?? "").ToLower().Contains(search)
+    );
+}
 
             // Server-side sorting so it works across all pages.
             var normalizedSortField = NormalizeText(sortField);
@@ -186,9 +202,9 @@ namespace Tools.Controllers
 
                 return Ok(new
                 {
-                    data = new List<object>(),
+                    items = new List<object>(),
                     columns = allColumns,
-                    totalRecords = 0,
+                    totalCount = 0,
                     totalPages = 0
                 });
             }
@@ -4326,4 +4342,3 @@ namespace Tools.Controllers
         }
     }
 }
-
