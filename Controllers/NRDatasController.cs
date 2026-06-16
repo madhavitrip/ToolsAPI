@@ -231,6 +231,225 @@ namespace Tools.Controllers
             });
         }
 
+        [HttpGet("GetUniqueByProjectId/{projectId}")]
+        public async Task<ActionResult> GetUniqueByProjectId(
+    int projectId,
+    int pageSize,
+    int pageNo,
+    string? search = null,
+    string? key = null,
+    string? sortField = null,
+    string? sortOrder = null,
+    int? lotNo = null,
+    bool? assigned = null,
+    bool? missingExamDate = null)
+        {
+            IQueryable<NRData> query = _context.NRDatas
+                .Where(d => d.ProjectId == projectId && d.Status == true);
+
+            if (lotNo.HasValue)
+            {
+                query = query.Where(d => d.LotNo == lotNo.Value);
+            }
+
+            if (assigned.HasValue)
+            {
+                if (assigned.Value)
+                {
+                    query = query.Where(d => d.LotNo > 0);
+                }
+                else
+                {
+                    query = query.Where(d => d.LotNo <= 0);
+                }
+            }
+
+            if (missingExamDate.HasValue && missingExamDate.Value)
+            {
+                query = query.Where(d => d.ExamDate == null || d.ExamDate == "" || d.ExamDate == "null" || d.ExamDate == "undefined");
+            }
+
+            // Search
+            if (!string.IsNullOrWhiteSpace(search) && !string.IsNullOrWhiteSpace(key))
+            {
+                search = search.ToLower();
+
+                switch (key)
+                {
+                    case "CatchNo":
+                        query = query.Where(d => d.CatchNo != null &&
+                                                 d.CatchNo.ToLower().Contains(search));
+                        break;
+                  
+
+                    case "SubjectName":
+                        query = query.Where(d => d.SubjectName != null &&
+                                                 d.SubjectName.ToLower().Contains(search));
+                        break;
+
+                    case "CourseName":
+                        query = query.Where(d => d.CourseName != null &&
+                                                 d.CourseName.ToLower().Contains(search));
+                        break;
+
+                    case "NodalCode":
+                        query = query.Where(d => d.NodalCode != null &&
+                                                 d.NodalCode.ToLower().Contains(search));
+                        break;
+
+                    case "Route":
+                        query = query.Where(d => d.Route != null &&
+                                                 d.Route.ToLower().Contains(search));
+                        break;
+
+                    case "ExamDate":
+                        query = query.Where(d => d.ExamDate.ToString().Contains(search));
+                        break;
+
+                    case "ExamTime":
+                        query = query.Where(d => d.ExamTime.ToString().Contains(search));
+                        break;
+
+                    case "NRQuantity":
+                        query = query.Where(d => d.NRQuantity.ToString().Contains(search));
+                        break;
+
+                    case "Quantity":
+                        query = query.Where(d => d.Quantity.ToString().Contains(search));
+                        break;
+
+                    default:
+                        return BadRequest($"Key '{key}' is not searchable.");
+                }
+            }
+
+            // Group by CatchNo using aggregate functions so that MySQL can execute it in one fast pass
+            var groupedQuery = query
+                .GroupBy(x => x.CatchNo)
+                .Select(g => new
+                {
+                    Id = g.Min(x => x.Id),
+                    CatchNo = g.Key,
+                    ExamDate = g.Min(x => x.ExamDate),
+                    ExamTime = g.Min(x => x.ExamTime),
+                    SubjectName = g.Min(x => x.SubjectName),
+                    CourseName = g.Min(x => x.CourseName),
+                    NRQuantity = g.Sum(x => x.NRQuantity),
+                    Quantity = g.Sum(x => x.Quantity),
+                    Pages = g.Min(x => x.Pages),
+                    Symbol = g.Min(x => x.Symbol),
+                    LotNo = g.Min(x => x.LotNo),
+                    CenterCode = g.Min(x => x.CenterCode),
+                    NRDatas = g.Min(x => x.NRDatas),
+                    RecordCount = g.Count()
+                });
+
+            // Sorting (on IQueryable, so it runs on database)
+            var normalizedSortField = NormalizeText(sortField);
+            var normalizedSortOrder = NormalizeText(sortOrder).ToLowerInvariant();
+            var isAscending = normalizedSortOrder != "descend";
+
+            if (!string.IsNullOrWhiteSpace(normalizedSortField))
+            {
+                groupedQuery = normalizedSortField switch
+                {
+                    "CatchNo" => isAscending
+                        ? groupedQuery.OrderBy(x => x.CatchNo)
+                        : groupedQuery.OrderByDescending(x => x.CatchNo),
+                    "ExamDate" => isAscending
+                        ? groupedQuery.OrderBy(x => x.ExamDate)
+                        : groupedQuery.OrderByDescending(x => x.ExamDate),
+                    "ExamTime" => isAscending
+                        ? groupedQuery.OrderBy(x => x.ExamTime)
+                        : groupedQuery.OrderByDescending(x => x.ExamTime),
+                    "NRQuantity" => isAscending
+                        ? groupedQuery.OrderBy(x => x.NRQuantity)
+                        : groupedQuery.OrderByDescending(x => x.NRQuantity),
+                    "Quantity" => isAscending
+                        ? groupedQuery.OrderBy(x => x.Quantity)
+                        : groupedQuery.OrderByDescending(x => x.Quantity),
+                    "CourseName" => isAscending
+                        ? groupedQuery.OrderBy(x => x.CourseName)
+                        : groupedQuery.OrderByDescending(x => x.CourseName),
+                    "SubjectName" => isAscending
+                        ? groupedQuery.OrderBy(x => x.SubjectName)
+                        : groupedQuery.OrderByDescending(x => x.SubjectName),
+                    _ => groupedQuery.OrderBy(x => x.Id)
+                };
+            }
+            else
+            {
+                groupedQuery = groupedQuery.OrderBy(x => x.Id);
+            }
+
+            int totalCount = await groupedQuery.CountAsync();
+            int totalPages = (int)Math.Ceiling(totalCount / (double)pageSize);
+
+            var data = await groupedQuery
+                .Skip((pageNo - 1) * pageSize)
+                .Take(pageSize)
+                .ToListAsync();
+
+            if (!data.Any())
+            {
+                return Ok(new
+                {
+                    items = new List<object>(),
+                    columns = new List<string>(),
+                    totalCount = 0,
+                    totalPages = 0
+                });
+            }
+
+            var properties = data.First().GetType().GetProperties();
+
+            var uniqueFieldNames = await _context.Fields
+                .Where(f => f.IsUnique)
+                .Select(f => f.Name.ToLowerInvariant())
+                .ToListAsync();
+
+            var result = data.Select(d =>
+            {
+                var dict = new Dictionary<string, object?>();
+                foreach (var prop in properties)
+                {
+                    var name = prop.Name;
+                    var value = prop.GetValue(d);
+
+                    var isSystemProp = name.Equals("Id", StringComparison.OrdinalIgnoreCase) ||
+                                       name.Equals("CatchNo", StringComparison.OrdinalIgnoreCase) ||
+                                       name.Equals("RecordCount", StringComparison.OrdinalIgnoreCase) ||
+                                       name.Equals("NRDatas", StringComparison.OrdinalIgnoreCase);
+
+                    if (isSystemProp)
+                    {
+                        dict[name] = value;
+                    }
+                    else
+                    {
+                        if (uniqueFieldNames.Contains(name.ToLowerInvariant()))
+                        {
+                            dict[name] = value;
+                        }
+                        else
+                        {
+                            dict[name] = null;
+                        }
+                    }
+                }
+                return dict;
+            });
+
+            return Ok(new
+            {
+                items = result,
+                columns = properties.Select(p => p.Name).ToList(),
+                uniqueColumns = uniqueFieldNames,
+                totalCount = totalCount,
+                totalPages = totalPages
+            });
+         }
+
         [HttpGet("UploadVersions/{projectId}")]
         public async Task<IActionResult> GetUploadVersions(int projectId)
         {
@@ -934,6 +1153,7 @@ namespace Tools.Controllers
                 bool lotChanged = oldLot != existingRecord.LotNo;
                 bool pageChanged = oldPageNo != existingRecord.Pages;
                 bool quantityChanged = oldQuantity != existingRecord.Quantity;
+                Console.WriteLine(quantityChanged);
                 bool NrQuantityChanged = oldNRQuantity != existingRecord.NRQuantity;
                 var allFields = await _context.Fields.ToListAsync();
 
@@ -979,6 +1199,8 @@ namespace Tools.Controllers
                 bool shouldResetToStepAwaitingBox = labelFieldAffected;
 
                 bool isBothSerialsPositive = config != null && config.OmrSerialNumber > 0 && (config.BookletSerialNumber ?? 0) > 0;
+                bool resetBookletSerial = config?.ResetBookletSerialOnCatchChange ?? false;
+                int resetStep = (isBothSerialsPositive && !resetBookletSerial) ? 4 : 5;
 
                 if (quantityChanged)
                 {
@@ -997,15 +1219,14 @@ namespace Tools.Controllers
                         }
                     }
 
-                    if (existingRecord.LotNo >= 0)
-                    {
-                        await _context.NRDatas
-                            .Where(x => x.ProjectId == existingRecord.ProjectId && x.LotNo == existingRecord.LotNo && (string.IsNullOrWhiteSpace(catchNo) || x.CatchNo != catchNo) && x.Status && x.Steps > 5)
-                            .ExecuteUpdateAsync(s => s.SetProperty(x => x.Steps, 5));
-                    }
+                     if (existingRecord.LotNo >= 0)
+                     {
+                         await _context.NRDatas
+                             .Where(x => x.ProjectId == existingRecord.ProjectId && x.LotNo == existingRecord.LotNo && (string.IsNullOrWhiteSpace(catchNo) || x.CatchNo != catchNo) && x.Status && x.Steps > resetStep)
+                             .ExecuteUpdateAsync(s => s.SetProperty(x => x.Steps, resetStep));
+                     }
                 }
-
-                if (NrQuantityChanged)
+                else if (NrQuantityChanged)
                 {
                     existingRecord.Steps = 1; // Tools.Models.PipelineNavigator.STEP_ENV_BREAKING
 
@@ -1022,12 +1243,12 @@ namespace Tools.Controllers
                         }
                     }
 
-                    if (existingRecord.LotNo >= 0)
-                    {
-                        await _context.NRDatas
-                            .Where(x => x.ProjectId == existingRecord.ProjectId && x.LotNo == existingRecord.LotNo && (string.IsNullOrWhiteSpace(catchNo) || x.CatchNo != catchNo) && x.Status && x.Steps > 5)
-                            .ExecuteUpdateAsync(s => s.SetProperty(x => x.Steps, 5));
-                    }
+                     if (existingRecord.LotNo >= 0)
+                     {
+                         await _context.NRDatas
+                             .Where(x => x.ProjectId == existingRecord.ProjectId && x.LotNo == existingRecord.LotNo && (string.IsNullOrWhiteSpace(catchNo) || x.CatchNo != catchNo) && x.Status && x.Steps > resetStep)
+                             .ExecuteUpdateAsync(s => s.SetProperty(x => x.Steps, resetStep));
+                     }
                 }
                 else if (!isBothSerialsPositive && changedFields.Any())
                 {
@@ -1649,7 +1870,7 @@ namespace Tools.Controllers
                 {
                     return BadRequest("Record already exists with same duplicate criteria.");
                 }
-                nRData.Steps = 2; // Tools.Models.PipelineNavigator.STEP_ENV_BREAKING
+                nRData.Steps = 1; // Tools.Models.PipelineNavigator.STEP_ENV_BREAKING
                 nRData.Status = true;
 
                 // Save
@@ -1817,18 +2038,42 @@ namespace Tools.Controllers
             int maxStep = activeSteps.Max();
             bool hasPendingPipelineChanges = minStep < Tools.Models.PipelineNavigator.STEP_DONE;
 
+            var lotsWithReports = await _context.BoxBreakingResults
+                .Where(b => b.ProjectId == ProjectId && b.Status && b.EnvelopeBreakingResultId.HasValue)
+                .Join(_context.EnvelopeBreakingResults,
+                    b => b.EnvelopeBreakingResultId.Value,
+                    e => e.Id,
+                    (b, e) => new { e.CatchNo })
+                .Join(_context.NRDatas.Where(n => n.ProjectId == ProjectId && n.Status == true),
+                    e => e.CatchNo,
+                    n => n.CatchNo,
+                    (e, n) => n.LotNo)
+                .Distinct()
+                .ToListAsync();
+
+            var pendingBoxLots = new List<int>();
+            if (lotsWithReports.Any())
+            {
+                pendingBoxLots = await _context.NRDatas
+                    .Where(n => n.ProjectId == ProjectId && n.Status == true && lotsWithReports.Contains(n.LotNo) && n.Steps <= 5)
+                    .Select(n => n.LotNo)
+                    .Distinct()
+                    .OrderBy(l => l)
+                    .ToListAsync();
+            }
+
             return Ok(new
             {
                 hasPendingPipelineChanges,
                 minStep,
                 maxStep,
                 totalActive = activeSteps.Count,
-                // Helpful flags for the UI to disable/enable specific rerun buttons
-                duplicatePending = activeSteps.Any(s => s <= 1),
+                duplicatePending = activeSteps.Any(s => s == 0),
                 enhancementPending = activeSteps.Any(s => s <= 2),
                 extraPending = activeSteps.Any(s => s <= 3),
                 envelopePending = activeSteps.Any(s => s <= 4),
-                boxPending = activeSteps.Any(s => s <= 5)
+                boxPending = pendingBoxLots.Any(),
+                pendingBoxLots = pendingBoxLots
             });
         }
 
