@@ -1306,12 +1306,9 @@ namespace Tools.Controllers
                 // OLD VALUES
                 // =====================
                 var oldCentreCode = existingRecord.CenterCode;
-                var oldLot = existingRecord.LotNo;
-                var oldExamDate = existingRecord.ExamDate;
                 var oldNodalCode = existingRecord.NodalCode;
                 var oldQuantity = existingRecord.Quantity;
                 var oldNRQuantity = existingRecord.NRQuantity;
-                var oldPageNo = existingRecord.Pages;
                 var catchNo = existingRecord.CatchNo;
 
                 var properties = typeof(NRData)
@@ -1441,8 +1438,6 @@ namespace Tools.Controllers
                         StringComparison.OrdinalIgnoreCase
                     );
 
-                bool lotChanged = oldLot != existingRecord.LotNo;
-                bool pageChanged = oldPageNo != existingRecord.Pages;
                 bool quantityChanged = oldQuantity != existingRecord.Quantity;
                 Console.WriteLine(quantityChanged);
                 bool NrQuantityChanged = oldNRQuantity != existingRecord.NRQuantity;
@@ -1485,7 +1480,7 @@ namespace Tools.Controllers
                     centerChanged || envelopeFieldAffected;
 
                 bool shouldResetToStepAwaitingEnv =
-                    boxFieldAffected || lotChanged || pageChanged;
+                    boxFieldAffected;
 
                 bool shouldResetToStepAwaitingBox = labelFieldAffected;
 
@@ -1979,6 +1974,17 @@ namespace Tools.Controllers
                             .Where(x => x.ProjectId == projectId && x.LotNo == existingRecord.LotNo && (string.IsNullOrWhiteSpace(catchNo) || x.CatchNo != catchNo) && x.Status && x.Steps > resetStep)
                             .ExecuteUpdateAsync(s => s.SetProperty(x => x.Steps, resetStep));
                     }
+                }
+
+                // If page count has been changed, reset the steps of the entire lot to 5
+                bool pagesChanged = changedFields.Contains("pages");
+                if (pagesChanged && existingRecord.LotNo > 0)
+                {
+                    await _context.NRDatas
+                        .Where(x => x.ProjectId == projectId && x.LotNo == existingRecord.LotNo && x.Status)
+                        .ExecuteUpdateAsync(s => s.SetProperty(x => x.Steps, 5));
+                    
+                    existingRecord.Steps = 5;
                 }
 
                 _context.NRDatas.Update(existingRecord);
