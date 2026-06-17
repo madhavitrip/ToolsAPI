@@ -684,30 +684,22 @@ namespace Tools.Controllers
                     case "centercode":
                         exists = await query.AnyAsync(d => d.CenterCode != null && d.CenterCode.ToLower() == normalizedValue);
                         break;
-                    case "subjectname":
-                        exists = await query.AnyAsync(d => d.SubjectName != null && d.SubjectName.ToLower() == normalizedValue);
-                        break;
-                    case "coursename":
-                        exists = await query.AnyAsync(d => d.CourseName != null && d.CourseName.ToLower() == normalizedValue);
-                        break;
+                   
                     case "nodalcode":
                         exists = await query.AnyAsync(d => d.NodalCode != null && d.NodalCode.ToLower() == normalizedValue);
                         break;
+                   
                     case "route":
                         exists = await query.AnyAsync(d => d.Route != null && d.Route.ToLower() == normalizedValue);
                         break;
+                    
                     case "examdate":
                         exists = await query.AnyAsync(d => d.ExamDate != null && d.ExamDate.ToLower() == normalizedValue);
                         break;
                     case "examtime":
                         exists = await query.AnyAsync(d => d.ExamTime != null && d.ExamTime.ToLower() == normalizedValue);
                         break;
-                    case "symbol":
-                        exists = await query.AnyAsync(d => d.Symbol != null && d.Symbol.ToLower() == normalizedValue);
-                        break;
-                    case "catchno":
-                        exists = await query.AnyAsync(d => d.CatchNo != null && d.CatchNo.ToLower() == normalizedValue);
-                        break;
+                   
                     default:
                         if (prop.PropertyType == typeof(string))
                         {
@@ -756,6 +748,39 @@ namespace Tools.Controllers
             }
 
             return Ok(new { exists = jsonExists });
+        }
+
+        [HttpGet("merged-catch-history/{projectId}")]
+        public async Task<IActionResult> GetMergedCatchHistory(int projectId)
+        {
+            try
+            {
+                var logs = await _context.EventLogs
+                    .Where(e => e.ProjectId == projectId && e.Category == "NRData" && e.Event.Contains("Merged catch numbers for ProjectId"))
+                    .OrderByDescending(e => e.LoggedAt)
+                    .Select(e => e.Event)
+                    .ToListAsync();
+
+                var mergedCatches = new List<string>();
+                foreach (var log in logs)
+                {
+                    var index = log.IndexOf(":");
+                    if (index >= 0 && index < log.Length - 1)
+                    {
+                        var catchList = log.Substring(index + 1).Trim();
+                        if (!string.IsNullOrWhiteSpace(catchList))
+                        {
+                            mergedCatches.Add(catchList);
+                        }
+                    }
+                }
+
+                return Ok(mergedCatches.Distinct().ToList());
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, ex.Message);
+            }
         }
 
         [HttpPost("merge-catchnos")]
