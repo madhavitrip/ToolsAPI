@@ -884,12 +884,38 @@ namespace Tools.Controllers
                     triggeredBy,
                     ProjectId);
 
-                using var client = new HttpClient();
-                var response = await client.GetAsync($"{_apiSettings.EnvelopeBreaking}?ProjectId={ProjectId}");
-                if (!response.IsSuccessStatusCode)
+                // Call the report generation method directly instead of using HttpClient
+                try
                 {
-                    await _loggerService.LogErrorAsync("Error during Excel report generation", "Failed to get envelope breakages after configuration.", nameof(EnvelopeBreakageProcessingController));
-                    return StatusCode((int)response.StatusCode, "Failed to get envelope breakages after configuration.");
+                    var reportResponse = await GetEnvelopeBreakingReport(ProjectId);
+                    var isSuccess = true;
+                    int statusCode = 500;
+                    string exactError = "Failed to get envelope breakages after configuration.";
+
+                    if (reportResponse is ObjectResult objResult && objResult.StatusCode >= 400)
+                    {
+                        isSuccess = false;
+                        statusCode = objResult.StatusCode ?? 500;
+                        exactError = System.Text.Json.JsonSerializer.Serialize(objResult.Value);
+                    }
+                    else if (reportResponse is StatusCodeResult statusResult && statusResult.StatusCode >= 400)
+                    {
+                        isSuccess = false;
+                        statusCode = statusResult.StatusCode;
+                    }
+
+                    if (!isSuccess)
+                    {
+                        await _loggerService.LogErrorAsync("Error during Excel report generation", exactError, nameof(EnvelopeBreakageProcessingController));
+                        return StatusCode(statusCode, new { message = "Failed to get envelope breakages after configuration.", exactError = exactError });
+                    }
+                }
+                catch (Exception ex)
+                {
+                    var innerEx = ex.InnerException?.Message ?? "No inner exception";
+                    var fullError = $"{ex.Message} | Inner: {innerEx}";
+                    await _loggerService.LogErrorAsync("Error during Excel report generation", fullError, nameof(EnvelopeBreakageProcessingController));
+                    return StatusCode(500, new { message = "Failed to get envelope breakages after configuration.", exactError = fullError, stackTrace = ex.StackTrace });
                 }
 
                 return Ok(new
@@ -913,7 +939,7 @@ namespace Tools.Controllers
 
 
         [HttpGet("GetEnvelopeBreakingReport")]
-        public async Task<IActionResult> GetEnvelopeBreakingReport(int ProjectId, int? uploadId = null)
+        public async Task<IActionResult> GetEnvelopeBreakingReport(int ProjectId)
         {
             try
             {
@@ -927,7 +953,7 @@ namespace Tools.Controllers
                     .Where(p => p.ProjectId == ProjectId)
                     .ToDictionaryAsync(p => p.Id);
 
-                // ✅ NEW: Catch-wise NR mapping (for MSS rows)
+                // Catch-wise NR mapping (for MSS rows)
                 var nrDataByCatch = await _context.NRDatas
                     .Where(p => p.ProjectId == ProjectId)
                     .GroupBy(p => p.CatchNo)
@@ -945,14 +971,6 @@ namespace Tools.Controllers
                 IQueryable<EnvelopeBreakingResult> query = _context.EnvelopeBreakingResults
                     .Where(r => r.ProjectId == ProjectId && r.Status);
 
-                if (uploadId.HasValue)
-                {
-                    // Filter results by those belonging to NRDatas in this uploadId
-                    var allNr = await _context.NRDatas.Where(p => p.ProjectId == ProjectId).ToListAsync();
-                    var validIds = allNr.Where(x => x.UploadList != null && x.UploadList.Contains(uploadId.Value)).Select(x => x.Id).ToList();
-                    query = query.Where(r => validIds.Contains(r.NrDataId));
-                }
-
                 var results = await query.OrderBy(r => r.Id).ToListAsync();
 
                 if (!results.Any())
@@ -968,7 +986,6 @@ namespace Tools.Controllers
                     bool isMssRow = result.NrDataId == 0 && result.SerialNumber == 0;
                     rowDict["isMss"] = isMssRow;
 
-                    // ✅ FIXED NR MAPPING
                     NRData nr = null;
 
                     // Normal rows
@@ -983,7 +1000,7 @@ namespace Tools.Controllers
                         nr = catchNr;
                     }
 
-                    // ✅ NR fields (now works for MSS too)
+                    // NR fields (now works for MSS too)
                     if (nr != null)
                     {
                         rowDict["SubjectName"] = nr.SubjectName;
@@ -993,7 +1010,7 @@ namespace Tools.Controllers
                         rowDict["NRQuantity"] = nr.NRQuantity;
                     }
 
-                    // ✅ JSON dynamic fields
+                    // JSON dynamic fields
                     if (nr != null && !string.IsNullOrEmpty(nr.NRDatas))
                     {
                         try
@@ -1049,7 +1066,7 @@ namespace Tools.Controllers
                         var d = (IDictionary<string, object>)x;
                         return d.ContainsKey("isMss") && (bool)d["isMss"];
                     })
-                    .GroupBy(x => ((IDictionary<string, object>)x)["CatchNo"]?.ToString())
+                    .GroupBy(x => ((IDictionary<string, object>)x)["CatchNo"]?.ToString() ?? "")
                     .ToDictionary(g => g.Key, g => g.ToList());
 
                 // Sorting
@@ -1094,43 +1111,69 @@ namespace Tools.Controllers
 
                 var sortedNonMss = ordered?.ToList() ?? nonMssData;
 
-                // Reinsert MSS
+                // ---------------------------------------------------------------
+                // Reinsert MSS — rewritten to be safe regardless of how sorting
+                // scatters identical CatchNo values, and to guarantee each
+                // catch's MSS rows are inserted EXACTLY ONCE.
+                // ---------------------------------------------------------------
                 string mssMode = projectconfig.MssAttached?.ToLower();
                 var finalSortedList = new List<dynamic>();
+                var insertedMssCatches = new HashSet<string>();
 
-                string lastCatch = null;
-                var buffer = new List<dynamic>();
+                // Group sortedNonMss into contiguous runs by CatchNo, preserving order.
+                // (A run = consecutive rows sharing the same CatchNo in the *current* sort order.)
+                var runs = new List<(string CatchNo, List<dynamic> Rows)>();
+                string currentCatch = null;
+                List<dynamic> currentRun = null;
 
                 foreach (var item in sortedNonMss)
                 {
                     var dict = (IDictionary<string, object>)item;
-                    string catchNo = dict["CatchNo"]?.ToString();
+                    string catchNo = dict["CatchNo"]?.ToString() ?? "";
 
-                    if (catchNo != lastCatch && lastCatch != null)
+                    if (currentRun == null || catchNo != currentCatch)
                     {
-                        finalSortedList.AddRange(buffer);
-
-                        if (mssMode == "end" && mssRowsByCatch.ContainsKey(lastCatch))
-                            finalSortedList.AddRange(mssRowsByCatch[lastCatch]);
-
-                        buffer.Clear();
+                        currentRun = new List<dynamic>();
+                        runs.Add((catchNo, currentRun));
+                        currentCatch = catchNo;
                     }
 
-                    if (mssMode == "start" && lastCatch == null && mssRowsByCatch.ContainsKey(catchNo))
-                    {
-                        finalSortedList.AddRange(mssRowsByCatch[catchNo]);
-                    }
-
-                    buffer.Add(item);
-                    lastCatch = catchNo;
+                    currentRun.Add(item);
                 }
 
-                if (buffer.Count > 0)
+                // Walk the runs and insert MSS rows at most once per catch.
+                for (int r = 0; r < runs.Count; r++)
                 {
-                    finalSortedList.AddRange(buffer);
+                    var (catchNo, rows) = runs[r];
 
-                    if (mssMode == "end" && lastCatch != null && mssRowsByCatch.ContainsKey(lastCatch))
-                        finalSortedList.AddRange(mssRowsByCatch[lastCatch]);
+                    bool isFirstRunForCatch = !runs.Take(r).Any(x => x.CatchNo == catchNo);
+                    bool isLastRunForCatch = !runs.Skip(r + 1).Any(x => x.CatchNo == catchNo);
+
+                    if (mssMode == "start" && isFirstRunForCatch &&
+                        mssRowsByCatch.TryGetValue(catchNo, out var mssStart) &&
+                        insertedMssCatches.Add(catchNo))
+                    {
+                        finalSortedList.AddRange(mssStart);
+                    }
+
+                    finalSortedList.AddRange(rows);
+
+                    if (mssMode == "end" && isLastRunForCatch &&
+                        mssRowsByCatch.TryGetValue(catchNo, out var mssEnd) &&
+                        insertedMssCatches.Add(catchNo))
+                    {
+                        finalSortedList.AddRange(mssEnd);
+                    }
+                }
+
+                // Safety net: if any catch's MSS rows were never inserted
+                // (e.g. catch present only in MSS data, not in nonMssData), append them.
+                foreach (var kvp in mssRowsByCatch)
+                {
+                    if (insertedMssCatches.Add(kvp.Key))
+                    {
+                        finalSortedList.AddRange(kvp.Value);
+                    }
                 }
 
                 // Columns
@@ -1143,11 +1186,29 @@ namespace Tools.Controllers
                 if (!finalSortedList.Any() || !allKeys.Any())
                     return BadRequest("No data available to generate Excel.");
 
+                // --- Guard rails before writing to Excel ---
+                const int ExcelMaxRows = 1048576;
+                const int ExcelMaxCols = 16384;
+
+                if (finalSortedList.Count + 1 > ExcelMaxRows) // +1 for header row
+                    return BadRequest(new
+                    {
+                        error = $"Row count {finalSortedList.Count} exceeds Excel's row limit ({ExcelMaxRows}).",
+                        hint = "Check MSS reinsertion logic or duplicate source data."
+                    });
+
+                if (allKeys.Count > ExcelMaxCols)
+                    return BadRequest(new
+                    {
+                        error = $"Column count {allKeys.Count} exceeds Excel's column limit ({ExcelMaxCols}).",
+                        hint = "Check NRDatas JSON fields for inconsistent/unexpected keys."
+                    });
+
                 // Excel
                 var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
                 Directory.CreateDirectory(reportPath);
 
-                var fileName = uploadId.HasValue ? $"EnvelopeBreaking_v{uploadId}.xlsx" : ReportVersionHelper.GetNextVersionFileName(reportPath, "EnvelopeBreaking.xlsx");
+                var fileName = ReportVersionHelper.GetNextVersionFileName(reportPath, "EnvelopeBreaking.xlsx");
                 var filePath = Path.Combine(reportPath, fileName);
 
                 using (var package = new ExcelPackage())
@@ -1201,7 +1262,6 @@ namespace Tools.Controllers
                 });
             }
         }
-
 
         [HttpGet("CatchWithOmrSerialing")]
         public async Task<IActionResult> ProcessSerialingReport(int ProjectId, int? uploadId = null)

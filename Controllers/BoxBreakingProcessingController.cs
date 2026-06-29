@@ -26,6 +26,7 @@ namespace Tools.Controllers
             _apiSettings = apiSettings.Value;
             _dispatchService = dispatchService;
         }
+
         [HttpPost("ProcessBoxBreaking")]
         public async Task<IActionResult> ProcessBoxBreaking(int ProjectId, [FromQuery]List<int> LotNo, [FromQuery] bool skipReset = false, [FromQuery] bool bypassDispatch = false, [FromQuery] bool runBoth = false)
         {
@@ -441,6 +442,12 @@ namespace Tools.Controllers
                     string catchNo = itemDict["CatchNo"]?.ToString();
                     var nrRow = nrDataByCatch.TryGetValue(catchNo ?? "", out var nrMatch) ? nrMatch : null;
                     int pages = nrRow?.Pages ?? 0;
+                    if (pages <= 0)
+                    {
+                        var errMsg = $"Invalid or missing Pages value for CatchNo '{catchNo}' (NRDataId: {nrRow?.Id}). Pages must be greater than 0.";
+                        await _loggerService.LogErrorAsync("Invalid pages value", errMsg, nameof(BoxBreakingProcessingController));
+                        return BadRequest(new { error = errMsg });
+                    }
                     int totalPages = ((int)itemDict["Quantity"]) * pages;
                     string currentSymbol = resetOnSymbolChange ? (nrRow?.Symbol ?? "") : "";
                     string currentCourseName = itemDict["CourseName"]?.ToString() ?? "";
