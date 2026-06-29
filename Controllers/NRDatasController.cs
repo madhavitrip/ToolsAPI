@@ -1798,7 +1798,7 @@ namespace Tools.Controllers
 
 
         // PUT: api/NRDatas/UpdateCatchwise/{catchNo}
-        [HttpPut("UpdateCatchwise/{catchNo}")]
+        [HttpPut("UpdateCatchwise/{*catchNo}")]
         public async Task<IActionResult> UpdateCatchwiseNRData(string catchNo, [FromBody] JsonElement inputData)
         {
             using var transaction = await _context.Database.BeginTransactionAsync();
@@ -1881,15 +1881,15 @@ namespace Tools.Controllers
                         }
                     }
                     else
-                    {
-                        changedFields.Add(key);
-                        extraData[prop.Name] = value;
-                        if (normalizedUniqueFields.Contains(key))
                         {
-                            hasUniqueFieldsEdited = true;
+                            changedFields.Add(key);
+                            extraData[prop.Name] = value;
+                            if (normalizedUniqueFields.Contains(key))
+                            {
+                                hasUniqueFieldsEdited = true;
+                            }
                         }
                     }
-                }
 
                 // Merge dynamic JSON data
                 foreach (var kv in extraData)
