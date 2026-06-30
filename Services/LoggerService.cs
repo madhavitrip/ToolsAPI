@@ -1,4 +1,5 @@
-﻿using ERPToolsAPI.Data;
+using ERPToolsAPI.Data;
+using Microsoft.EntityFrameworkCore;
 using System;
 using Tools.Models;
 
@@ -6,14 +7,14 @@ namespace Tools.Services
 {
     public class LoggerService : ILoggerService
     {
-        private readonly ERPToolsDbContext _context;
+        private readonly DbContextOptions<ERPToolsDbContext> _options;
 
-        public LoggerService(ERPToolsDbContext context)
+        public LoggerService(DbContextOptions<ERPToolsDbContext> options)
         {
-            _context = context;
+            _options = options;
         }
 
-        public void LogEvent(string message, string category, int triggeredBy,int ProjectId, string oldValue = null, string newValue = null)
+        public void LogEvent(string message, string category, int triggeredBy, int ProjectId, string oldValue = null, string newValue = null)
         {
             var log = new EventLog
             {
@@ -24,8 +25,12 @@ namespace Tools.Services
                 OldValue = oldValue,  // Log the old value if available
                 NewValue = newValue   // Log the new value if available
             };
-            _context.EventLogs.Add(log);
-            _context.SaveChanges();
+
+            using (var context = new ERPToolsDbContext(_options))
+            {
+                context.EventLogs.Add(log);
+                context.SaveChanges();
+            }
         }
 
         public void LogError(string error, string errormessage, string controller)
@@ -37,8 +42,12 @@ namespace Tools.Services
                 Occurance = controller,
             };
 
-            _context.ErrorLogs.Add(log);
-            _context.SaveChanges();
+            using (var context = new ERPToolsDbContext(_options))
+            {
+                context.ErrorLogs.Add(log);
+                context.SaveChanges();
+            }
         }
     }
 }
+
