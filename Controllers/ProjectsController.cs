@@ -414,6 +414,8 @@ namespace Tools.Controllers
                     project.ProjectId
                 );
                 Console.WriteLine($"GroupId: {project.GroupId}, TypeId: {project.TypeId}");
+                HttpContext.Response.Headers.Add("X-Cache-Invalidate", "projects");
+                
                 return CreatedAtAction("GetProject", new { id = project.ProjectId }, project);
             }
             catch (Exception ex)
