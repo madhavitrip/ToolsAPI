@@ -158,6 +158,19 @@ namespace Tools.Controllers
                 return BadRequest();
             }
 
+            // Authorization check: Managers (RoleId 4) cannot edit project configurations
+            int userRoleId = LogHelper.GetUserRoleId(User, Request);
+            if (userRoleId == 4)
+            {
+                await _loggerService.LogEventAsync(
+                    $"AUTHORIZATION DENIED: Manager (RoleId 4) attempted to edit ProjectConfig for ProjectId {projectConfig.ProjectId}",
+                    "ProjectConfig",
+                    LogHelper.GetTriggeredBy(User),
+                    projectConfig.ProjectId
+                );
+                return StatusCode(403, new { message = "Managers are not authorized to edit project configurations." });
+            }
+
             // Fetch existing config to determine if pipeline steps need to be reverted
             var oldConfig = await _context.ProjectConfigs.AsNoTracking().FirstOrDefaultAsync(p => p.Id == id);
             int minResetStep = -1;
@@ -214,6 +227,19 @@ namespace Tools.Controllers
         [HttpPost]
         public async Task<ActionResult<ProjectConfig>> PostProjectConfig(ProjectConfig projectConfig)
         {
+            // Authorization check: Managers (RoleId 4) cannot create project configurations
+            int userRoleId = LogHelper.GetUserRoleId(User, Request);
+            if (userRoleId == 4)
+            {
+                await _loggerService.LogEventAsync(
+                    $"AUTHORIZATION DENIED: Manager (RoleId 4) attempted to create ProjectConfig for ProjectId {projectConfig.ProjectId}",
+                    "ProjectConfig",
+                    LogHelper.GetTriggeredBy(User),
+                    projectConfig.ProjectId
+                );
+                return StatusCode(403, new { message = "Managers are not authorized to create project configurations." });
+            }
+
             try
             {
                 var oldConfig = await _context.ProjectConfigs.AsNoTracking().Where(p => p.ProjectId == projectConfig.ProjectId).FirstOrDefaultAsync();
@@ -350,6 +376,19 @@ namespace Tools.Controllers
         [HttpDelete("{id}")]
         public async Task<IActionResult> DeleteProjectConfig(int id)
         {
+            // Authorization check: Managers (RoleId 4) cannot delete project configurations
+            int userRoleId = LogHelper.GetUserRoleId(User, Request);
+            if (userRoleId == 4)
+            {
+                await _loggerService.LogEventAsync(
+                    $"AUTHORIZATION DENIED: Manager (RoleId 4) attempted to delete ProjectConfig with ID {id}",
+                    "ProjectConfig",
+                    LogHelper.GetTriggeredBy(User),
+                    0
+                );
+                return StatusCode(403, new { message = "Managers are not authorized to delete project configurations." });
+            }
+
             try
             {
                 var projectConfig = await _context.ProjectConfigs.FindAsync(id);

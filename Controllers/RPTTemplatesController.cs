@@ -426,6 +426,32 @@ namespace Tools.Controllers
             var template = await _context.RPTTemplates.FindAsync(id);
             if (template == null) return NotFound("Template not found.");
 
+            // Authorization check: Managers (RoleId 4) cannot edit master/standard templates
+            // Master templates are those with GroupId == null and ProjectId == null
+            int userRoleId = LogHelper.GetUserRoleId(User, Request);
+            if (userRoleId == 4 && template.GroupId == null && template.ProjectId == null)
+            {
+                await _loggerService.LogEventAsync(
+                    $"AUTHORIZATION DENIED: Manager (RoleId 4) attempted to edit standard/master template ID {id}",
+                    "RPTTemplate",
+                    LogHelper.GetTriggeredBy(User),
+                    0
+                );
+                return StatusCode(403, new { message = "Managers are not authorized to edit master templates." });
+            }
+
+            // Authorization check: Managers cannot edit group-level templates
+            if (userRoleId == 4 && template.GroupId != null && template.ProjectId == null)
+            {
+                await _loggerService.LogEventAsync(
+                    $"AUTHORIZATION DENIED: Manager (RoleId 4) attempted to edit group template ID {id}",
+                    "RPTTemplate",
+                    LogHelper.GetTriggeredBy(User),
+                    0
+                );
+                return StatusCode(403, new { message = "Managers are not authorized to edit group-level templates." });
+            }
+
             var hasName = !string.IsNullOrWhiteSpace(req.TemplateName);
             if (req.TemplateName != null && !hasName)
                 return BadRequest("templateName cannot be empty.");
@@ -470,6 +496,22 @@ namespace Tools.Controllers
             if (file == null || file.Length == 0)
                 return BadRequest("No file uploaded.");
 
+            // Authorization check: Managers (RoleId 4) cannot upload master/standard or group-level templates
+            int userRoleId = LogHelper.GetUserRoleId(User, Request);
+            groupId = NormalizeNullableId(groupId);
+            projectId = NormalizeNullableId(projectId);
+            
+            if (userRoleId == 4 && (!projectId.HasValue || !groupId.HasValue))
+            {
+                await _loggerService.LogEventAsync(
+                    $"AUTHORIZATION DENIED: Manager (RoleId 4) attempted to upload standard/group template '{templateName}'",
+                    "RPTTemplate",
+                    LogHelper.GetTriggeredBy(User),
+                    0
+                );
+                return StatusCode(403, new { message = "Managers are only allowed to upload project-specific templates." });
+            }
+
             var ext = Path.GetExtension(file.FileName).ToLowerInvariant();
             if (ext != ".rpt")
                 return BadRequest("Only .rpt files are accepted.");
@@ -477,8 +519,6 @@ namespace Tools.Controllers
             if (string.IsNullOrWhiteSpace(templateName))
                 return BadRequest("templateName is required.");
 
-            groupId = NormalizeNullableId(groupId);
-            projectId = NormalizeNullableId(projectId);
             if (projectId.HasValue && !groupId.HasValue)
                 return BadRequest("groupId is required when projectId is provided.");
 
@@ -723,6 +763,30 @@ namespace Tools.Controllers
             var template = await _context.RPTTemplates.FindAsync(id);
             if (template == null) return NotFound("Template not found.");
 
+            // Authorization check: Managers (RoleId 4) cannot delete master/standard or group-level templates
+            int userRoleId = LogHelper.GetUserRoleId(User, Request);
+            if (userRoleId == 4 && (template.GroupId == null && template.ProjectId == null))
+            {
+                await _loggerService.LogEventAsync(
+                    $"AUTHORIZATION DENIED: Manager (RoleId 4) attempted to delete standard/master template ID {id}",
+                    "RPTTemplate",
+                    LogHelper.GetTriggeredBy(User),
+                    0
+                );
+                return StatusCode(403, new { message = "Managers are not authorized to delete master templates." });
+            }
+
+            if (userRoleId == 4 && (template.GroupId != null && template.ProjectId == null))
+            {
+                await _loggerService.LogEventAsync(
+                    $"AUTHORIZATION DENIED: Manager (RoleId 4) attempted to delete group template ID {id}",
+                    "RPTTemplate",
+                    LogHelper.GetTriggeredBy(User),
+                    0
+                );
+                return StatusCode(403, new { message = "Managers are not authorized to delete group-level templates." });
+            }
+
             // Determine which scope to delete from based on the template's own scope
             // (the caller can also pass scope explicitly to be safe)
             var effectiveScope = (scope ?? string.Empty).Trim().ToLowerInvariant();
@@ -789,6 +853,30 @@ namespace Tools.Controllers
             var template = await _context.RPTTemplates.FindAsync(id);
             if (template == null) return NotFound("Template not found.");
 
+            // Authorization check: Managers (RoleId 4) cannot activate master/standard or group-level templates
+            int userRoleId = LogHelper.GetUserRoleId(User, Request);
+            if (userRoleId == 4 && (template.GroupId == null && template.ProjectId == null))
+            {
+                await _loggerService.LogEventAsync(
+                    $"AUTHORIZATION DENIED: Manager (RoleId 4) attempted to activate standard/master template ID {id}",
+                    "RPTTemplate",
+                    LogHelper.GetTriggeredBy(User),
+                    0
+                );
+                return StatusCode(403, new { message = "Managers are not authorized to activate master templates." });
+            }
+
+            if (userRoleId == 4 && (template.GroupId != null && template.ProjectId == null))
+            {
+                await _loggerService.LogEventAsync(
+                    $"AUTHORIZATION DENIED: Manager (RoleId 4) attempted to activate group template ID {id}",
+                    "RPTTemplate",
+                    LogHelper.GetTriggeredBy(User),
+                    0
+                );
+                return StatusCode(403, new { message = "Managers are not authorized to activate group-level templates." });
+            }
+
             var scopeQuery = _context.RPTTemplates
                 .Where(t => t.TypeId == template.TypeId
                             && t.TemplateName == template.TemplateName
@@ -818,9 +906,23 @@ namespace Tools.Controllers
         [HttpPost("import-from-group")]
         public async Task<ActionResult> ImportFromGroup([FromBody] ImportGroupRequest req)
         {
+            // Authorization check: Managers (RoleId 4) cannot import master/standard or group-level templates
+            int userRoleId = LogHelper.GetUserRoleId(User, Request);
+            var targetProjectId = NormalizeNullableId(req.TargetProjectId);
+            
+            if (userRoleId == 4 && !targetProjectId.HasValue)
+            {
+                await _loggerService.LogEventAsync(
+                    $"AUTHORIZATION DENIED: Manager (RoleId 4) attempted to import templates without project context",
+                    "RPTTemplate",
+                    LogHelper.GetTriggeredBy(User),
+                    0
+                );
+                return StatusCode(403, new { message = "Managers can only import templates to project-specific scopes." });
+            }
+
             var sourceScope = (req.SourceScope ?? "group").Trim().ToLowerInvariant();
             var sourceTypeId = NormalizeNullableId(req.SourceTypeId);
-            var targetProjectId = NormalizeNullableId(req.TargetProjectId);
             var targetGroupId = NormalizeNullableId(req.TargetGroupId);
             var targetTypeId = NormalizeNullableId(req.TargetTypeId);
             var uploadedByUserId = LogHelper.GetTriggeredBy(User);

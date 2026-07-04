@@ -42,9 +42,48 @@ namespace Tools.Services
             return 0;
         }
 
+        /// <summary>
+        /// Extracts the roleId from JWT token claims.
+        /// Returns 0 if roleId is not found or invalid.
+        /// </summary>
+        public static int GetUserRoleId(ClaimsPrincipal user, HttpRequest request = null)
+        {
+            // Try claims first (populated when [Authorize] is present)
+            if (user != null)
+            {
+                var roleIdClaim = user.FindFirst("roleId")?.Value;
+                if (int.TryParse(roleIdClaim, out var roleId) && roleId > 0)
+                    return roleId;
+            }
+
+            // Fallback: parse JWT directly from Authorization header
+            if (request != null)
+            {
+                var token = request.Headers["Authorization"].ToString()?.Replace("Bearer ", "").Trim();
+                if (!string.IsNullOrWhiteSpace(token))
+                {
+                    try
+                    {
+                        var handler = new JwtSecurityTokenHandler();
+                        if (handler.CanReadToken(token))
+                        {
+                            var jwt = handler.ReadToken(token) as JwtSecurityToken;
+                            var roleIdClaim = jwt?.Claims.FirstOrDefault(c => c.Type == "roleId")?.Value;
+                            if (int.TryParse(roleIdClaim, out var jwtRoleId) && jwtRoleId > 0)
+                                return jwtRoleId;
+                        }
+                    }
+                    catch { }
+                }
+            }
+
+            return 0;
+        }
+
         public static string ToJson(object value)
         {
             return value == null ? string.Empty : JsonSerializer.Serialize(value);
         }
     }
 }
+
