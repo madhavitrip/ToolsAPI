@@ -1,6 +1,7 @@
 
 using DocumentFormat.OpenXml.Bibliography;
 using ERPToolsAPI.Data;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.CodeAnalysis;
 using Microsoft.EntityFrameworkCore;
@@ -21,7 +22,6 @@ namespace Tools.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
-    [Microsoft.AspNetCore.Authorization.AllowAnonymous]
     public class RPTTemplatesController : ControllerBase
     {
         private readonly ERPToolsDbContext _context;
@@ -45,6 +45,7 @@ namespace Tools.Controllers
         }
 
         // GET: api/RPTTemplates
+        [AllowAnonymous]
         [HttpGet]
         public async Task<ActionResult<IEnumerable<object>>> GetRPTTemplate()
         {
@@ -67,6 +68,7 @@ namespace Tools.Controllers
         }
 
         // GET: api/RPTTemplates/by-group?typeId=2&groupId=1&projectId=10
+        [AllowAnonymous]
         [HttpGet("by-group")]
         public async Task<ActionResult> GetByGroup(
      [FromQuery] int? typeId,
@@ -134,6 +136,7 @@ namespace Tools.Controllers
         }
 
         // GET: api/RPTTemplates/versions?typeId=2&templateName=ABC&groupId=1&projectId=10
+        [AllowAnonymous]
         [HttpGet("versions")]
         public async Task<ActionResult> GetVersions(
             [FromQuery] int typeId,
@@ -191,6 +194,7 @@ namespace Tools.Controllers
         }
 
         // GET: api/RPTTemplates/mapping-options?groupId=1&typeId=2
+        [AllowAnonymous]
         [HttpGet("mapping-options")]
         public async Task<ActionResult> GetMappingOptions(int groupId, int typeId, int? projectId = null, int? templateId = null)
         {
@@ -407,6 +411,7 @@ namespace Tools.Controllers
         }
 
         // GET: api/RPTTemplates/5
+        [AllowAnonymous]
         [HttpGet("{id}")]
         public async Task<ActionResult<RPTTemplate>> GetRPTTemplate(int id)
         {
@@ -417,6 +422,7 @@ namespace Tools.Controllers
 
         // PUT: api/RPTTemplates/5
         // body: { templateName, moduleIds, applyToAllVersions }
+        [Authorize]
         [HttpPut("{id}")]
         public async Task<ActionResult> UpdateTemplate(int id, [FromBody] UpdateTemplateRequest req)
         {
@@ -489,6 +495,7 @@ namespace Tools.Controllers
 
         // POST: api/RPTTemplates/upload
         // multipart/form-data: file (.rpt), typeId, templateName, optional groupId, optional projectId
+        [Authorize]
         [HttpPost("upload")]
         public async Task<ActionResult> Upload([FromForm] int typeId, [FromForm] string templateName, IFormFile file,
             [FromForm] int? groupId, [FromForm] int? projectId, [FromForm] List<int>? moduleIds, [FromForm] bool forceUpload = false)
@@ -496,20 +503,76 @@ namespace Tools.Controllers
             if (file == null || file.Length == 0)
                 return BadRequest("No file uploaded.");
 
-            // Authorization check: Managers (RoleId 4) cannot upload master/standard or group-level templates
+            // Authorization check: Extract user role from JWT token
             int userRoleId = LogHelper.GetUserRoleId(User, Request);
-            groupId = NormalizeNullableId(groupId);
-            projectId = NormalizeNullableId(projectId);
             
-            if (userRoleId == 4 && (!projectId.HasValue || !groupId.HasValue))
+            // Debug: Log what we're getting
+            var authHeader = Request.Headers["Authorization"].ToString();
+            System.Diagnostics.Debug.WriteLine($"[DEBUG] Authorization Header: {(string.IsNullOrWhiteSpace(authHeader) ? "MISSING" : "Present")}");
+            System.Diagnostics.Debug.WriteLine($"[DEBUG] User.Identity.IsAuthenticated: {User?.Identity?.IsAuthenticated}");
+            System.Diagnostics.Debug.WriteLine($"[DEBUG] Extracted RoleId: {userRoleId}");
+            
+            // If role cannot be determined, return 401
+            if (userRoleId <= 0)
             {
                 await _loggerService.LogEventAsync(
-                    $"AUTHORIZATION DENIED: Manager (RoleId 4) attempted to upload standard/group template '{templateName}'",
+                    $"AUTHORIZATION FAILED: Unable to extract roleId from token for template '{templateName}'",
                     "RPTTemplate",
                     LogHelper.GetTriggeredBy(User),
                     0
                 );
-                return StatusCode(403, new { message = "Managers are only allowed to upload project-specific templates." });
+                return StatusCode(401, new { message = "Unable to determine user role from token.", authHeaderPresent = !string.IsNullOrWhiteSpace(authHeader), isAuthenticated = User?.Identity?.IsAuthenticated });
+            }
+
+            groupId = NormalizeNullableId(groupId);
+            projectId = NormalizeNullableId(projectId);
+            
+            // Authorization Rules:
+            // 1. Master templates (no groupId, no projectId): Only RoleId 1, 2, 3
+            // 2. Group templates (groupId only, no projectId): Only RoleId 1, 2, 3
+            // 3. Project templates (both groupId and projectId): All authorized roles (1, 2, 3, 4)
+            
+            if (!projectId.HasValue && !groupId.HasValue)
+            {
+                // Master template - only full access roles
+                if (userRoleId != 1 && userRoleId != 2 && userRoleId != 3)
+                {
+                    await _loggerService.LogEventAsync(
+                        $"AUTHORIZATION DENIED: User with RoleId {userRoleId} attempted to upload master template '{templateName}'",
+                        "RPTTemplate",
+                        LogHelper.GetTriggeredBy(User),
+                        0
+                    );
+                    return StatusCode(403, new { message = "You are not authorized to upload RPT templates at this level." });
+                }
+            }
+            else if (!projectId.HasValue && groupId.HasValue)
+            {
+                // Group template - only full access roles
+                if (userRoleId != 1 && userRoleId != 2 && userRoleId != 3)
+                {
+                    await _loggerService.LogEventAsync(
+                        $"AUTHORIZATION DENIED: User with RoleId {userRoleId} attempted to upload group template '{templateName}'",
+                        "RPTTemplate",
+                        LogHelper.GetTriggeredBy(User),
+                        0
+                    );
+                    return StatusCode(403, new { message = "You are not authorized to upload RPT templates for this group." });
+                }
+            }
+            else if (projectId.HasValue && groupId.HasValue)
+            {
+                // Project template - all authorized roles allowed (1, 2, 3, 4)
+                if (userRoleId != 1 && userRoleId != 2 && userRoleId != 3 && userRoleId != 4)
+                {
+                    await _loggerService.LogEventAsync(
+                        $"AUTHORIZATION DENIED: User with RoleId {userRoleId} attempted to upload project template '{templateName}'",
+                        "RPTTemplate",
+                        LogHelper.GetTriggeredBy(User),
+                        0
+                    );
+                    return StatusCode(403, new { message = "You are not authorized to upload RPT templates for this project." });
+                }
             }
 
             var ext = Path.GetExtension(file.FileName).ToLowerInvariant();
@@ -757,6 +820,7 @@ namespace Tools.Controllers
         // scope=project  → marks deleted only for the project scope (ProjectId must be set on template)
         // scope=group    → marks deleted only for the group+type scope (GroupId set, ProjectId null)
         // scope=standard → marks deleted only for the standard scope (GroupId null, ProjectId null)
+        [Authorize]
         [HttpDelete("{id}/soft-delete")]
         public async Task<ActionResult> SoftDelete(int id, [FromQuery] string? scope = null)
         {
@@ -847,6 +911,7 @@ namespace Tools.Controllers
 
         // POST: api/RPTTemplates/{id}/activate
         // Marks a specific version as active for its scope (standard/group/project)
+        [Authorize]
         [HttpPost("{id}/activate")]
         public async Task<ActionResult> ActivateTemplate(int id)
         {
@@ -903,6 +968,7 @@ namespace Tools.Controllers
 
         // POST: api/RPTTemplates/import-from-group
         // Copy all active templates from a source group+type to a new group+type
+        [Authorize]
         [HttpPost("import-from-group")]
         public async Task<ActionResult> ImportFromGroup([FromBody] ImportGroupRequest req)
         {
@@ -1074,6 +1140,7 @@ namespace Tools.Controllers
         }
 
         // GET: api/RPTTemplates/5/mapping
+        [AllowAnonymous]
         [HttpGet("{id}/mapping")]
         public async Task<ActionResult> GetMapping(int id)
         {
@@ -1089,6 +1156,7 @@ namespace Tools.Controllers
 
         // POST: api/RPTTemplates/{id}/mapping
         // body: { mappingJson: "..." }
+        [Authorize]
         [HttpPost("{id}/mapping")]
         public async Task<ActionResult> SaveMapping(int id, [FromBody] SaveMappingRequest req)
         {
@@ -1213,6 +1281,7 @@ namespace Tools.Controllers
 
         // POST: api/RPTTemplates/{id}/parse-fields
         // Re-parse existing template and store parsed fields in DB
+        [Authorize]
         [HttpPost("{id}/parse-fields")]
         public async Task<ActionResult> ParseFields(int id)
         {
@@ -1453,6 +1522,7 @@ namespace Tools.Controllers
             }
         }*/
         //GET: api/RPTTemplates/5/download
+        [AllowAnonymous]
         [HttpGet("{id}/download")]
         public async Task<ActionResult> Download(int id)
         {
