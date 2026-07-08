@@ -287,38 +287,388 @@ namespace Tools.Controllers
             });
         }
 
+        //  [HttpGet("GetUniqueByProjectId/{projectId}")]
+        //  public async Task<ActionResult> GetUniqueByProjectId(
+        //int projectId,
+        //int pageSize,
+        //int pageNo,
+        //string? search = null,
+        //string? key = null,
+        //string? sortField = null,
+        //string? sortOrder = null,
+        //int? lotNo = null,
+        //bool? assigned = null,
+        //bool? missingExamDate = null)
+        //  {
+        //      IQueryable<NRData> query = _context.NRDatas
+        //          .Where(d => d.ProjectId == projectId && d.Status == true);
+
+
+        //      if (lotNo.HasValue)
+        //      {
+        //          query = query.Where(d => d.LotNo == lotNo.Value);
+        //      }
+
+
+        //      if (assigned.HasValue)
+        //      {
+        //          query = assigned.Value
+        //              ? query.Where(d => d.LotNo > 0)
+        //              : query.Where(d => d.LotNo <= 0);
+        //      }
+
+
+        //      if (missingExamDate.HasValue && missingExamDate.Value)
+        //      {
+        //          query = query.Where(d =>
+        //              d.ExamDate == null ||
+        //              d.ExamDate == "" ||
+        //              d.ExamDate == "null" ||
+        //              d.ExamDate == "undefined");
+        //      }
+
+
+        //      // SEARCH
+        //      if (!string.IsNullOrWhiteSpace(search) &&
+        //          !string.IsNullOrWhiteSpace(key))
+        //      {
+        //          search = search.ToLower();
+
+        //          query = key switch
+        //          {
+        //              "CatchNo" =>
+        //                  query.Where(d => d.CatchNo != null &&
+        //                                   d.CatchNo.ToLower().Contains(search)),
+
+        //              "SubjectName" =>
+        //                  query.Where(d => d.SubjectName != null &&
+        //                                   d.SubjectName.ToLower().Contains(search)),
+
+        //              "CourseName" =>
+        //                  query.Where(d => d.CourseName != null &&
+        //                                   d.CourseName.ToLower().Contains(search)),
+
+
+        //              "ExamDate" =>
+        //                  query.Where(d => d.ExamDate.Contains(search)),
+
+        //              "ExamTime" =>
+        //                  query.Where(d => d.ExamTime.Contains(search)),
+
+
+
+        //              _ => throw new Exception($"Key '{key}' is not searchable.")
+        //          };
+        //      }
+
+
+
+        //      // GROUP
+        //      var groupedQuery = query
+        //          .GroupBy(x => x.CatchNo)
+        //          .Select(g => new
+        //          {
+        //              Id = g.Min(x => x.Id),
+        //              CatchNo = g.Key,
+
+        //              ExamDate = g.Min(x => x.ExamDate),
+        //              ExamTime = g.Min(x => x.ExamTime),
+
+        //              SubjectName = g.Min(x => x.SubjectName),
+        //              CourseName = g.Min(x => x.CourseName),
+
+        //              NRQuantity = g.Sum(x => x.NRQuantity),
+        //              Quantity = g.Sum(x => x.Quantity),
+
+        //              Pages = g.Min(x => x.Pages),
+        //              Symbol = g.Min(x => x.Symbol),
+
+        //              LotNo = g.Min(x => x.LotNo),
+
+        //              CenterCode = g.Min(x => x.CenterCode),
+
+        //              NRDatas = g.Select(x => x.NRDatas).FirstOrDefault(),
+
+        //              RecordCount = g.Count()
+        //          });
+
+
+
+        //      // SORT
+        //      var normalizedSortField = NormalizeText(sortField);
+        //      var normalizedSortOrder = NormalizeText(sortOrder)
+        //                                  .ToLowerInvariant();
+
+        //      bool asc = normalizedSortOrder != "descend";
+
+
+        //      groupedQuery = normalizedSortField switch
+        //      {
+        //          "CatchNo" =>
+        //              asc ? groupedQuery.OrderBy(x => x.CatchNo)
+        //                  : groupedQuery.OrderByDescending(x => x.CatchNo),
+
+        //          "ExamDate" =>
+        //              asc ? groupedQuery.OrderBy(x => x.ExamDate)
+        //                  : groupedQuery.OrderByDescending(x => x.ExamDate),
+
+        //          "ExamTime" =>
+        //              asc ? groupedQuery.OrderBy(x => x.ExamTime)
+        //                  : groupedQuery.OrderByDescending(x => x.ExamTime),
+
+        //          "NRQuantity" =>
+        //              asc ? groupedQuery.OrderBy(x => x.NRQuantity)
+        //                  : groupedQuery.OrderByDescending(x => x.NRQuantity),
+
+        //          "Quantity" =>
+        //              asc ? groupedQuery.OrderBy(x => x.Quantity)
+        //                  : groupedQuery.OrderByDescending(x => x.Quantity),
+
+        //          "CourseName" =>
+        //              asc ? groupedQuery.OrderBy(x => x.CourseName)
+        //                  : groupedQuery.OrderByDescending(x => x.CourseName),
+
+        //          "SubjectName" =>
+        //              asc ? groupedQuery.OrderBy(x => x.SubjectName)
+        //                  : groupedQuery.OrderByDescending(x => x.SubjectName),
+
+        //          _ => groupedQuery.OrderBy(x => x.Id)
+        //      };
+
+
+
+        //      int totalCount = await groupedQuery.CountAsync();
+
+        //      int totalPages = (int)Math.Ceiling(
+        //          totalCount / (double)pageSize);
+
+
+
+        //      var data = await groupedQuery
+        //          .Skip((pageNo - 1) * pageSize)
+        //          .Take(pageSize)
+        //          .ToListAsync();
+
+
+
+        //      if (!data.Any())
+        //      {
+        //          return Ok(new
+        //          {
+        //              items = new List<object>(),
+        //              columns = new List<string>(),
+        //              totalCount = 0,
+        //              totalPages = 0
+        //          });
+        //      }
+
+
+
+        //      // GET UNIQUE FIELDS
+        //      var uniqueFieldNames = await _context.Fields
+        //          .Where(f => f.IsUnique)
+        //          .Select(f => f.Name.ToLowerInvariant())
+        //          .ToListAsync();
+
+
+
+        //      var properties = data.First()
+        //          .GetType()
+        //          .GetProperties();
+
+
+
+        //      // ONLY UNIQUE COLUMNS + SYSTEM FIELDS
+        //      var columns = properties
+        //          .Where(p =>
+        //              uniqueFieldNames.Contains(
+        //                  p.Name.ToLowerInvariant())
+        //              ||
+        //              p.Name.Equals("Id",
+        //                  StringComparison.OrdinalIgnoreCase)
+        //              ||
+        //              p.Name.Equals("CatchNo",
+        //                  StringComparison.OrdinalIgnoreCase)
+        //              ||
+        //              p.Name.Equals("RecordCount",
+        //                  StringComparison.OrdinalIgnoreCase)
+        //              ||
+        //              p.Name.Equals("NRDatas",
+        //                  StringComparison.OrdinalIgnoreCase)
+        //              ||
+        //              p.Name.Equals("Quantity",
+        //                  StringComparison.OrdinalIgnoreCase)
+        //          )
+        //          .Select(p => p.Name)
+        //          .ToList();
+
+        //      // Add unique fields from NRDatas JSON
+        //      foreach (var field in uniqueFieldNames)
+        //      {
+        //          if (!columns.Any(c =>
+        //              c.Equals(field,
+        //              StringComparison.OrdinalIgnoreCase)))
+        //          {
+        //              columns.Add(field);
+        //          }
+        //      }
+
+        //      var result = data.Select(d =>
+        //      {
+        //          var dict = new Dictionary<string, object?>(
+        //              StringComparer.OrdinalIgnoreCase);
+
+        //          // Existing properties
+        //          foreach (var col in columns)
+        //          {
+        //              var prop = properties
+        //                  .FirstOrDefault(x =>
+        //                      x.Name.Equals(col,
+        //                      StringComparison.OrdinalIgnoreCase));
+
+        //              if (prop != null)
+        //              {
+        //                  dict[col] = prop.GetValue(d);
+        //              }
+        //          }
+
+        //          // Read unique fields from NRDatas JSON
+        //          var nrDatasValue = properties
+        //              .FirstOrDefault(x => x.Name == "NRDatas")
+        //              ?.GetValue(d)?
+        //              .ToString();
+
+        //          if (!string.IsNullOrWhiteSpace(nrDatasValue))
+        //          {
+        //              try
+        //              {
+        //                  using var jsonDoc =
+        //                      JsonDocument.Parse(nrDatasValue);
+
+        //                  foreach (var uniqueField in uniqueFieldNames)
+        //                  {
+        //                      foreach (var property in jsonDoc.RootElement.EnumerateObject())
+        //                      {
+        //                          if (property.Name.Equals(
+        //                              uniqueField,
+        //                              StringComparison.OrdinalIgnoreCase))
+        //                          {
+        //                              dict[property.Name] =
+        //                                  property.Value.ValueKind switch
+        //                                  {
+        //                                      JsonValueKind.String =>
+        //                                          property.Value.GetString(),
+
+        //                                      JsonValueKind.Number =>
+        //                                          property.Value.ToString(),
+
+        //                                      JsonValueKind.True =>
+        //                                          true,
+
+        //                                      JsonValueKind.False =>
+        //                                          false,
+
+        //                                      JsonValueKind.Null =>
+        //                                          null,
+
+        //                                      _ =>
+        //                                          property.Value.ToString()
+        //                                  };
+
+        //                              break;
+        //                          }
+        //                      }
+        //                  }
+        //              }
+        //              catch
+        //              {
+        //                  // Ignore invalid JSON
+        //              }
+        //          }
+
+        //          return dict;
+
+        //      }).ToList();
+
+
+
+        //      var finalColumns = new List<string>();
+        //      foreach (var col in columns)
+        //      {
+        //          if (col.Equals("Id", StringComparison.OrdinalIgnoreCase) ||
+        //              col.Equals("CatchNo", StringComparison.OrdinalIgnoreCase) ||
+        //              col.Equals("RecordCount", StringComparison.OrdinalIgnoreCase) ||
+        //              col.Equals("Quantity", StringComparison.OrdinalIgnoreCase))
+        //          {
+        //              finalColumns.Add(col);
+        //              continue;
+        //          }
+
+        //          if (col.Equals("NRDatas", StringComparison.OrdinalIgnoreCase))
+        //          {
+        //              // Skip adding to columns list returned in response header, but keep in data dictionary
+        //              continue;
+        //          }
+
+        //          bool hasData = result.Any(d =>
+        //          {
+        //              if (d.TryGetValue(col, out var val) && val != null)
+        //              {
+        //                  var str = val.ToString()?.Trim();
+        //                  return !string.IsNullOrEmpty(str) && str != "-";
+        //              }
+        //              return false;
+        //          });
+
+        //          if (hasData)
+        //          {
+        //              finalColumns.Add(col);
+        //          }
+        //      }
+
+        //      return Ok(new
+        //      {
+        //          items = result,
+        //          columns = finalColumns,
+        //          totalCount,
+        //          totalPages
+        //      });
+        //  }
+
         [HttpGet("GetUniqueByProjectId/{projectId}")]
         public async Task<ActionResult> GetUniqueByProjectId(
-      int projectId,
-      int pageSize,
-      int pageNo,
-      string? search = null,
-      string? key = null,
-      string? sortField = null,
-      string? sortOrder = null,
-      int? lotNo = null,
-      bool? assigned = null,
-      bool? missingExamDate = null)
+int projectId,
+int pageSize,
+int pageNo,
+string? search = null,
+string? key = null,
+string? sortField = null,
+string? sortOrder = null,
+int? lotNo = null,
+bool? assigned = null,
+bool? missingExamDate = null)
         {
+
             IQueryable<NRData> query = _context.NRDatas
-                .Where(d => d.ProjectId == projectId && d.Status == true);
+                .AsNoTracking()
+                .Where(d =>
+                    d.ProjectId == projectId &&
+                    d.Status);
 
 
             if (lotNo.HasValue)
-            {
-                query = query.Where(d => d.LotNo == lotNo.Value);
-            }
+                query = query.Where(x => x.LotNo == lotNo.Value);
 
 
             if (assigned.HasValue)
             {
                 query = assigned.Value
-                    ? query.Where(d => d.LotNo > 0)
-                    : query.Where(d => d.LotNo <= 0);
+                    ? query.Where(x => x.LotNo > 0)
+                    : query.Where(x => x.LotNo <= 0);
             }
 
 
-            if (missingExamDate.HasValue && missingExamDate.Value)
+            if (missingExamDate == true)
             {
                 query = query.Where(d =>
                     d.ExamDate == null ||
@@ -328,43 +678,50 @@ namespace Tools.Controllers
             }
 
 
-            // SEARCH
+
             if (!string.IsNullOrWhiteSpace(search) &&
                 !string.IsNullOrWhiteSpace(key))
             {
-                search = search.ToLower();
+                search = search.Trim();
 
                 query = key switch
                 {
                     "CatchNo" =>
-                        query.Where(d => d.CatchNo != null &&
-                                         d.CatchNo.ToLower().Contains(search)),
+                        query.Where(x =>
+                            x.CatchNo != null &&
+                            EF.Functions.Like(x.CatchNo, $"%{search}%")),
+
 
                     "SubjectName" =>
-                        query.Where(d => d.SubjectName != null &&
-                                         d.SubjectName.ToLower().Contains(search)),
+                        query.Where(x =>
+                            x.SubjectName != null &&
+                            EF.Functions.Like(x.SubjectName, $"%{search}%")),
+
 
                     "CourseName" =>
-                        query.Where(d => d.CourseName != null &&
-                                         d.CourseName.ToLower().Contains(search)),
+                        query.Where(x =>
+                            x.CourseName != null &&
+                            EF.Functions.Like(x.CourseName, $"%{search}%")),
 
-                 
+
                     "ExamDate" =>
-                        query.Where(d => d.ExamDate.Contains(search)),
+                        query.Where(x =>
+                            x.ExamDate.Contains(search)),
+
 
                     "ExamTime" =>
-                        query.Where(d => d.ExamTime.Contains(search)),
+                        query.Where(x =>
+                            x.ExamTime.Contains(search)),
 
-                 
 
-                    _ => throw new Exception($"Key '{key}' is not searchable.")
+                    _ => query
                 };
             }
 
 
 
-            // GROUP
-            var groupedQuery = query
+            var groupedQuery =
+                query
                 .GroupBy(x => x.CatchNo)
                 .Select(g => new
                 {
@@ -387,61 +744,72 @@ namespace Tools.Controllers
 
                     CenterCode = g.Min(x => x.CenterCode),
 
-                    NRDatas = g.Select(x => x.NRDatas).FirstOrDefault(),
+                    NRDatas = g.Select(x => x.NRDatas)
+                               .FirstOrDefault(),
 
                     RecordCount = g.Count()
                 });
 
 
 
-            // SORT
-            var normalizedSortField = NormalizeText(sortField);
-            var normalizedSortOrder = NormalizeText(sortOrder)
-                                        .ToLowerInvariant();
-
-            bool asc = normalizedSortOrder != "descend";
+            bool asc =
+                NormalizeText(sortOrder)
+                .Equals("descend",
+                StringComparison.OrdinalIgnoreCase) == false;
 
 
-            groupedQuery = normalizedSortField switch
+
+            groupedQuery = sortField switch
             {
+
                 "CatchNo" =>
-                    asc ? groupedQuery.OrderBy(x => x.CatchNo)
-                        : groupedQuery.OrderByDescending(x => x.CatchNo),
+                    asc
+                    ? groupedQuery.OrderBy(x => x.CatchNo)
+                    : groupedQuery.OrderByDescending(x => x.CatchNo),
+
 
                 "ExamDate" =>
-                    asc ? groupedQuery.OrderBy(x => x.ExamDate)
-                        : groupedQuery.OrderByDescending(x => x.ExamDate),
+                    asc
+                    ? groupedQuery.OrderBy(x => x.ExamDate)
+                    : groupedQuery.OrderByDescending(x => x.ExamDate),
+
 
                 "ExamTime" =>
-                    asc ? groupedQuery.OrderBy(x => x.ExamTime)
-                        : groupedQuery.OrderByDescending(x => x.ExamTime),
+                    asc
+                    ? groupedQuery.OrderBy(x => x.ExamTime)
+                    : groupedQuery.OrderByDescending(x => x.ExamTime),
+
 
                 "NRQuantity" =>
-                    asc ? groupedQuery.OrderBy(x => x.NRQuantity)
-                        : groupedQuery.OrderByDescending(x => x.NRQuantity),
+                    asc
+                    ? groupedQuery.OrderBy(x => x.NRQuantity)
+                    : groupedQuery.OrderByDescending(x => x.NRQuantity),
+
 
                 "Quantity" =>
-                    asc ? groupedQuery.OrderBy(x => x.Quantity)
-                        : groupedQuery.OrderByDescending(x => x.Quantity),
+                    asc
+                    ? groupedQuery.OrderBy(x => x.Quantity)
+                    : groupedQuery.OrderByDescending(x => x.Quantity),
+
 
                 "CourseName" =>
-                    asc ? groupedQuery.OrderBy(x => x.CourseName)
-                        : groupedQuery.OrderByDescending(x => x.CourseName),
+                    asc
+                    ? groupedQuery.OrderBy(x => x.CourseName)
+                    : groupedQuery.OrderByDescending(x => x.CourseName),
+
 
                 "SubjectName" =>
-                    asc ? groupedQuery.OrderBy(x => x.SubjectName)
-                        : groupedQuery.OrderByDescending(x => x.SubjectName),
+                    asc
+                    ? groupedQuery.OrderBy(x => x.SubjectName)
+                    : groupedQuery.OrderByDescending(x => x.SubjectName),
+
 
                 _ => groupedQuery.OrderBy(x => x.Id)
             };
 
 
 
-            int totalCount = await groupedQuery.CountAsync();
-
-            int totalPages = (int)Math.Ceiling(
-                totalCount / (double)pageSize);
-
+            var totalCount = await groupedQuery.CountAsync();
 
 
             var data = await groupedQuery
@@ -451,7 +819,7 @@ namespace Tools.Controllers
 
 
 
-            if (!data.Any())
+            if (data.Count == 0)
             {
                 return Ok(new
                 {
@@ -464,127 +832,110 @@ namespace Tools.Controllers
 
 
 
-            // GET UNIQUE FIELDS
-            var uniqueFieldNames = await _context.Fields
-                .Where(f => f.IsUnique)
-                .Select(f => f.Name.ToLowerInvariant())
+            var uniqueFieldNames =
+                await _context.Fields
+                .AsNoTracking()
+                .Where(x => x.IsUnique)
+                .Select(x => x.Name)
                 .ToListAsync();
 
 
+            var uniqueSet =
+                new HashSet<string>(
+                    uniqueFieldNames,
+                    StringComparer.OrdinalIgnoreCase);
 
-            var properties = data.First()
+
+
+            var properties =
+                data.First()
                 .GetType()
                 .GetProperties();
 
 
 
-            // ONLY UNIQUE COLUMNS + SYSTEM FIELDS
-            var columns = properties
-                .Where(p =>
-                    uniqueFieldNames.Contains(
-                        p.Name.ToLowerInvariant())
-                    ||
-                    p.Name.Equals("Id",
-                        StringComparison.OrdinalIgnoreCase)
-                    ||
-                    p.Name.Equals("CatchNo",
-                        StringComparison.OrdinalIgnoreCase)
-                    ||
-                    p.Name.Equals("RecordCount",
-                        StringComparison.OrdinalIgnoreCase)
-                    ||
-                    p.Name.Equals("NRDatas",
-                        StringComparison.OrdinalIgnoreCase)
-                    ||
-                    p.Name.Equals("Quantity",
-                        StringComparison.OrdinalIgnoreCase)
-                )
-                .Select(p => p.Name)
-                .ToList();
-
-            // Add unique fields from NRDatas JSON
-            foreach (var field in uniqueFieldNames)
-            {
-                if (!columns.Any(c =>
-                    c.Equals(field,
-                    StringComparison.OrdinalIgnoreCase)))
-                {
-                    columns.Add(field);
-                }
-            }
-
-            var result = data.Select(d =>
-            {
-                var dict = new Dictionary<string, object?>(
+            var propertyMap =
+                properties.ToDictionary(
+                    x => x.Name,
                     StringComparer.OrdinalIgnoreCase);
 
-                // Existing properties
+
+
+            var columns =
+                properties
+                .Where(x =>
+                    uniqueSet.Contains(x.Name) ||
+                    x.Name.Equals("Id") ||
+                    x.Name.Equals("CatchNo") ||
+                    x.Name.Equals("RecordCount") ||
+                    x.Name.Equals("NRDatas") ||
+                    x.Name.Equals("Quantity") ||
+                    x.Name.Equals("LotNo"))
+                .Select(x => x.Name)
+                .ToList();
+
+
+
+            foreach (var field in uniqueFieldNames)
+            {
+                if (!columns.Contains(field,
+                    StringComparer.OrdinalIgnoreCase))
+                    columns.Add(field);
+            }
+
+
+
+            var result = data.Select(row =>
+            {
+
+                var dict =
+                    new Dictionary<string, object?>(
+                        StringComparer.OrdinalIgnoreCase);
+
+
+
                 foreach (var col in columns)
                 {
-                    var prop = properties
-                        .FirstOrDefault(x =>
-                            x.Name.Equals(col,
-                            StringComparison.OrdinalIgnoreCase));
-
-                    if (prop != null)
+                    if (propertyMap.TryGetValue(col, out var prop))
                     {
-                        dict[col] = prop.GetValue(d);
+                        dict[col] =
+                            prop.GetValue(row);
                     }
                 }
 
-                // Read unique fields from NRDatas JSON
-                var nrDatasValue = properties
-                    .FirstOrDefault(x => x.Name == "NRDatas")
-                    ?.GetValue(d)?
-                    .ToString();
 
-                if (!string.IsNullOrWhiteSpace(nrDatasValue))
+
+                if (dict.TryGetValue("NRDatas",
+                    out var jsonObj)
+                    &&
+                    jsonObj is string json
+                    &&
+                    !string.IsNullOrWhiteSpace(json))
                 {
                     try
                     {
-                        using var jsonDoc =
-                            JsonDocument.Parse(nrDatasValue);
+                        var jsonData =
+                            JsonSerializer
+                            .Deserialize<Dictionary<string, object>>(json);
 
-                        foreach (var uniqueField in uniqueFieldNames)
+
+                        if (jsonData != null)
                         {
-                            foreach (var property in jsonDoc.RootElement.EnumerateObject())
+                            foreach (var field in uniqueFieldNames)
                             {
-                                if (property.Name.Equals(
-                                    uniqueField,
-                                    StringComparison.OrdinalIgnoreCase))
+                                if (jsonData.TryGetValue(field, out var value))
                                 {
-                                    dict[property.Name] =
-                                        property.Value.ValueKind switch
-                                        {
-                                            JsonValueKind.String =>
-                                                property.Value.GetString(),
-
-                                            JsonValueKind.Number =>
-                                                property.Value.ToString(),
-
-                                            JsonValueKind.True =>
-                                                true,
-
-                                            JsonValueKind.False =>
-                                                false,
-
-                                            JsonValueKind.Null =>
-                                                null,
-
-                                            _ =>
-                                                property.Value.ToString()
-                                        };
-
-                                    break;
+                                    dict[field] = value;
                                 }
                             }
                         }
                     }
                     catch
                     {
-                        // Ignore invalid JSON
+
                     }
                 }
+
 
                 return dict;
 
@@ -592,48 +943,44 @@ namespace Tools.Controllers
 
 
 
-            var finalColumns = new List<string>();
-            foreach (var col in columns)
-            {
-                if (col.Equals("Id", StringComparison.OrdinalIgnoreCase) ||
-                    col.Equals("CatchNo", StringComparison.OrdinalIgnoreCase) ||
-                    col.Equals("RecordCount", StringComparison.OrdinalIgnoreCase) ||
-                    col.Equals("Quantity", StringComparison.OrdinalIgnoreCase))
+            var finalColumns =
+                columns
+                .Where(col =>
                 {
-                    finalColumns.Add(col);
-                    continue;
-                }
+                    if (col.Equals("NRDatas",
+                        StringComparison.OrdinalIgnoreCase))
+                        return false;
 
-                if (col.Equals("NRDatas", StringComparison.OrdinalIgnoreCase))
-                {
-                    // Skip adding to columns list returned in response header, but keep in data dictionary
-                    continue;
-                }
 
-                bool hasData = result.Any(d =>
-                {
-                    if (d.TryGetValue(col, out var val) && val != null)
-                    {
-                        var str = val.ToString()?.Trim();
-                        return !string.IsNullOrEmpty(str) && str != "-";
-                    }
-                    return false;
-                });
+                    if (col == "Id" ||
+                       col == "CatchNo" ||
+                       col == "RecordCount" ||
+                       col == "Quantity" ||
+                       col == "LotNo")
+                        return true;
 
-                if (hasData)
-                {
-                    finalColumns.Add(col);
-                }
-            }
+
+                    return result.Any(x =>
+                        x.TryGetValue(col, out var v) &&
+                        v != null &&
+                        !string.IsNullOrWhiteSpace(v.ToString()) &&
+                        v.ToString() != "-");
+                })
+                .ToList();
+
+
 
             return Ok(new
             {
                 items = result,
                 columns = finalColumns,
                 totalCount,
-                totalPages
+                totalPages =
+                    (int)Math.Ceiling(
+                        totalCount / (double)pageSize)
             });
         }
+
         [HttpGet("UploadVersions/{projectId}")]
         public async Task<IActionResult> GetUploadVersions(int projectId)
         {
@@ -1882,26 +2229,20 @@ namespace Tools.Controllers
                     }
                     else
                     {
-                        changedFields.Add(key);
-                        extraData[prop.Name] = value;
-                        if (normalizedUniqueFields.Contains(key))
+                        var matchedKey = existingExtraData.Keys.FirstOrDefault(k => NormalizeKey(k) == key);
+                        var currentDynamicValue = matchedKey != null ? existingExtraData[matchedKey] ?? "" : "";
+                        
+                        if (currentDynamicValue != value)
                         {
-                            hasUniqueFieldsEdited = true;
+                            changedFields.Add(key);
+                            extraData[prop.Name] = value;
+                            if (normalizedUniqueFields.Contains(key))
+                            {
+                                hasUniqueFieldsEdited = true;
+                            }
                         }
                     }
                 }
-
-                // Merge dynamic JSON data
-                foreach (var kv in extraData)
-                {
-                    var matchedKey = existingExtraData.Keys
-                        .FirstOrDefault(k => NormalizeKey(k) == NormalizeKey(kv.Key))
-                        ?? kv.Key;
-
-                    existingExtraData[matchedKey] = kv.Value;
-                }
-
-                string serializedExtraData = JsonSerializer.Serialize(existingExtraData);
 
                 // Apply updates to all records of that catch
                 foreach (var record in records)
@@ -1930,7 +2271,26 @@ namespace Tools.Controllers
 
                     if (extraData.Any())
                     {
-                        record.NRDatas = serializedExtraData;
+                        Dictionary<string, string> recordExtraData = new();
+                        if (!string.IsNullOrWhiteSpace(record.NRDatas))
+                        {
+                            try
+                            {
+                                recordExtraData = JsonSerializer.Deserialize<Dictionary<string, string>>(record.NRDatas) ?? new();
+                            }
+                            catch { }
+                        }
+
+                        foreach (var kv in extraData)
+                        {
+                            var matchedKey = recordExtraData.Keys
+                                .FirstOrDefault(k => NormalizeKey(k) == NormalizeKey(kv.Key))
+                                ?? kv.Key;
+
+                            recordExtraData[matchedKey] = kv.Value;
+                        }
+
+                        record.NRDatas = JsonSerializer.Serialize(recordExtraData);
                     }
 
                     _context.NRDatas.Update(record);
@@ -2009,7 +2369,11 @@ namespace Tools.Controllers
                         .Where(x => x.ProjectId == projectId && x.LotNo == existingRecord.LotNo && x.Status)
                         .ExecuteUpdateAsync(s => s.SetProperty(x => x.Steps, 5));
                     
-                    existingRecord.Steps = 5;
+                    // MUST update tracked entities to prevent SaveChangesAsync from overwriting with old values
+                    foreach (var record in records)
+                    {
+                        record.Steps = 5;
+                    }
                 }
 
                 _context.NRDatas.Update(existingRecord);
@@ -2568,15 +2932,89 @@ namespace Tools.Controllers
         }
 
 
+        //[HttpGet("PipelineRerunStatus")]
+        //public async Task<ActionResult> GetPipelineRerunStatus(int ProjectId)
+        //{
+        //    var activeSteps = await _context.NRDatas
+        //        .Where(p => p.ProjectId == ProjectId && p.Status == true)
+        //        .Select(p => p.Steps)
+        //        .ToListAsync();
+
+        //    if (!activeSteps.Any())
+        //    {
+        //        return Ok(new
+        //        {
+        //            hasPendingPipelineChanges = false,
+        //            minStep = 6,
+        //            maxStep = 6,
+        //            totalActive = 0
+        //        });
+        //    }
+
+        //    int minStep = activeSteps.Min();
+        //    int maxStep = activeSteps.Max();
+        //    bool hasPendingPipelineChanges = minStep < Tools.Models.PipelineNavigator.STEP_DONE;
+
+        //    var lotsWithReports = await _context.BoxBreakingResults
+        //        .Where(b => b.ProjectId == ProjectId && b.Status && b.EnvelopeBreakingResultId.HasValue)
+        //        .Join(_context.EnvelopeBreakingResults,
+        //            b => b.EnvelopeBreakingResultId.Value,
+        //            e => e.Id,
+        //            (b, e) => new { e.CatchNo })
+        //        .Join(_context.NRDatas.Where(n => n.ProjectId == ProjectId && n.Status == true),
+        //            e => e.CatchNo,
+        //            n => n.CatchNo,
+        //            (e, n) => n.LotNo)
+        //        .Distinct()
+        //        .ToListAsync();
+
+        //    var pendingBoxLots = new List<int>();
+        //    if (lotsWithReports.Any())
+        //    {
+        //        pendingBoxLots = await _context.NRDatas
+        //            .Where(n => n.ProjectId == ProjectId && n.Status == true && lotsWithReports.Contains(n.LotNo) && n.Steps <= 5)
+        //            .Select(n => n.LotNo)
+        //            .Distinct()
+        //            .OrderBy(l => l)
+        //            .ToListAsync();
+        //    }
+
+        //    return Ok(new
+        //    {
+        //        hasPendingPipelineChanges,
+        //        minStep,
+        //        maxStep,
+        //        totalActive = activeSteps.Count,
+        //        duplicatePending = activeSteps.Any(s => s == 0),
+        //        enhancementPending = activeSteps.Any(s => s <= 2),
+        //        extraPending = activeSteps.Any(s => s <= 3),
+        //        envelopePending = activeSteps.Any(s => s <= 4),
+        //        boxPending = pendingBoxLots.Any(),
+        //        pendingBoxLots = pendingBoxLots
+        //    });
+        //}
+
+
         [HttpGet("PipelineRerunStatus")]
         public async Task<ActionResult> GetPipelineRerunStatus(int ProjectId)
         {
-            var activeSteps = await _context.NRDatas
+            var activeStepStats = await _context.NRDatas
                 .Where(p => p.ProjectId == ProjectId && p.Status == true)
-                .Select(p => p.Steps)
-                .ToListAsync();
+                .GroupBy(x => 1)
+                .Select(g => new
+                {
+                    MinStep = g.Min(x => x.Steps),
+                    MaxStep = g.Max(x => x.Steps),
+                    TotalActive = g.Count(),
+                    DuplicatePending = g.Any(x => x.Steps == 0),
+                    EnhancementPending = g.Any(x => x.Steps <= 2),
+                    ExtraPending = g.Any(x => x.Steps <= 3),
+                    EnvelopePending = g.Any(x => x.Steps <= 4)
+                })
+                .FirstOrDefaultAsync();
 
-            if (!activeSteps.Any())
+
+            if (activeStepStats == null)
             {
                 return Ok(new
                 {
@@ -2587,49 +3025,58 @@ namespace Tools.Controllers
                 });
             }
 
-            int minStep = activeSteps.Min();
-            int maxStep = activeSteps.Max();
-            bool hasPendingPipelineChanges = minStep < Tools.Models.PipelineNavigator.STEP_DONE;
 
-            var lotsWithReports = await _context.BoxBreakingResults
-                .Where(b => b.ProjectId == ProjectId && b.Status && b.EnvelopeBreakingResultId.HasValue)
-                .Join(_context.EnvelopeBreakingResults,
-                    b => b.EnvelopeBreakingResultId.Value,
-                    e => e.Id,
-                    (b, e) => new { e.CatchNo })
-                .Join(_context.NRDatas.Where(n => n.ProjectId == ProjectId && n.Status == true),
-                    e => e.CatchNo,
-                    n => n.CatchNo,
-                    (e, n) => n.LotNo)
+            var lotsWithReportsQuery =
+                from b in _context.BoxBreakingResults
+                join e in _context.EnvelopeBreakingResults
+                    on b.EnvelopeBreakingResultId equals e.Id
+                join n in _context.NRDatas
+                    on e.CatchNo equals n.CatchNo
+                where
+                    b.ProjectId == ProjectId &&
+                    b.Status &&
+                    b.EnvelopeBreakingResultId.HasValue &&
+                    n.ProjectId == ProjectId &&
+                    n.Status
+                select n.LotNo;
+
+
+            var lotsWithReports = await lotsWithReportsQuery
                 .Distinct()
                 .ToListAsync();
 
-            var pendingBoxLots = new List<int>();
-            if (lotsWithReports.Any())
-            {
-                pendingBoxLots = await _context.NRDatas
-                    .Where(n => n.ProjectId == ProjectId && n.Status == true && lotsWithReports.Contains(n.LotNo) && n.Steps <= 5)
-                    .Select(n => n.LotNo)
-                    .Distinct()
-                    .OrderBy(l => l)
-                    .ToListAsync();
-            }
+
+            var pendingBoxLots = await _context.NRDatas
+                .Where(n =>
+                    n.ProjectId == ProjectId &&
+                    n.Status &&
+                    lotsWithReports.Contains(n.LotNo) &&
+                    n.Steps <= 5)
+                .Select(n => n.LotNo)
+                .Distinct()
+                .OrderBy(x => x)
+                .ToListAsync();
+
 
             return Ok(new
             {
-                hasPendingPipelineChanges,
-                minStep,
-                maxStep,
-                totalActive = activeSteps.Count,
-                duplicatePending = activeSteps.Any(s => s == 0),
-                enhancementPending = activeSteps.Any(s => s <= 2),
-                extraPending = activeSteps.Any(s => s <= 3),
-                envelopePending = activeSteps.Any(s => s <= 4),
+                hasPendingPipelineChanges =
+                    activeStepStats.MinStep < Tools.Models.PipelineNavigator.STEP_DONE,
+
+                minStep = activeStepStats.MinStep,
+                maxStep = activeStepStats.MaxStep,
+
+                totalActive = activeStepStats.TotalActive,
+
+                duplicatePending = activeStepStats.DuplicatePending,
+                enhancementPending = activeStepStats.EnhancementPending,
+                extraPending = activeStepStats.ExtraPending,
+                envelopePending = activeStepStats.EnvelopePending,
+
                 boxPending = pendingBoxLots.Any(),
-                pendingBoxLots = pendingBoxLots
+                pendingBoxLots
             });
         }
-
 
         [HttpGet("DuplicateRerunStatus")]
         public async Task<ActionResult> GetDuplicateRerunStatus(int ProjectId)
