@@ -2021,7 +2021,12 @@ namespace Tools.Controllers
                         nRData.UploadList = new List<int> { 1 };
                         nRData.Status = true;
                         nRData.Steps = Tools.Models.PipelineNavigator.STEP_UPLOADED;
-                        nrDatasToAdd.Add(nRData);
+                        
+                        bool isExtraRow = nRData.CenterCode switch { "Nodal Extra" => true, "University Extra" => true, "Office Extra" => true, _ => false };
+                        if (!isExtraRow)
+                        {
+                            nrDatasToAdd.Add(nRData);
+                        }
 
                         // Extra Envelopes
                         var extraEnvelopes = ProcessExtraEnvelopes(
@@ -2158,15 +2163,20 @@ namespace Tools.Controllers
                     if (versioningResult.ActionTaken == "NoChange")
                         continue;
 
-                    nrDatasToAddNormal.AddRange(versioningResult.NewRecords);
+                    bool isExtraRow = nRData.CenterCode switch { "Nodal Extra" => true, "University Extra" => true, "Office Extra" => true, _ => false };
+                    
+                    if (!isExtraRow)
+                    {
+                        nrDatasToAddNormal.AddRange(versioningResult.NewRecords);
 
-                    catchesToResetToDuplicate.UnionWith(
-                        versioningResult.CatchesToReset
-                    );
+                        catchesToResetToDuplicate.UnionWith(
+                            versioningResult.CatchesToReset
+                        );
 
-                    deactivatedCount += versioningResult.DeactivatedCount;
+                        deactivatedCount += versioningResult.DeactivatedCount;
 
-                    lotsToReset.UnionWith(versioningResult.LotsToReset);
+                        lotsToReset.UnionWith(versioningResult.LotsToReset);
+                    }
 
                     // Extra Envelopes
                     var extraEnvelopes = ProcessExtraEnvelopes(
@@ -5001,9 +5011,10 @@ namespace Tools.Controllers
                     if (!string.IsNullOrWhiteSpace(config.EnvelopeType)) try { envelopeType = JsonSerializer.Deserialize<EnvelopeType>(config.EnvelopeType); } catch { }
                     int innerCapacity = envelopeType != null ? GetEnvelopeCapacity(envelopeType.Inner) : 1;
                     int outerCapacity = envelopeType != null ? GetEnvelopeCapacity(envelopeType.Outer) : 1;
-                    int roundedQty = nRData.NRQuantity;
-                    if (innerCapacity > 0) roundedQty = (int)Math.Ceiling((double)nRData.NRQuantity / innerCapacity) * innerCapacity;
-                    else if (outerCapacity > 0) roundedQty = (int)Math.Ceiling((double)nRData.NRQuantity / outerCapacity) * outerCapacity;
+                    int baseQty = nRData.NRQuantity > 0 ? nRData.NRQuantity : nRData.Quantity;
+                    int roundedQty = baseQty;
+                    if (innerCapacity > 0) roundedQty = (int)Math.Ceiling((double)baseQty / innerCapacity) * innerCapacity;
+                    else if (outerCapacity > 0) roundedQty = (int)Math.Ceiling((double)baseQty / outerCapacity) * outerCapacity;
 
                     extraEnvelopesToAdd.Add(new ExtraEnvelopes { ProjectId = projectId, CatchNo = nRData.CatchNo, ExtraId = extraTypeId.Value, Quantity = roundedQty, InnerEnvelope = innerCapacity > 0 ? Math.Ceiling((double)roundedQty / innerCapacity).ToString() : "0", OuterEnvelope = outerCapacity > 0 ? Math.Ceiling((double)roundedQty / outerCapacity).ToString() : "0", Status = 1 });
                 }
