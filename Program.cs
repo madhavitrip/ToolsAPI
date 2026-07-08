@@ -1,5 +1,7 @@
 
 using System.Text;
+using System.Security.Claims;
+using System.IdentityModel.Tokens.Jwt;
 using ERPToolsAPI.Data;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
@@ -18,6 +20,7 @@ builder.Services.AddDbContext<ERPToolsDbContext>(options =>
     options.UseMySql(builder.Configuration.GetConnectionString("ERPToolsDb"),
         ServerVersion.AutoDetect(builder.Configuration.GetConnectionString("ERPToolsDb"))));
 builder.Services.AddScoped<ILoggerService, LoggerService>();
+builder.Services.AddScoped<IAuthorizationService, AuthorizationService>();
 
 // Register API settings from configuration
 builder.Services.Configure<ApiSettings>(builder.Configuration.GetSection("ApiSettings"));
@@ -37,7 +40,45 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             ValidateIssuerSigningKey = true,
             ValidIssuer = builder.Configuration["JwtSettings:Issuer"],
             ValidAudience =  builder.Configuration["JwtSettings:Audience"],
-            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(builder.Configuration["JwtSettings:SecretKey"]))
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(builder.Configuration["JwtSettings:SecretKey"])),
+            NameClaimType = "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name"
+        };
+        
+        // Map custom claims from JWT to ClaimsPrincipal
+        options.Events = new JwtBearerEvents
+        {
+            OnTokenValidated = context =>
+            {
+                // Extract custom claims and add them to the ClaimsPrincipal
+                var token = context.SecurityToken as JwtSecurityToken;
+                if (token != null)
+                {
+                    var identity = context.Principal.Identity as ClaimsIdentity;
+                    if (identity != null)
+                    {
+                        // Add userid claim if not already present
+                        if (identity.FindFirst("userid") == null)
+                        {
+                            var userIdClaim = token.Claims.FirstOrDefault(c => c.Type == "userid");
+                            if (userIdClaim != null)
+                            {
+                                identity.AddClaim(new Claim("userid", userIdClaim.Value));
+                            }
+                        }
+                        
+                        // Add roleId claim if not already present
+                        if (identity.FindFirst("roleId") == null)
+                        {
+                            var roleIdClaim = token.Claims.FirstOrDefault(c => c.Type == "roleId");
+                            if (roleIdClaim != null)
+                            {
+                                identity.AddClaim(new Claim("roleId", roleIdClaim.Value));
+                            }
+                        }
+                    }
+                }
+                return Task.CompletedTask;
+            }
         };
     });
 

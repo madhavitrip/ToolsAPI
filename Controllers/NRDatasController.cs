@@ -287,6 +287,7 @@ namespace Tools.Controllers
             });
         }
 
+
         [HttpGet("GetUniqueByProjectId/{projectId}")]
         public async Task<ActionResult> GetUniqueByProjectId(
        int projectId,
@@ -316,8 +317,8 @@ namespace Tools.Controllers
             if (assigned.HasValue)
             {
                 query = assigned.Value
-                    ? query.Where(d => d.LotNo > 0)
-                    : query.Where(d => d.LotNo <= 0);
+                    ? query.Where(x => x.LotNo > 0)
+                    : query.Where(x => x.LotNo <= 0);
             }
 
             if (missingExamDate == true)
@@ -532,10 +533,11 @@ namespace Tools.Controllers
                 items = result,
                 columns = finalColumns,
                 totalCount,
-                totalPages
+                totalPages =
+                    (int)Math.Ceiling(
+                        totalCount / (double)pageSize)
             });
         }
-
 
         [HttpGet("UploadVersions/{projectId}")]
         public async Task<IActionResult> GetUploadVersions(int projectId)
@@ -1785,26 +1787,20 @@ namespace Tools.Controllers
                     }
                     else
                     {
-                        changedFields.Add(key);
-                        extraData[prop.Name] = value;
-                        if (normalizedUniqueFields.Contains(key))
+                        var matchedKey = existingExtraData.Keys.FirstOrDefault(k => NormalizeKey(k) == key);
+                        var currentDynamicValue = matchedKey != null ? existingExtraData[matchedKey] ?? "" : "";
+                        
+                        if (currentDynamicValue != value)
                         {
-                            hasUniqueFieldsEdited = true;
+                            changedFields.Add(key);
+                            extraData[prop.Name] = value;
+                            if (normalizedUniqueFields.Contains(key))
+                            {
+                                hasUniqueFieldsEdited = true;
+                            }
                         }
                     }
                 }
-
-                // Merge dynamic JSON data
-                foreach (var kv in extraData)
-                {
-                    var matchedKey = existingExtraData.Keys
-                        .FirstOrDefault(k => NormalizeKey(k) == NormalizeKey(kv.Key))
-                        ?? kv.Key;
-
-                    existingExtraData[matchedKey] = kv.Value;
-                }
-
-                string serializedExtraData = JsonSerializer.Serialize(existingExtraData);
 
                 // Apply updates to all records of that catch
                 foreach (var record in records)
@@ -1833,7 +1829,26 @@ namespace Tools.Controllers
 
                     if (extraData.Any())
                     {
-                        record.NRDatas = serializedExtraData;
+                        Dictionary<string, string> recordExtraData = new();
+                        if (!string.IsNullOrWhiteSpace(record.NRDatas))
+                        {
+                            try
+                            {
+                                recordExtraData = JsonSerializer.Deserialize<Dictionary<string, string>>(record.NRDatas) ?? new();
+                            }
+                            catch { }
+                        }
+
+                        foreach (var kv in extraData)
+                        {
+                            var matchedKey = recordExtraData.Keys
+                                .FirstOrDefault(k => NormalizeKey(k) == NormalizeKey(kv.Key))
+                                ?? kv.Key;
+
+                            recordExtraData[matchedKey] = kv.Value;
+                        }
+
+                        record.NRDatas = JsonSerializer.Serialize(recordExtraData);
                     }
 
                     _context.NRDatas.Update(record);
@@ -1912,7 +1927,11 @@ namespace Tools.Controllers
                         .Where(x => x.ProjectId == projectId && x.LotNo == existingRecord.LotNo && x.Status)
                         .ExecuteUpdateAsync(s => s.SetProperty(x => x.Steps, 5));
                     
-                    existingRecord.Steps = 5;
+                    // MUST update tracked entities to prevent SaveChangesAsync from overwriting with old values
+                    foreach (var record in records)
+                    {
+                        record.Steps = 5;
+                    }
                 }
 
                 _context.NRDatas.Update(existingRecord);
@@ -2469,6 +2488,69 @@ namespace Tools.Controllers
             int NrData = await _context.NRDatas.Where(p => p.ProjectId == ProjectId).CountAsync();
             return Ok(new { Conflict, NrData });
         }
+
+
+        //[HttpGet("PipelineRerunStatus")]
+        //public async Task<ActionResult> GetPipelineRerunStatus(int ProjectId)
+        //{
+        //    var activeSteps = await _context.NRDatas
+        //        .Where(p => p.ProjectId == ProjectId && p.Status == true)
+        //        .Select(p => p.Steps)
+        //        .ToListAsync();
+
+        //    if (!activeSteps.Any())
+        //    {
+        //        return Ok(new
+        //        {
+        //            hasPendingPipelineChanges = false,
+        //            minStep = 6,
+        //            maxStep = 6,
+        //            totalActive = 0
+        //        });
+        //    }
+
+        //    int minStep = activeSteps.Min();
+        //    int maxStep = activeSteps.Max();
+        //    bool hasPendingPipelineChanges = minStep < Tools.Models.PipelineNavigator.STEP_DONE;
+
+        //    var lotsWithReports = await _context.BoxBreakingResults
+        //        .Where(b => b.ProjectId == ProjectId && b.Status && b.EnvelopeBreakingResultId.HasValue)
+        //        .Join(_context.EnvelopeBreakingResults,
+        //            b => b.EnvelopeBreakingResultId.Value,
+        //            e => e.Id,
+        //            (b, e) => new { e.CatchNo })
+        //        .Join(_context.NRDatas.Where(n => n.ProjectId == ProjectId && n.Status == true),
+        //            e => e.CatchNo,
+        //            n => n.CatchNo,
+        //            (e, n) => n.LotNo)
+        //        .Distinct()
+        //        .ToListAsync();
+
+        //    var pendingBoxLots = new List<int>();
+        //    if (lotsWithReports.Any())
+        //    {
+        //        pendingBoxLots = await _context.NRDatas
+        //            .Where(n => n.ProjectId == ProjectId && n.Status == true && lotsWithReports.Contains(n.LotNo) && n.Steps <= 5)
+        //            .Select(n => n.LotNo)
+        //            .Distinct()
+        //            .OrderBy(l => l)
+        //            .ToListAsync();
+        //    }
+
+        //    return Ok(new
+        //    {
+        //        hasPendingPipelineChanges,
+        //        minStep,
+        //        maxStep,
+        //        totalActive = activeSteps.Count,
+        //        duplicatePending = activeSteps.Any(s => s == 0),
+        //        enhancementPending = activeSteps.Any(s => s <= 2),
+        //        extraPending = activeSteps.Any(s => s <= 3),
+        //        envelopePending = activeSteps.Any(s => s <= 4),
+        //        boxPending = pendingBoxLots.Any(),
+        //        pendingBoxLots = pendingBoxLots
+        //    });
+        //}
 
 
         [HttpGet("PipelineRerunStatus")]
