@@ -180,15 +180,19 @@ namespace Tools.Controllers
                 if (!nrDataList.Any())
                     return BadRequest("No suitable data found for Extra Configuration. Either no data is at the required step or all data is already processed.");
 
-                var project = await _context.Projects
-                    .Where(p => p.ProjectId == ProjectId)
-                    .Select(p => new { p.GroupId })
-                    .FirstOrDefaultAsync();
+                // var project = await _context.Projects
+                //     .Where(p => p.ProjectId == ProjectId)
+                //     .Select(p => new { p.GroupId })
+                //     .FirstOrDefaultAsync();
 
-                if (project == null)
-                    return BadRequest("Project not found");
+                // if (project == null)
+                //     return BadRequest("Project not found");
 
-                bool isOnlyReport = project.GroupId == 11;
+                var extraConfig = await _context.ExtraConfigurations
+                    .Where(c => c.ProjectId == ProjectId)
+                    .ToListAsync();
+
+                bool isOnlyReport = extraConfig.Any(c => c.IsExtraProcessingAsPerNR);
 
                 List<ExtraEnvelopes> envelopesToUse = new();
 
@@ -204,10 +208,6 @@ namespace Tools.Controllers
                 }
                 else
                 {
-                    var extraConfig = await _context.ExtraConfigurations
-                        .Where(c => c.ProjectId == ProjectId)
-                        .ToListAsync();
-
                     if (!extraConfig.Any())
                         return BadRequest("No ExtraConfiguration found");
 
