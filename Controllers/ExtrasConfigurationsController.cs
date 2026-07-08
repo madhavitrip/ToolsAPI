@@ -135,6 +135,7 @@ namespace Tools.Controllers
                 Console.WriteLine($"   ExtraType: {extrasConfiguration.ExtraType}");
                 Console.WriteLine($"   Mode: {extrasConfiguration.Mode}");
                 Console.WriteLine($"   Value: {extrasConfiguration.Value}");
+                Console.WriteLine($"   IsExtraProcessingAsPerNR: {extrasConfiguration.IsExtraProcessingAsPerNR}");
                 Console.WriteLine($"   nodalValue: {extrasConfiguration.nodalValue ?? "NULL"}");
                 Console.WriteLine($"   EnvelopeType: {extrasConfiguration.EnvelopeType}");
 

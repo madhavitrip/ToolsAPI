@@ -15,6 +15,7 @@ namespace Tools.Models
         public string EnvelopeType { get; set; }
         public string? RangeConfig { get; set; } //Added by Akshaya to accept the range in json format
         public string? nodalValue { get; set; } // JSON format: [{"NodalCodes":"NC1,NC2,NC3","Value":"10"},{"NodalCodes":"NC4","Value":"20"}]
+        public bool IsExtraProcessingAsPerNR { get; set; } = true;
 
     }
 }
