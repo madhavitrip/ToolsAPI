@@ -1,6 +1,7 @@
 using ERPToolsAPI.Data;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Build.Evaluation;
 using Microsoft.CodeAnalysis;
 using Microsoft.EntityFrameworkCore;
 using System;
@@ -2021,7 +2022,12 @@ namespace Tools.Controllers
                         nRData.UploadList = new List<int> { 1 };
                         nRData.Status = true;
                         nRData.Steps = Tools.Models.PipelineNavigator.STEP_UPLOADED;
-                        nrDatasToAdd.Add(nRData);
+                        
+                        bool isExtraRow = nRData.CenterCode switch { "Nodal Extra" => true, "University Extra" => true, "Office Extra" => true, _ => false };
+                        if (!isExtraRow)
+                        {
+                            nrDatasToAdd.Add(nRData);
+                        }
 
                         // Extra Envelopes
                         var extraEnvelopes = ProcessExtraEnvelopes(
@@ -2158,15 +2164,20 @@ namespace Tools.Controllers
                     if (versioningResult.ActionTaken == "NoChange")
                         continue;
 
-                    nrDatasToAddNormal.AddRange(versioningResult.NewRecords);
+                    bool isExtraRow = nRData.CenterCode switch { "Nodal Extra" => true, "University Extra" => true, "Office Extra" => true, _ => false };
+                    
+                    if (!isExtraRow)
+                    {
+                        nrDatasToAddNormal.AddRange(versioningResult.NewRecords);
 
-                    catchesToResetToDuplicate.UnionWith(
-                        versioningResult.CatchesToReset
-                    );
+                        catchesToResetToDuplicate.UnionWith(
+                            versioningResult.CatchesToReset
+                        );
 
-                    deactivatedCount += versioningResult.DeactivatedCount;
+                        deactivatedCount += versioningResult.DeactivatedCount;
 
-                    lotsToReset.UnionWith(versioningResult.LotsToReset);
+                        lotsToReset.UnionWith(versioningResult.LotsToReset);
+                    }
 
                     // Extra Envelopes
                     var extraEnvelopes = ProcessExtraEnvelopes(
@@ -4595,6 +4606,7 @@ namespace Tools.Controllers
         {
             try
             {
+                // Get all related data
                 var nrDataList = await _context.NRDatas
                     .Where(d => d.ProjectId == ProjectId)
                     .ToListAsync();
@@ -4603,42 +4615,75 @@ namespace Tools.Controllers
                     .Where(c => c.ProjectId == ProjectId)
                     .ToListAsync();
 
-                if (!nrDataList.Any())
+                var envelopeResults = await _context.EnvelopeBreakingResults
+                    .Where(e => e.ProjectId == ProjectId)
+                    .ToListAsync();
+
+                var boxResults = await _context.BoxBreakingResults
+                    .Where(b => b.ProjectId == ProjectId)
+                    .ToListAsync();
+                var envelopeBreaking = await _context.EnvelopeBreakages
+                    .Where(e => e.ProjectId == ProjectId).ToListAsync();
+                var extra = await _context.ExtrasEnvelope
+                    .Where(s=>s.ProjectId==ProjectId).ToListAsync();
+                // If nothing exists for the project
+                if (!nrDataList.Any() &&
+                    !envelopeResults.Any() &&
+                    !boxResults.Any())
                 {
-                    return NotFound($"No NRData found for ProjectId {ProjectId}");
+                    return NotFound($"No records found for ProjectId {ProjectId}");
                 }
 
-                // ? REMOVE FILE DELETE if not needed
-                // (keeping it optional — you can remove this block if you want full soft behavior)
-                var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
+                // OPTIONAL:
+                // Remove this block if you want a complete soft delete
+                var reportPath = Path.Combine(
+                    Directory.GetCurrentDirectory(),
+                    "wwwroot",
+                    ProjectId.ToString());
+
                 if (Directory.Exists(reportPath))
                 {
                     Directory.Delete(reportPath, true);
                 }
 
-                // =============================
-                // ? SOFT DELETE NRData
-                // =============================
+                // Soft delete NRData
                 foreach (var item in nrDataList)
                 {
-                    item.Status = false; // or 0 if int
+                    item.Status = false;
                 }
 
-                // =============================
-                // ? SOFT DELETE ConflictingFields (optional)
-                // =============================
-                foreach (var conflict in conflictList)
+                // Soft delete EnvelopeBreakingResults
+                foreach (var item in envelopeResults)
                 {
-                    conflict.Status = 0; // assuming int, adjust if bool
+                    item.Status = false;
                 }
 
+                // Soft delete BoxBreakingResults
+                foreach (var item in boxResults)
+                {
+                    item.Status = false;
+                }
+
+                // Soft delete ConflictingFields
+                foreach (var item in conflictList)
+                {
+                    item.Status = 0; // Change to false if Status is bool
+                }
+                foreach(var item in extra)
+                {
+                    item.Status = 0;
+                }
+                if (envelopeBreaking.Any())
+                {
+                    _context.EnvelopeBreakingResults.RemoveRange(envelopeResults);
+                }
                 await _context.SaveChangesAsync();
 
                 int userId = 0;
                 int.TryParse(User.Identity?.Name, out userId);
 
                 await _loggerService.LogEventAsync(
-                    $"Soft deleted (Status=0) all NRData and conflict records for ProjectId {ProjectId}",
+                    $"Soft deleted all records for ProjectId {ProjectId}",
                     "NRData",
                     userId,
                     ProjectId
@@ -4646,16 +4691,23 @@ namespace Tools.Controllers
 
                 return Ok(new
                 {
-                    message = "NRData marked as inactive (soft deleted)",
-                    totalUpdated = nrDataList.Count
+                    message = "Project records marked as inactive successfully.",
+                    projectId = ProjectId,
+                    nrDataUpdated = nrDataList.Count,
+                    conflictsUpdated = conflictList.Count,
+                    envelopeResultsUpdated = envelopeResults.Count,
+                    boxResultsUpdated = boxResults.Count
                 });
             }
             catch (Exception ex)
             {
-                return StatusCode(500, ex.ToString());
+                return StatusCode(500, new
+                {
+                    message = "An error occurred while deleting project data.",
+                    error = ex.Message
+                });
             }
         }
-
         [HttpDelete("DeleteCatchNo/{projectId}/{catchNo}")]
         public async Task<IActionResult> DeleteCatchNo(int projectId, string catchNo)
         {
@@ -4701,7 +4753,8 @@ namespace Tools.Controllers
                 {
                     nrData.Status = false;
                 }
-
+                var extra = await _context.ExtrasEnvelope.Where(e => e.ProjectId == projectId && e.CatchNo == catchNo).ToListAsync();
+                _context.ExtrasEnvelope.RemoveRange(extra);
                 // 🔹 Delete results for THIS catch
                 var envelopeResults = await _context.EnvelopeBreakingResults
                     .Where(e => e.ProjectId == projectId && e.CatchNo == catchNo)
@@ -5001,9 +5054,10 @@ namespace Tools.Controllers
                     if (!string.IsNullOrWhiteSpace(config.EnvelopeType)) try { envelopeType = JsonSerializer.Deserialize<EnvelopeType>(config.EnvelopeType); } catch { }
                     int innerCapacity = envelopeType != null ? GetEnvelopeCapacity(envelopeType.Inner) : 1;
                     int outerCapacity = envelopeType != null ? GetEnvelopeCapacity(envelopeType.Outer) : 1;
-                    int roundedQty = nRData.NRQuantity;
-                    if (innerCapacity > 0) roundedQty = (int)Math.Ceiling((double)nRData.NRQuantity / innerCapacity) * innerCapacity;
-                    else if (outerCapacity > 0) roundedQty = (int)Math.Ceiling((double)nRData.NRQuantity / outerCapacity) * outerCapacity;
+                    int baseQty = nRData.NRQuantity > 0 ? nRData.NRQuantity : nRData.Quantity;
+                    int roundedQty = baseQty;
+                    if (innerCapacity > 0) roundedQty = (int)Math.Ceiling((double)baseQty / innerCapacity) * innerCapacity;
+                    else if (outerCapacity > 0) roundedQty = (int)Math.Ceiling((double)baseQty / outerCapacity) * outerCapacity;
 
                     extraEnvelopesToAdd.Add(new ExtraEnvelopes { ProjectId = projectId, CatchNo = nRData.CatchNo, ExtraId = extraTypeId.Value, Quantity = roundedQty, InnerEnvelope = innerCapacity > 0 ? Math.Ceiling((double)roundedQty / innerCapacity).ToString() : "0", OuterEnvelope = outerCapacity > 0 ? Math.Ceiling((double)roundedQty / outerCapacity).ToString() : "0", Status = 1 });
                 }
