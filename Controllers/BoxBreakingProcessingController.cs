@@ -864,7 +864,7 @@ namespace Tools.Controllers
             {
                 // ✅ Get NRData for this lot or upload version
                 List<NRData> nrData;
-                var nrDataQuery = _context.NRDatas.Where(p => p.ProjectId == ProjectId);
+                var nrDataQuery = _context.NRDatas.Where(p => p.ProjectId == ProjectId && p.Status == true);
 
                 if (uploadId.HasValue)
                 {

@@ -1,6 +1,7 @@
 using ERPToolsAPI.Data;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Build.Evaluation;
 using Microsoft.CodeAnalysis;
 using Microsoft.EntityFrameworkCore;
 using System;
@@ -287,378 +288,32 @@ namespace Tools.Controllers
             });
         }
 
-        //  [HttpGet("GetUniqueByProjectId/{projectId}")]
-        //  public async Task<ActionResult> GetUniqueByProjectId(
-        //int projectId,
-        //int pageSize,
-        //int pageNo,
-        //string? search = null,
-        //string? key = null,
-        //string? sortField = null,
-        //string? sortOrder = null,
-        //int? lotNo = null,
-        //bool? assigned = null,
-        //bool? missingExamDate = null)
-        //  {
-        //      IQueryable<NRData> query = _context.NRDatas
-        //          .Where(d => d.ProjectId == projectId && d.Status == true);
-
-
-        //      if (lotNo.HasValue)
-        //      {
-        //          query = query.Where(d => d.LotNo == lotNo.Value);
-        //      }
-
-
-        //      if (assigned.HasValue)
-        //      {
-        //          query = assigned.Value
-        //              ? query.Where(d => d.LotNo > 0)
-        //              : query.Where(d => d.LotNo <= 0);
-        //      }
-
-
-        //      if (missingExamDate.HasValue && missingExamDate.Value)
-        //      {
-        //          query = query.Where(d =>
-        //              d.ExamDate == null ||
-        //              d.ExamDate == "" ||
-        //              d.ExamDate == "null" ||
-        //              d.ExamDate == "undefined");
-        //      }
-
-
-        //      // SEARCH
-        //      if (!string.IsNullOrWhiteSpace(search) &&
-        //          !string.IsNullOrWhiteSpace(key))
-        //      {
-        //          search = search.ToLower();
-
-        //          query = key switch
-        //          {
-        //              "CatchNo" =>
-        //                  query.Where(d => d.CatchNo != null &&
-        //                                   d.CatchNo.ToLower().Contains(search)),
-
-        //              "SubjectName" =>
-        //                  query.Where(d => d.SubjectName != null &&
-        //                                   d.SubjectName.ToLower().Contains(search)),
-
-        //              "CourseName" =>
-        //                  query.Where(d => d.CourseName != null &&
-        //                                   d.CourseName.ToLower().Contains(search)),
-
-
-        //              "ExamDate" =>
-        //                  query.Where(d => d.ExamDate.Contains(search)),
-
-        //              "ExamTime" =>
-        //                  query.Where(d => d.ExamTime.Contains(search)),
-
-
-
-        //              _ => throw new Exception($"Key '{key}' is not searchable.")
-        //          };
-        //      }
-
-
-
-        //      // GROUP
-        //      var groupedQuery = query
-        //          .GroupBy(x => x.CatchNo)
-        //          .Select(g => new
-        //          {
-        //              Id = g.Min(x => x.Id),
-        //              CatchNo = g.Key,
-
-        //              ExamDate = g.Min(x => x.ExamDate),
-        //              ExamTime = g.Min(x => x.ExamTime),
-
-        //              SubjectName = g.Min(x => x.SubjectName),
-        //              CourseName = g.Min(x => x.CourseName),
-
-        //              NRQuantity = g.Sum(x => x.NRQuantity),
-        //              Quantity = g.Sum(x => x.Quantity),
-
-        //              Pages = g.Min(x => x.Pages),
-        //              Symbol = g.Min(x => x.Symbol),
-
-        //              LotNo = g.Min(x => x.LotNo),
-
-        //              CenterCode = g.Min(x => x.CenterCode),
-
-        //              NRDatas = g.Select(x => x.NRDatas).FirstOrDefault(),
-
-        //              RecordCount = g.Count()
-        //          });
-
-
-
-        //      // SORT
-        //      var normalizedSortField = NormalizeText(sortField);
-        //      var normalizedSortOrder = NormalizeText(sortOrder)
-        //                                  .ToLowerInvariant();
-
-        //      bool asc = normalizedSortOrder != "descend";
-
-
-        //      groupedQuery = normalizedSortField switch
-        //      {
-        //          "CatchNo" =>
-        //              asc ? groupedQuery.OrderBy(x => x.CatchNo)
-        //                  : groupedQuery.OrderByDescending(x => x.CatchNo),
-
-        //          "ExamDate" =>
-        //              asc ? groupedQuery.OrderBy(x => x.ExamDate)
-        //                  : groupedQuery.OrderByDescending(x => x.ExamDate),
-
-        //          "ExamTime" =>
-        //              asc ? groupedQuery.OrderBy(x => x.ExamTime)
-        //                  : groupedQuery.OrderByDescending(x => x.ExamTime),
-
-        //          "NRQuantity" =>
-        //              asc ? groupedQuery.OrderBy(x => x.NRQuantity)
-        //                  : groupedQuery.OrderByDescending(x => x.NRQuantity),
-
-        //          "Quantity" =>
-        //              asc ? groupedQuery.OrderBy(x => x.Quantity)
-        //                  : groupedQuery.OrderByDescending(x => x.Quantity),
-
-        //          "CourseName" =>
-        //              asc ? groupedQuery.OrderBy(x => x.CourseName)
-        //                  : groupedQuery.OrderByDescending(x => x.CourseName),
-
-        //          "SubjectName" =>
-        //              asc ? groupedQuery.OrderBy(x => x.SubjectName)
-        //                  : groupedQuery.OrderByDescending(x => x.SubjectName),
-
-        //          _ => groupedQuery.OrderBy(x => x.Id)
-        //      };
-
-
-
-        //      int totalCount = await groupedQuery.CountAsync();
-
-        //      int totalPages = (int)Math.Ceiling(
-        //          totalCount / (double)pageSize);
-
-
-
-        //      var data = await groupedQuery
-        //          .Skip((pageNo - 1) * pageSize)
-        //          .Take(pageSize)
-        //          .ToListAsync();
-
-
-
-        //      if (!data.Any())
-        //      {
-        //          return Ok(new
-        //          {
-        //              items = new List<object>(),
-        //              columns = new List<string>(),
-        //              totalCount = 0,
-        //              totalPages = 0
-        //          });
-        //      }
-
-
-
-        //      // GET UNIQUE FIELDS
-        //      var uniqueFieldNames = await _context.Fields
-        //          .Where(f => f.IsUnique)
-        //          .Select(f => f.Name.ToLowerInvariant())
-        //          .ToListAsync();
-
-
-
-        //      var properties = data.First()
-        //          .GetType()
-        //          .GetProperties();
-
-
-
-        //      // ONLY UNIQUE COLUMNS + SYSTEM FIELDS
-        //      var columns = properties
-        //          .Where(p =>
-        //              uniqueFieldNames.Contains(
-        //                  p.Name.ToLowerInvariant())
-        //              ||
-        //              p.Name.Equals("Id",
-        //                  StringComparison.OrdinalIgnoreCase)
-        //              ||
-        //              p.Name.Equals("CatchNo",
-        //                  StringComparison.OrdinalIgnoreCase)
-        //              ||
-        //              p.Name.Equals("RecordCount",
-        //                  StringComparison.OrdinalIgnoreCase)
-        //              ||
-        //              p.Name.Equals("NRDatas",
-        //                  StringComparison.OrdinalIgnoreCase)
-        //              ||
-        //              p.Name.Equals("Quantity",
-        //                  StringComparison.OrdinalIgnoreCase)
-        //          )
-        //          .Select(p => p.Name)
-        //          .ToList();
-
-        //      // Add unique fields from NRDatas JSON
-        //      foreach (var field in uniqueFieldNames)
-        //      {
-        //          if (!columns.Any(c =>
-        //              c.Equals(field,
-        //              StringComparison.OrdinalIgnoreCase)))
-        //          {
-        //              columns.Add(field);
-        //          }
-        //      }
-
-        //      var result = data.Select(d =>
-        //      {
-        //          var dict = new Dictionary<string, object?>(
-        //              StringComparer.OrdinalIgnoreCase);
-
-        //          // Existing properties
-        //          foreach (var col in columns)
-        //          {
-        //              var prop = properties
-        //                  .FirstOrDefault(x =>
-        //                      x.Name.Equals(col,
-        //                      StringComparison.OrdinalIgnoreCase));
-
-        //              if (prop != null)
-        //              {
-        //                  dict[col] = prop.GetValue(d);
-        //              }
-        //          }
-
-        //          // Read unique fields from NRDatas JSON
-        //          var nrDatasValue = properties
-        //              .FirstOrDefault(x => x.Name == "NRDatas")
-        //              ?.GetValue(d)?
-        //              .ToString();
-
-        //          if (!string.IsNullOrWhiteSpace(nrDatasValue))
-        //          {
-        //              try
-        //              {
-        //                  using var jsonDoc =
-        //                      JsonDocument.Parse(nrDatasValue);
-
-        //                  foreach (var uniqueField in uniqueFieldNames)
-        //                  {
-        //                      foreach (var property in jsonDoc.RootElement.EnumerateObject())
-        //                      {
-        //                          if (property.Name.Equals(
-        //                              uniqueField,
-        //                              StringComparison.OrdinalIgnoreCase))
-        //                          {
-        //                              dict[property.Name] =
-        //                                  property.Value.ValueKind switch
-        //                                  {
-        //                                      JsonValueKind.String =>
-        //                                          property.Value.GetString(),
-
-        //                                      JsonValueKind.Number =>
-        //                                          property.Value.ToString(),
-
-        //                                      JsonValueKind.True =>
-        //                                          true,
-
-        //                                      JsonValueKind.False =>
-        //                                          false,
-
-        //                                      JsonValueKind.Null =>
-        //                                          null,
-
-        //                                      _ =>
-        //                                          property.Value.ToString()
-        //                                  };
-
-        //                              break;
-        //                          }
-        //                      }
-        //                  }
-        //              }
-        //              catch
-        //              {
-        //                  // Ignore invalid JSON
-        //              }
-        //          }
-
-        //          return dict;
-
-        //      }).ToList();
-
-
-
-        //      var finalColumns = new List<string>();
-        //      foreach (var col in columns)
-        //      {
-        //          if (col.Equals("Id", StringComparison.OrdinalIgnoreCase) ||
-        //              col.Equals("CatchNo", StringComparison.OrdinalIgnoreCase) ||
-        //              col.Equals("RecordCount", StringComparison.OrdinalIgnoreCase) ||
-        //              col.Equals("Quantity", StringComparison.OrdinalIgnoreCase))
-        //          {
-        //              finalColumns.Add(col);
-        //              continue;
-        //          }
-
-        //          if (col.Equals("NRDatas", StringComparison.OrdinalIgnoreCase))
-        //          {
-        //              // Skip adding to columns list returned in response header, but keep in data dictionary
-        //              continue;
-        //          }
-
-        //          bool hasData = result.Any(d =>
-        //          {
-        //              if (d.TryGetValue(col, out var val) && val != null)
-        //              {
-        //                  var str = val.ToString()?.Trim();
-        //                  return !string.IsNullOrEmpty(str) && str != "-";
-        //              }
-        //              return false;
-        //          });
-
-        //          if (hasData)
-        //          {
-        //              finalColumns.Add(col);
-        //          }
-        //      }
-
-        //      return Ok(new
-        //      {
-        //          items = result,
-        //          columns = finalColumns,
-        //          totalCount,
-        //          totalPages
-        //      });
-        //  }
 
         [HttpGet("GetUniqueByProjectId/{projectId}")]
         public async Task<ActionResult> GetUniqueByProjectId(
-int projectId,
-int pageSize,
-int pageNo,
-string? search = null,
-string? key = null,
-string? sortField = null,
-string? sortOrder = null,
-int? lotNo = null,
-bool? assigned = null,
-bool? missingExamDate = null)
+       int projectId,
+       int pageSize,
+       int pageNo,
+       string? search = null,
+       string? key = null,
+       int? lotNo = null,
+       string? sortField = null,
+       string? sortOrder = null,
+       bool? assigned = null,
+       bool? missingExamDate = null)
         {
-
-            IQueryable<NRData> query = _context.NRDatas
+            // ----------------------------
+            // BASE QUERY (NO TRACKING)
+            // ----------------------------
+            var query = _context.NRDatas
                 .AsNoTracking()
-                .Where(d =>
-                    d.ProjectId == projectId &&
-                    d.Status);
+                .Where(d => d.ProjectId == projectId && d.Status);
 
-
+            // ----------------------------
+            // FILTERS
+            // ----------------------------
             if (lotNo.HasValue)
-                query = query.Where(x => x.LotNo == lotNo.Value);
-
+                query = query.Where(d => d.LotNo == lotNo.Value);
 
             if (assigned.HasValue)
             {
@@ -666,7 +321,6 @@ bool? missingExamDate = null)
                     ? query.Where(x => x.LotNo > 0)
                     : query.Where(x => x.LotNo <= 0);
             }
-
 
             if (missingExamDate == true)
             {
@@ -677,149 +331,45 @@ bool? missingExamDate = null)
                     d.ExamDate == "undefined");
             }
 
-
-
-            if (!string.IsNullOrWhiteSpace(search) &&
-                !string.IsNullOrWhiteSpace(key))
+            // ----------------------------
+            // SEARCH
+            // ----------------------------
+            if (!string.IsNullOrWhiteSpace(search) && !string.IsNullOrWhiteSpace(key))
             {
                 search = search.Trim();
 
                 query = key switch
                 {
-                    "CatchNo" =>
-                        query.Where(x =>
-                            x.CatchNo != null &&
-                            EF.Functions.Like(x.CatchNo, $"%{search}%")),
-
-
-                    "SubjectName" =>
-                        query.Where(x =>
-                            x.SubjectName != null &&
-                            EF.Functions.Like(x.SubjectName, $"%{search}%")),
-
-
-                    "CourseName" =>
-                        query.Where(x =>
-                            x.CourseName != null &&
-                            EF.Functions.Like(x.CourseName, $"%{search}%")),
-
-
-                    "ExamDate" =>
-                        query.Where(x =>
-                            x.ExamDate.Contains(search)),
-
-
-                    "ExamTime" =>
-                        query.Where(x =>
-                            x.ExamTime.Contains(search)),
-
-
+                    "CatchNo" => query.Where(d => d.CatchNo != null && d.CatchNo.Contains(search)),
+                    "SubjectName" => query.Where(d => d.SubjectName != null && d.SubjectName.Contains(search)),
+                    "CourseName" => query.Where(d => d.CourseName != null && d.CourseName.Contains(search)),
+                    "ExamDate" => query.Where(d => d.ExamDate != null && d.ExamDate.Contains(search)),
+                    "ExamTime" => query.Where(d => d.ExamTime != null && d.ExamTime.Contains(search)),
                     _ => query
                 };
             }
 
+            // =========================================================
+            // 🚀 STEP 1: GET PAGED DISTINCT KEYS (FAST)
+            // =========================================================
+            var baseKeyQuery = query.Select(x => x.CatchNo).Distinct();
 
-
-            var groupedQuery =
-                query
-                .GroupBy(x => x.CatchNo)
-                .Select(g => new
-                {
-                    Id = g.Min(x => x.Id),
-                    CatchNo = g.Key,
-
-                    ExamDate = g.Min(x => x.ExamDate),
-                    ExamTime = g.Min(x => x.ExamTime),
-
-                    SubjectName = g.Min(x => x.SubjectName),
-                    CourseName = g.Min(x => x.CourseName),
-
-                    NRQuantity = g.Sum(x => x.NRQuantity),
-                    Quantity = g.Sum(x => x.Quantity),
-
-                    Pages = g.Min(x => x.Pages),
-                    Symbol = g.Min(x => x.Symbol),
-
-                    LotNo = g.Min(x => x.LotNo),
-
-                    CenterCode = g.Min(x => x.CenterCode),
-
-                    NRDatas = g.Select(x => x.NRDatas)
-                               .FirstOrDefault(),
-
-                    RecordCount = g.Count()
-                });
-
-
-
-            bool asc =
-                NormalizeText(sortOrder)
-                .Equals("descend",
-                StringComparison.OrdinalIgnoreCase) == false;
-
-
-
-            groupedQuery = sortField switch
+            // sorting for keys only (cheap)
+            baseKeyQuery = (sortField, sortOrder?.ToLowerInvariant()) switch
             {
-
-                "CatchNo" =>
-                    asc
-                    ? groupedQuery.OrderBy(x => x.CatchNo)
-                    : groupedQuery.OrderByDescending(x => x.CatchNo),
-
-
-                "ExamDate" =>
-                    asc
-                    ? groupedQuery.OrderBy(x => x.ExamDate)
-                    : groupedQuery.OrderByDescending(x => x.ExamDate),
-
-
-                "ExamTime" =>
-                    asc
-                    ? groupedQuery.OrderBy(x => x.ExamTime)
-                    : groupedQuery.OrderByDescending(x => x.ExamTime),
-
-
-                "NRQuantity" =>
-                    asc
-                    ? groupedQuery.OrderBy(x => x.NRQuantity)
-                    : groupedQuery.OrderByDescending(x => x.NRQuantity),
-
-
-                "Quantity" =>
-                    asc
-                    ? groupedQuery.OrderBy(x => x.Quantity)
-                    : groupedQuery.OrderByDescending(x => x.Quantity),
-
-
-                "CourseName" =>
-                    asc
-                    ? groupedQuery.OrderBy(x => x.CourseName)
-                    : groupedQuery.OrderByDescending(x => x.CourseName),
-
-
-                "SubjectName" =>
-                    asc
-                    ? groupedQuery.OrderBy(x => x.SubjectName)
-                    : groupedQuery.OrderByDescending(x => x.SubjectName),
-
-
-                _ => groupedQuery.OrderBy(x => x.Id)
+                ("CatchNo", "descend") => baseKeyQuery.OrderByDescending(x => x),
+                ("CatchNo", _) => baseKeyQuery.OrderBy(x => x),
+                _ => baseKeyQuery.OrderBy(x => x)
             };
 
+            var totalCount = await baseKeyQuery.CountAsync();
 
-
-            var totalCount = await groupedQuery.CountAsync();
-
-
-            var data = await groupedQuery
+            var pagedKeys = await baseKeyQuery
                 .Skip((pageNo - 1) * pageSize)
                 .Take(pageSize)
                 .ToListAsync();
 
-
-
-            if (data.Count == 0)
+            if (pagedKeys.Count == 0)
             {
                 return Ok(new
                 {
@@ -830,146 +380,155 @@ bool? missingExamDate = null)
                 });
             }
 
+            var totalPages = (int)Math.Ceiling(totalCount / (double)pageSize);
 
+            // =========================================================
+            // 🚀 STEP 2: FETCH ONLY PAGE DATA
+            // =========================================================
+            var pageQuery = query
+                .Where(x => pagedKeys.Contains(x.CatchNo))
+                .AsNoTracking();
 
-            var uniqueFieldNames =
-                await _context.Fields
-                .AsNoTracking()
-                .Where(x => x.IsUnique)
-                .Select(x => x.Name)
+            var rawData = await pageQuery
+                .Select(x => new
+                {
+                    x.Id,
+                    x.CatchNo,
+                    x.ExamDate,
+                    x.ExamTime,
+                    x.SubjectName,
+                    x.CourseName,
+                    x.NRQuantity,
+                    x.Quantity,
+                    x.Pages,
+                    x.Symbol,
+                    x.LotNo,
+                    x.CenterCode,
+                    x.NRDatas
+                })
                 .ToListAsync();
 
-
-            var uniqueSet =
-                new HashSet<string>(
-                    uniqueFieldNames,
-                    StringComparer.OrdinalIgnoreCase);
-
-
-
-            var properties =
-                data.First()
-                .GetType()
-                .GetProperties();
-
-
-
-            var propertyMap =
-                properties.ToDictionary(
-                    x => x.Name,
-                    StringComparer.OrdinalIgnoreCase);
-
-
-
-            var columns =
-                properties
-                .Where(x =>
-                    uniqueSet.Contains(x.Name) ||
-                    x.Name.Equals("Id") ||
-                    x.Name.Equals("CatchNo") ||
-                    x.Name.Equals("RecordCount") ||
-                    x.Name.Equals("NRDatas") ||
-                    x.Name.Equals("Quantity") ||
-                    x.Name.Equals("LotNo"))
-                .Select(x => x.Name)
-                .ToList();
-
-
-
-            foreach (var field in uniqueFieldNames)
-            {
-                if (!columns.Contains(field,
-                    StringComparer.OrdinalIgnoreCase))
-                    columns.Add(field);
-            }
-
-
-
-            var result = data.Select(row =>
-            {
-
-                var dict =
-                    new Dictionary<string, object?>(
-                        StringComparer.OrdinalIgnoreCase);
-
-
-
-                foreach (var col in columns)
+            // =========================================================
+            // 🚀 STEP 3: GROUP IN MEMORY (FASTER THAN SQL GROUP BY HERE)
+            // =========================================================
+            var data = rawData
+                .GroupBy(x => x.CatchNo)
+                .Select(g => new
                 {
-                    if (propertyMap.TryGetValue(col, out var prop))
-                    {
-                        dict[col] =
-                            prop.GetValue(row);
-                    }
-                }
-
-
-
-                if (dict.TryGetValue("NRDatas",
-                    out var jsonObj)
-                    &&
-                    jsonObj is string json
-                    &&
-                    !string.IsNullOrWhiteSpace(json))
-                {
-                    try
-                    {
-                        var jsonData =
-                            JsonSerializer
-                            .Deserialize<Dictionary<string, object>>(json);
-
-
-                        if (jsonData != null)
-                        {
-                            foreach (var field in uniqueFieldNames)
-                            {
-                                if (jsonData.TryGetValue(field, out var value))
-                                {
-                                    dict[field] = value;
-                                }
-                            }
-                        }
-                    }
-                    catch
-                    {
-
-                    }
-                }
-
-
-                return dict;
-
-            }).ToList();
-
-
-
-            var finalColumns =
-                columns
-                .Where(col =>
-                {
-                    if (col.Equals("NRDatas",
-                        StringComparison.OrdinalIgnoreCase))
-                        return false;
-
-
-                    if (col == "Id" ||
-                       col == "CatchNo" ||
-                       col == "RecordCount" ||
-                       col == "Quantity" ||
-                       col == "LotNo")
-                        return true;
-
-
-                    return result.Any(x =>
-                        x.TryGetValue(col, out var v) &&
-                        v != null &&
-                        !string.IsNullOrWhiteSpace(v.ToString()) &&
-                        v.ToString() != "-");
+                    Id = g.Min(x => x.Id),
+                    CatchNo = g.Key,
+                    ExamDate = g.Select(x => x.ExamDate).FirstOrDefault(),
+                    ExamTime = g.Select(x => x.ExamTime).FirstOrDefault(),
+                    SubjectName = g.Select(x => x.SubjectName).FirstOrDefault(),
+                    CourseName = g.Select(x => x.CourseName).FirstOrDefault(),
+                    NRQuantity = g.Sum(x => x.NRQuantity),
+                    Quantity = g.Sum(x => x.Quantity),
+                    Pages = g.Select(x => x.Pages).FirstOrDefault(),
+                    Symbol = g.Select(x => x.Symbol).FirstOrDefault(),
+                    LotNo = g.Min(x => x.LotNo),
+                    CenterCode = g.Select(x => x.CenterCode).FirstOrDefault(),
+                    NRDatas = g.Select(x => x.NRDatas).FirstOrDefault(),
+                    RecordCount = g.Count()
                 })
                 .ToList();
 
+            // =========================================================
+            // 🚀 CACHE REFLECTION (ONCE)
+            // =========================================================
+            var properties = typeof(NRData).GetProperties();
 
+            var uniqueFieldNames = await _context.Fields
+                .AsNoTracking()
+                .Where(f => f.IsUnique)
+                .Select(f => f.Name.ToLower())
+                .ToListAsync();
 
+            // =========================================================
+            // 🚀 BUILD COLUMNS
+            // =========================================================
+            var columns = properties
+                .Where(p =>
+                    uniqueFieldNames.Contains(p.Name.ToLower()) ||
+                    p.Name is "Id" or "CatchNo" or "RecordCount" or "NRDatas" or "Quantity"
+                )
+                .Select(p => p.Name)
+                .ToList();
+
+            // =========================================================
+            // 🚀 FAST RESULT BUILD (NO REPEATED REFLECTION SEARCH)
+            // =========================================================
+            var propMap = properties
+                .ToDictionary(p => p.Name, StringComparer.OrdinalIgnoreCase);
+
+            var result = new List<Dictionary<string, object?>>();
+
+            foreach (var d in data)
+            {
+                var dict = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["Id"] = d.Id,
+                    ["CatchNo"] = d.CatchNo,
+                    ["ExamDate"] = d.ExamDate,
+                    ["ExamTime"] = d.ExamTime,
+                    ["SubjectName"] = d.SubjectName,
+                    ["CourseName"] = d.CourseName,
+                    ["NRQuantity"] = d.NRQuantity,
+                    ["Quantity"] = d.Quantity,
+                    ["Pages"] = d.Pages,
+                    ["Symbol"] = d.Symbol,
+                    ["LotNo"] = d.LotNo,
+                    ["CenterCode"] = d.CenterCode,
+                    ["RecordCount"] = d.RecordCount
+                };
+
+                // ----------------------------
+                // JSON parse (safe)
+                // ----------------------------
+                if (!string.IsNullOrWhiteSpace(d.NRDatas))
+                {
+                    try
+                    {
+                        using var doc = JsonDocument.Parse(d.NRDatas);
+
+                        foreach (var p in doc.RootElement.EnumerateObject())
+                        {
+                            dict[p.Name] = p.Value.ValueKind switch
+                            {
+                                JsonValueKind.String => p.Value.GetString(),
+                                JsonValueKind.Number => p.Value.ToString(),
+                                JsonValueKind.True => true,
+                                JsonValueKind.False => false,
+                                _ => p.Value.ToString()
+                            };
+                        }
+                    }
+                    catch { }
+                }
+
+                result.Add(dict);
+            }
+
+            // =========================================================
+            // 🚀 REMOVE EMPTY COLUMNS (FAST PASS)
+            // =========================================================
+            var nonEmpty = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var row in result)
+            {
+                foreach (var kv in row)
+                {
+                    if (kv.Value != null && !string.IsNullOrWhiteSpace(kv.Value.ToString()))
+                        nonEmpty.Add(kv.Key);
+                }
+            }
+
+            var finalColumns = columns
+                .Where(c => nonEmpty.Contains(c))
+                .ToList();
+
+            // =========================================================
+            // RESPONSE
+            // =========================================================
             return Ok(new
             {
                 items = result,
@@ -2463,7 +2022,12 @@ bool? missingExamDate = null)
                         nRData.UploadList = new List<int> { 1 };
                         nRData.Status = true;
                         nRData.Steps = Tools.Models.PipelineNavigator.STEP_UPLOADED;
-                        nrDatasToAdd.Add(nRData);
+                        
+                        bool isExtraRow = nRData.CenterCode switch { "Nodal Extra" => true, "University Extra" => true, "Office Extra" => true, _ => false };
+                        if (!isExtraRow)
+                        {
+                            nrDatasToAdd.Add(nRData);
+                        }
 
                         // Extra Envelopes
                         var extraEnvelopes = ProcessExtraEnvelopes(
@@ -2600,15 +2164,20 @@ bool? missingExamDate = null)
                     if (versioningResult.ActionTaken == "NoChange")
                         continue;
 
-                    nrDatasToAddNormal.AddRange(versioningResult.NewRecords);
+                    bool isExtraRow = nRData.CenterCode switch { "Nodal Extra" => true, "University Extra" => true, "Office Extra" => true, _ => false };
+                    
+                    if (!isExtraRow)
+                    {
+                        nrDatasToAddNormal.AddRange(versioningResult.NewRecords);
 
-                    catchesToResetToDuplicate.UnionWith(
-                        versioningResult.CatchesToReset
-                    );
+                        catchesToResetToDuplicate.UnionWith(
+                            versioningResult.CatchesToReset
+                        );
 
-                    deactivatedCount += versioningResult.DeactivatedCount;
+                        deactivatedCount += versioningResult.DeactivatedCount;
 
-                    lotsToReset.UnionWith(versioningResult.LotsToReset);
+                        lotsToReset.UnionWith(versioningResult.LotsToReset);
+                    }
 
                     // Extra Envelopes
                     var extraEnvelopes = ProcessExtraEnvelopes(
@@ -2998,23 +2567,13 @@ bool? missingExamDate = null)
         [HttpGet("PipelineRerunStatus")]
         public async Task<ActionResult> GetPipelineRerunStatus(int ProjectId)
         {
-            var activeStepStats = await _context.NRDatas
-                .Where(p => p.ProjectId == ProjectId && p.Status == true)
-                .GroupBy(x => 1)
-                .Select(g => new
-                {
-                    MinStep = g.Min(x => x.Steps),
-                    MaxStep = g.Max(x => x.Steps),
-                    TotalActive = g.Count(),
-                    DuplicatePending = g.Any(x => x.Steps == 0),
-                    EnhancementPending = g.Any(x => x.Steps <= 2),
-                    ExtraPending = g.Any(x => x.Steps <= 3),
-                    EnvelopePending = g.Any(x => x.Steps <= 4)
-                })
-                .FirstOrDefaultAsync();
+            var activeQuery = _context.NRDatas
+                 .AsNoTracking()
+                .Where(n => n.ProjectId == ProjectId && n.Status==true);
 
+            var totalActive = await activeQuery.CountAsync();
 
-            if (activeStepStats == null)
+            if (totalActive == 0)
             {
                 return Ok(new
                 {
@@ -3025,54 +2584,50 @@ bool? missingExamDate = null)
                 });
             }
 
+            var minStep = await activeQuery.MinAsync(n => n.Steps);
+            var maxStep = await activeQuery.MaxAsync(n => n.Steps);
 
-            var lotsWithReportsQuery =
-                from b in _context.BoxBreakingResults
-                join e in _context.EnvelopeBreakingResults
-                    on b.EnvelopeBreakingResultId equals e.Id
-                join n in _context.NRDatas
-                    on e.CatchNo equals n.CatchNo
-                where
-                    b.ProjectId == ProjectId &&
-                    b.Status &&
-                    b.EnvelopeBreakingResultId.HasValue &&
-                    n.ProjectId == ProjectId &&
-                    n.Status
-                select n.LotNo;
+            var hasPendingPipelineChanges = minStep < Tools.Models.PipelineNavigator.STEP_DONE;
 
+            var duplicatePending = await activeQuery.AnyAsync(n => n.Steps == 0);
+            var enhancementPending = await activeQuery.AnyAsync(n => n.Steps <= 2);
+            var extraPending = await activeQuery.AnyAsync(n => n.Steps <= 3);
+            var envelopePending = await activeQuery.AnyAsync(n => n.Steps <= 4);
 
-            var lotsWithReports = await lotsWithReportsQuery
-                .Distinct()
-                .ToListAsync();
-
+            var catchNos = await (
+     from b in _context.BoxBreakingResults.AsNoTracking()
+     join e in _context.EnvelopeBreakingResults.AsNoTracking()
+         on b.EnvelopeBreakingResultId equals e.Id
+     where b.ProjectId == ProjectId
+           && b.Status == true
+           && e.Status  == true
+     select e.CatchNo
+ )
+ .Distinct()
+ .ToListAsync();
 
             var pendingBoxLots = await _context.NRDatas
+                .AsNoTracking()
                 .Where(n =>
                     n.ProjectId == ProjectId &&
-                    n.Status &&
-                    lotsWithReports.Contains(n.LotNo) &&
-                    n.Steps <= 5)
+                    n.Status == true &&
+                    n.Steps <= 5 &&
+                    catchNos.Contains(n.CatchNo))
                 .Select(n => n.LotNo)
                 .Distinct()
                 .OrderBy(x => x)
                 .ToListAsync();
 
-
             return Ok(new
             {
-                hasPendingPipelineChanges =
-                    activeStepStats.MinStep < Tools.Models.PipelineNavigator.STEP_DONE,
-
-                minStep = activeStepStats.MinStep,
-                maxStep = activeStepStats.MaxStep,
-
-                totalActive = activeStepStats.TotalActive,
-
-                duplicatePending = activeStepStats.DuplicatePending,
-                enhancementPending = activeStepStats.EnhancementPending,
-                extraPending = activeStepStats.ExtraPending,
-                envelopePending = activeStepStats.EnvelopePending,
-
+                hasPendingPipelineChanges,
+                minStep,
+                maxStep,
+                totalActive,
+                duplicatePending,
+                enhancementPending,
+                extraPending,
+                envelopePending,
                 boxPending = pendingBoxLots.Any(),
                 pendingBoxLots
             });
@@ -5051,6 +4606,7 @@ bool? missingExamDate = null)
         {
             try
             {
+                // Get all related data
                 var nrDataList = await _context.NRDatas
                     .Where(d => d.ProjectId == ProjectId)
                     .ToListAsync();
@@ -5059,42 +4615,75 @@ bool? missingExamDate = null)
                     .Where(c => c.ProjectId == ProjectId)
                     .ToListAsync();
 
-                if (!nrDataList.Any())
+                var envelopeResults = await _context.EnvelopeBreakingResults
+                    .Where(e => e.ProjectId == ProjectId)
+                    .ToListAsync();
+
+                var boxResults = await _context.BoxBreakingResults
+                    .Where(b => b.ProjectId == ProjectId)
+                    .ToListAsync();
+                var envelopeBreaking = await _context.EnvelopeBreakages
+                    .Where(e => e.ProjectId == ProjectId).ToListAsync();
+                var extra = await _context.ExtrasEnvelope
+                    .Where(s=>s.ProjectId==ProjectId).ToListAsync();
+                // If nothing exists for the project
+                if (!nrDataList.Any() &&
+                    !envelopeResults.Any() &&
+                    !boxResults.Any())
                 {
-                    return NotFound($"No NRData found for ProjectId {ProjectId}");
+                    return NotFound($"No records found for ProjectId {ProjectId}");
                 }
 
-                // ? REMOVE FILE DELETE if not needed
-                // (keeping it optional — you can remove this block if you want full soft behavior)
-                var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
+                // OPTIONAL:
+                // Remove this block if you want a complete soft delete
+                var reportPath = Path.Combine(
+                    Directory.GetCurrentDirectory(),
+                    "wwwroot",
+                    ProjectId.ToString());
+
                 if (Directory.Exists(reportPath))
                 {
                     Directory.Delete(reportPath, true);
                 }
 
-                // =============================
-                // ? SOFT DELETE NRData
-                // =============================
+                // Soft delete NRData
                 foreach (var item in nrDataList)
                 {
-                    item.Status = false; // or 0 if int
+                    item.Status = false;
                 }
 
-                // =============================
-                // ? SOFT DELETE ConflictingFields (optional)
-                // =============================
-                foreach (var conflict in conflictList)
+                // Soft delete EnvelopeBreakingResults
+                foreach (var item in envelopeResults)
                 {
-                    conflict.Status = 0; // assuming int, adjust if bool
+                    item.Status = false;
                 }
 
+                // Soft delete BoxBreakingResults
+                foreach (var item in boxResults)
+                {
+                    item.Status = false;
+                }
+
+                // Soft delete ConflictingFields
+                foreach (var item in conflictList)
+                {
+                    item.Status = 0; // Change to false if Status is bool
+                }
+                foreach(var item in extra)
+                {
+                    item.Status = 0;
+                }
+                if (envelopeBreaking.Any())
+                {
+                    _context.EnvelopeBreakingResults.RemoveRange(envelopeResults);
+                }
                 await _context.SaveChangesAsync();
 
                 int userId = 0;
                 int.TryParse(User.Identity?.Name, out userId);
 
                 await _loggerService.LogEventAsync(
-                    $"Soft deleted (Status=0) all NRData and conflict records for ProjectId {ProjectId}",
+                    $"Soft deleted all records for ProjectId {ProjectId}",
                     "NRData",
                     userId,
                     ProjectId
@@ -5102,16 +4691,23 @@ bool? missingExamDate = null)
 
                 return Ok(new
                 {
-                    message = "NRData marked as inactive (soft deleted)",
-                    totalUpdated = nrDataList.Count
+                    message = "Project records marked as inactive successfully.",
+                    projectId = ProjectId,
+                    nrDataUpdated = nrDataList.Count,
+                    conflictsUpdated = conflictList.Count,
+                    envelopeResultsUpdated = envelopeResults.Count,
+                    boxResultsUpdated = boxResults.Count
                 });
             }
             catch (Exception ex)
             {
-                return StatusCode(500, ex.ToString());
+                return StatusCode(500, new
+                {
+                    message = "An error occurred while deleting project data.",
+                    error = ex.Message
+                });
             }
         }
-
         [HttpDelete("DeleteCatchNo/{projectId}/{catchNo}")]
         public async Task<IActionResult> DeleteCatchNo(int projectId, string catchNo)
         {
@@ -5157,7 +4753,8 @@ bool? missingExamDate = null)
                 {
                     nrData.Status = false;
                 }
-
+                var extra = await _context.ExtrasEnvelope.Where(e => e.ProjectId == projectId && e.CatchNo == catchNo).ToListAsync();
+                _context.ExtrasEnvelope.RemoveRange(extra);
                 // 🔹 Delete results for THIS catch
                 var envelopeResults = await _context.EnvelopeBreakingResults
                     .Where(e => e.ProjectId == projectId && e.CatchNo == catchNo)
@@ -5457,9 +5054,10 @@ bool? missingExamDate = null)
                     if (!string.IsNullOrWhiteSpace(config.EnvelopeType)) try { envelopeType = JsonSerializer.Deserialize<EnvelopeType>(config.EnvelopeType); } catch { }
                     int innerCapacity = envelopeType != null ? GetEnvelopeCapacity(envelopeType.Inner) : 1;
                     int outerCapacity = envelopeType != null ? GetEnvelopeCapacity(envelopeType.Outer) : 1;
-                    int roundedQty = nRData.NRQuantity;
-                    if (innerCapacity > 0) roundedQty = (int)Math.Ceiling((double)nRData.NRQuantity / innerCapacity) * innerCapacity;
-                    else if (outerCapacity > 0) roundedQty = (int)Math.Ceiling((double)nRData.NRQuantity / outerCapacity) * outerCapacity;
+                    int baseQty = nRData.NRQuantity > 0 ? nRData.NRQuantity : nRData.Quantity;
+                    int roundedQty = baseQty;
+                    if (innerCapacity > 0) roundedQty = (int)Math.Ceiling((double)baseQty / innerCapacity) * innerCapacity;
+                    else if (outerCapacity > 0) roundedQty = (int)Math.Ceiling((double)baseQty / outerCapacity) * outerCapacity;
 
                     extraEnvelopesToAdd.Add(new ExtraEnvelopes { ProjectId = projectId, CatchNo = nRData.CatchNo, ExtraId = extraTypeId.Value, Quantity = roundedQty, InnerEnvelope = innerCapacity > 0 ? Math.Ceiling((double)roundedQty / innerCapacity).ToString() : "0", OuterEnvelope = outerCapacity > 0 ? Math.Ceiling((double)roundedQty / outerCapacity).ToString() : "0", Status = 1 });
                 }

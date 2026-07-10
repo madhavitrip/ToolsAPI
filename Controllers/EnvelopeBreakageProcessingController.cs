@@ -126,7 +126,7 @@ namespace Tools.Controllers
                 if (!nrData.Any())
                     return BadRequest("No valid NR Data found for Envelope Breaking processing.");
 
-                var extrasQuery = _context.ExtrasEnvelope.Where(p => p.ProjectId == ProjectId);
+                var extrasQuery = _context.ExtrasEnvelope.Where(p => p.ProjectId == ProjectId && p.Status == 1);
                 if (!string.IsNullOrEmpty(catchNo)) extrasQuery = extrasQuery.Where(e => e.CatchNo == catchNo);
                 // Note: ExtraEnvelopes doesn't usually have LotNo, so we filter by catchNo if provided.
                 
@@ -950,12 +950,12 @@ namespace Tools.Controllers
                     return NotFound("Project config not found");
 
                 var nrDataDict = await _context.NRDatas
-                    .Where(p => p.ProjectId == ProjectId)
+                    .Where(p => p.ProjectId == ProjectId && p.Status==true)
                     .ToDictionaryAsync(p => p.Id);
 
                 // Catch-wise NR mapping (for MSS rows)
                 var nrDataByCatch = await _context.NRDatas
-                    .Where(p => p.ProjectId == ProjectId)
+                    .Where(p => p.ProjectId == ProjectId && p.Status==true)
                     .GroupBy(p => p.CatchNo)
                     .ToDictionaryAsync(g => g.Key, g => g.First());
 
