@@ -142,7 +142,7 @@ namespace Tools.Controllers
                 var envelopeCapacities = envCaps.ToDictionary(x => x.EnvelopeName, x => x.Capacity);
                 var envDict = envBreaking.ToDictionary(
                     e => e.NrDataId,
-                    e => (e.TotalEnvelope, e.OuterEnvelope)
+                    e => new { e.TotalEnvelope, e.OuterEnvelope, e.InnerEnvelope }
                 );
 
                 var mssTypes = projectconfig.MssTypes;
@@ -213,6 +213,23 @@ namespace Tools.Controllers
                     }
                 }
 
+                string FormatDenomination(string json)
+                {
+                    if (string.IsNullOrWhiteSpace(json)) return null;
+                    try
+                    {
+                        var dict = JsonSerializer.Deserialize<Dictionary<string, string>>(json);
+                        var parts = new List<string>();
+                        foreach (var kvp in dict)
+                        {
+                            string envName = kvp.Key.Replace("E", "");
+                            parts.Add($"{envName}*{kvp.Value}");
+                        }
+                        return string.Join(" & ", parts);
+                    }
+                    catch { return null; }
+                }
+
                 // Helper: Create MSS rows for a given catch
                 List<dynamic> CreateMssRows(string catchNo, string examDate, string examTime, string courseName)
                 {
@@ -267,6 +284,28 @@ namespace Tools.Controllers
                     int totalEnv = (int)Math.Ceiling((double)extra.Quantity / envCapacity);
                     extraCenterEnvCounter = 0;
 
+                    // Calculate PackingDenomination for Extras based on the loop logic
+                    var envCounts = new Dictionary<int, int>();
+                    for (int j = 1; j <= totalEnv; j++)
+                    {
+                        int tempQuantity;
+                        if (j == 1 && totalEnv > 1)
+                            tempQuantity = extra.Quantity - (envCapacity * (totalEnv - 1));
+                        else
+                            tempQuantity = Math.Min(extra.Quantity - (envCapacity * (j - 1)), envCapacity);
+
+                        if (!envCounts.ContainsKey(tempQuantity))
+                            envCounts[tempQuantity] = 0;
+                        envCounts[tempQuantity]++;
+                    }
+                    
+                    var extraParts = new List<string>();
+                    foreach (var kvp in envCounts.OrderByDescending(x => x.Key))
+                    {
+                        extraParts.Add($"{kvp.Key}*{kvp.Value}");
+                    }
+                    string extraPackingDenom = extraParts.Count > 0 ? string.Join(" & ", extraParts) : null;
+
                     for (int j = 1; j <= totalEnv; j++)
                     {
                         int envQuantity;
@@ -319,8 +358,7 @@ namespace Tools.Controllers
                         extraDict["CatchNo"] = extra.CatchNo;
                         extraDict["Quantity"] = extra.Quantity;
                         extraDict["EnvQuantity"] = envQuantity;
-                        extraDict["InnerEnvelope"] = extra.InnerEnvelope;
-                        extraDict["OuterEnvelope"] = extra.OuterEnvelope;
+                        extraDict["PackingDenomination"] = extraPackingDenom;
                         extraDict["CenterCode"] = extra.ExtraId switch
                         {
                             1 => "Nodal Extra",
@@ -484,8 +522,17 @@ namespace Tools.Controllers
                                 nrDict["DistrictSort"] = current.DistrictSort;
                                 nrDict["NrDataId"] = current.Id;
                                 nrDict["ExtraId"] = (int?)null;
+                                
+                                if (envDict.TryGetValue(current.Id, out var envData2))
+                                {
+                                    nrDict["PackingDenomination"] = FormatDenomination(envData2.InnerEnvelope);
+                                }
+                                else
+                                {
+                                    nrDict["PackingDenomination"] = null;
+                                }
 
-                                // ✅ Fill any sorting fields from NRDatas JSON (e.g. Remark, PaperCode, etc.)
+                                // ✅ Fill any sorting fields from NRDatas JSON
                                 FillDynamicFields(nrDict, current.Id);
 
                                 resultList.Add(nrRow);
@@ -525,6 +572,15 @@ namespace Tools.Controllers
                         nrDict["DistrictSort"] = current.DistrictSort;
                         nrDict["NrDataId"] = current.Id;
                         nrDict["ExtraId"] = (int?)null;
+
+                        if (envDict.TryGetValue(current.Id, out var envData2))
+                        {
+                            nrDict["PackingDenomination"] = FormatDenomination(envData2.InnerEnvelope);
+                        }
+                        else
+                        {
+                            nrDict["PackingDenomination"] = null;
+                        }
 
                         // ✅ Fill any sorting fields from NRDatas JSON
                         FillDynamicFields(nrDict, current.Id);
@@ -765,9 +821,9 @@ namespace Tools.Controllers
                             NodalSort = 0,
                             Route = "",
                             RouteSort = 0,
-                            District = "",
                             DistrictSort = 0,
                             CourseName = dict["CourseName"]?.ToString(),
+                            PackingDenomination = null,
                         });
                         continue;
                     }
@@ -847,6 +903,7 @@ namespace Tools.Controllers
                         CourseName = dict["CourseName"]?.ToString(),
                         District = dict["District"]?.ToString(),
                         DistrictSort = districtSort,
+                        PackingDenomination = dict.ContainsKey("PackingDenomination") ? dict["PackingDenomination"]?.ToString() : null,
                     });
 
                     prevCatchForSerial = cNo;
