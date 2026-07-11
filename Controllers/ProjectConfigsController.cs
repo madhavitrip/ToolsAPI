@@ -31,7 +31,7 @@ namespace Tools.Controllers
             return await _context.ProjectConfigs.ToListAsync();
         }
 
-        // GET: api/ProjectConfigs/ByProject/77
+        //GET: api/ProjectConfigs/ByProject/77
         [HttpGet("ByProject/{projectId}")]
         public async Task<ActionResult<ProjectConfig>> GetProjectConfigByProjectId(int projectId)
         {
@@ -46,18 +46,82 @@ namespace Tools.Controllers
             return Ok(config);
         }
 
-        // GET: api/ProjectConfigs/5
-        [HttpGet("{id}")]
-        public async Task<IActionResult> GetProjectConfig(int id)
+
+        [HttpGet("{projectId}")]
+        public async Task<IActionResult> GetProjectConfigByProjectsId(int projectId)
         {
-            var projectConfig = await _context.ProjectConfigs
-                .FirstOrDefaultAsync(p => p.ProjectId == id);
+            var config = await _context.ProjectConfigs
+                .FirstOrDefaultAsync(p => p.ProjectId == projectId);
 
-            if (projectConfig == null)
-                return NotFound();
+            if (config == null)
+            {
+                return NotFound(new { message = $"No configuration found for ProjectId: {projectId}" });
+            }
 
-            return Ok(projectConfig);
+            // Fetch all fields once
+            var fields = await _context.Fields.ToListAsync();
+
+            List<FieldDto> MapFields(List<int> ids)
+            {
+                return fields
+                    .Where(f => ids.Contains(f.FieldId))
+                    .Select(f => new FieldDto
+                    {
+                        FieldId = f.FieldId,
+                        Name = f.Name
+                    })
+                    .ToList();
+            }
+
+            var result = new
+            {
+                config.Id,
+                config.ProjectId,
+                config.Envelope,
+
+                config.Modules,
+
+                config.BoxCapacity,
+                config.Enhancement,
+                config.BoxNumber,
+                config.OmrSerialNumber,
+                config.ResetOnSymbolChange,
+                config.IsInnerBundlingDone,
+                config.ResetOmrSerialOnCatchChange,
+                config.BookletSerialNumber,
+                config.ResetBookletSerialOnCatchChange,
+                config.MssTypes,
+                config.MssAttached,
+                config.RoundOffBeforeEnhancement,
+
+                DuplicateRemoveFields = MapFields(config.DuplicateRemoveFields),
+                SortingBoxReport = MapFields(config.SortingBoxReport),
+                EnvelopeMakingCriteria = MapFields(config.EnvelopeMakingCriteria),
+                BoxBreakingCriteria = MapFields(config.BoxBreakingCriteria),
+                DuplicateCriteria = MapFields(config.DuplicateCriteria),
+                InnerBundlingCriteria = MapFields(config.InnerBundlingCriteria)
+            };
+
+            return Ok(result);
         }
+        public class FieldDto
+        {
+            public int FieldId { get; set; }
+            public string Name { get; set; }
+        }
+
+        // GET: api/ProjectConfigs/5
+        //[HttpGet("{id}")]
+        //public async Task<IActionResult> GetProjectConfig(int id)
+        //{
+        //    var projectConfig = await _context.ProjectConfigs
+        //        .FirstOrDefaultAsync(p => p.ProjectId == id);
+
+        //    if (projectConfig == null)
+        //        return NotFound();
+
+        //    return Ok(projectConfig);
+        //}
 
         // PUT: api/ProjectConfigs/5
         [HttpPut("{id}")]
