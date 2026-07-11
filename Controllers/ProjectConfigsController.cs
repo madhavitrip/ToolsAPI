@@ -207,15 +207,16 @@ namespace Tools.Controllers
                     minResetStep = GetMinResetStep(oldConfig, projectConfig);
                     affectedModules = GetAffectedModulesForStep(minResetStep);
 
-                    // Remove existing config first
-                    var trackingConfig = await _context.ProjectConfigs.FirstOrDefaultAsync(p => p.ProjectId == projectConfig.ProjectId);
-                    if (trackingConfig != null)
+                    // Remove existing configs first
+                    var trackingConfigs = await _context.ProjectConfigs.Where(p => p.ProjectId == projectConfig.ProjectId).ToListAsync();
+                    if (trackingConfigs.Any())
                     {
-                        _context.ProjectConfigs.Remove(trackingConfig);
+                        _context.ProjectConfigs.RemoveRange(trackingConfigs);
                         await _context.SaveChangesAsync();
                     }
                 }
 
+                projectConfig.Id = 0; // Ensure EF Core inserts a new record
                 _context.ProjectConfigs.Add(projectConfig);
                 await _context.SaveChangesAsync();
 

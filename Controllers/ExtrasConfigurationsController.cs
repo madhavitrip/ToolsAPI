@@ -162,7 +162,7 @@ namespace Tools.Controllers
                 
                 await _loggerService.LogEventAsync($"Created new ExtrasConfiguration with ProjectID {extrasConfiguration.ProjectId}", "ExtrasConfiguration", LogHelper.GetTriggeredBy(User), extrasConfiguration.ProjectId);
 
-                return CreatedAtAction("GetExtrasConfiguration", new { id = extrasConfiguration.Id }, extrasConfiguration);
+                return CreatedAtAction(nameof(GetExtrasConfiguration), new { id = extrasConfiguration.Id }, extrasConfiguration);
             }
             catch (DbUpdateConcurrencyException ex)
             {
