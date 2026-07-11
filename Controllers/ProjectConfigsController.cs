@@ -237,7 +237,7 @@ namespace Tools.Controllers
                 }
 
                 await _loggerService.LogEventAsync($"Created/Updated ProjectConfig with ID {projectConfig.ProjectId}", "ProjectConfig", LogHelper.GetTriggeredBy(User), projectConfig.ProjectId);
-                return CreatedAtAction("GetProjectConfig", new { id = projectConfig.Id }, projectConfig);
+                return CreatedAtAction(nameof(GetProjectConfigByProjectId), new { projectId = projectConfig.ProjectId }, projectConfig);
             }
             catch (Exception ex)
             {

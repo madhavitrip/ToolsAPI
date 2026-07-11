@@ -260,7 +260,7 @@ namespace Tools.Controllers
 
                     innerEnvelopesPool = remainingPool;
                     if (used.Count == 0) return null;
-                    return string.Join(" & ", used.OrderByDescending(x => x.Key).Select(kvp => $"{kvp.Key}*{kvp.Value}"));
+                    return "[" + string.Join(" & ", used.OrderByDescending(x => x.Key).Select(kvp => $"{kvp.Key}*{kvp.Value}")) + "]";
                 }
 
                 // Helper: Create MSS rows for a given catch
