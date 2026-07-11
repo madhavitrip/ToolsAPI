@@ -14,6 +14,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using Tools.Models;
 using Tools.Services;
+using System.Globalization;
 
 namespace Tools.Controllers
 {
@@ -246,6 +247,7 @@ namespace Tools.Controllers
                     d.LotNo,
                     d.EnvLotNo,
                     d.NRDatas,
+                    d.Day
 
                 })
                 .ToListAsync();
@@ -2022,7 +2024,21 @@ namespace Tools.Controllers
                         nRData.UploadList = new List<int> { 1 };
                         nRData.Status = true;
                         nRData.Steps = Tools.Models.PipelineNavigator.STEP_UPLOADED;
-                        
+
+                        if (!string.IsNullOrWhiteSpace(nRData.ExamDate))
+                        {
+                            if (DateTime.TryParseExact(
+                                nRData.ExamDate.Trim(),
+                                "dd-MM-yyyy",
+                                CultureInfo.InvariantCulture,
+                                DateTimeStyles.None,
+                                out DateTime examDate))
+                            {
+                                nRData.Day = examDate.ToString("dddd", CultureInfo.InvariantCulture);
+                            }
+                        }
+
+
                         bool isExtraRow = nRData.CenterCode switch { "Nodal Extra" => true, "University Extra" => true, "Office Extra" => true, _ => false };
                         if (!isExtraRow)
                         {
@@ -2136,6 +2152,18 @@ namespace Tools.Controllers
                     var item = incomingData[i];
 
                     var nRData = MapJsonToNRData(item, projectId, properties);
+                    if (!string.IsNullOrWhiteSpace(nRData.ExamDate))
+                    {
+                        if (DateTime.TryParseExact(
+                            nRData.ExamDate.Trim(),
+                            "dd-MM-yyyy",
+                            CultureInfo.InvariantCulture,
+                            DateTimeStyles.None,
+                            out DateTime examDate))
+                        {
+                            nRData.Day = examDate.ToString("dddd", CultureInfo.InvariantCulture);
+                        }
+                    }
 
                     // Versioning & Steps
                     var lookupKey = new
@@ -2348,6 +2376,19 @@ namespace Tools.Controllers
                     .ToDictionary(p => p.Name.ToLower(), p => p);
 
                 var nRData = MapJsonToNRData(item, projectId, properties);
+
+                if (!string.IsNullOrWhiteSpace(nRData.ExamDate))
+                {
+                    if (DateTime.TryParseExact(
+                        nRData.ExamDate.Trim(),
+                        "dd-MM-yyyy",
+                        CultureInfo.InvariantCulture,
+                        DateTimeStyles.None,
+                        out DateTime examDate))
+                    {
+                        nRData.Day = examDate.ToString("dddd", CultureInfo.InvariantCulture);
+                    }
+                }
 
                 // 4. Duplicate check
                 bool exists = await DuplicateExists(nRData, projectId, projectConfig);
@@ -3816,6 +3857,7 @@ namespace Tools.Controllers
                 return StatusCode(500, "An error occurred while retrieving unique catch data.");
             }
         }
+
         [HttpPost("missing-data")]
         public async Task<ActionResult> SaveMissingData([FromBody] MissingDataSaveRequest request)
         {
@@ -3907,10 +3949,35 @@ namespace Tools.Controllers
                         {
                             var dynamicFields = new Dictionary<string, object>();
 
+                            var oldExamDate = row.ExamDate;
+                            var oldDay = row.Day;
+
+                            bool examDateUpdated = false;
+                            string? newExamDate = null;
+
+                            bool dayProvided = false;
+                            string? payloadDay = null;
+
                             foreach (var field in item.AdditionalFields!)
                             {
                                 var key = field.Key;
                                 var valueStr = field.Value?.ToString()?.Trim();
+
+                                if (string.IsNullOrWhiteSpace(valueStr))
+                                    continue;
+
+                                if (key.Equals(nameof(NRData.ExamDate), StringComparison.OrdinalIgnoreCase))
+                                {
+                                    examDateUpdated = true;
+                                    newExamDate = valueStr;
+                                }
+
+                                if (key.Equals(nameof(NRData.Day), StringComparison.OrdinalIgnoreCase))
+                                {
+                                    dayProvided = true;
+                                    payloadDay = valueStr;
+                                    continue; // Don't update Day yet
+                                }
 
                                 if (string.IsNullOrWhiteSpace(valueStr))
                                     continue;
@@ -3944,7 +4011,12 @@ namespace Tools.Controllers
                                         }
 
                                         if (convertedValue != null)
+                                        {
                                             property.SetValue(row, convertedValue);
+
+                                            // Auto-update Day when ExamDate changes
+                                            
+                                        }
                                     }
                                     catch
                                     {
@@ -3957,8 +4029,39 @@ namespace Tools.Controllers
                                 }
                             }
 
+                            
+
                             //  JSON handled ONCE (removed duplicate block)
                             Dictionary<string, object> existingData;
+
+                            if (examDateUpdated)
+                                if (examDateUpdated)
+                                {
+                                    // If the user changed the Day in the payload, keep it.
+                                    if (dayProvided &&
+                                        !string.Equals(oldDay, payloadDay, StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        row.Day = payloadDay;
+                                    }
+                                    else
+                                    {
+                                        // User didn't change Day, so regenerate it from ExamDate.
+                                        if (DateTime.TryParseExact(
+                                                newExamDate,
+                                                new[] { "dd-MM-yyyy", "dd/MM/yyyy", "yyyy-MM-dd" },
+                                                CultureInfo.InvariantCulture,
+                                                DateTimeStyles.None,
+                                                out DateTime newDate))
+                                        {
+                                            row.Day = newDate.ToString("dddd", CultureInfo.InvariantCulture);
+                                        }
+                                    }
+                                }
+                                else if (dayProvided)
+                                {
+                                    // ExamDate didn't change, but Day was edited.
+                                    row.Day = payloadDay;
+                                }
 
                             if (!string.IsNullOrWhiteSpace(row.NRDatas))
                             {

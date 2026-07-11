@@ -213,21 +213,54 @@ namespace Tools.Controllers
                     }
                 }
 
-                string FormatDenomination(string json)
+                string GetPackingDenominationForQuantity(string innerEnvelopeJson, int targetQty, ref List<int> innerEnvelopesPool)
                 {
-                    if (string.IsNullOrWhiteSpace(json)) return null;
-                    try
+                    if (innerEnvelopesPool == null)
                     {
-                        var dict = JsonSerializer.Deserialize<Dictionary<string, string>>(json);
-                        var parts = new List<string>();
-                        foreach (var kvp in dict)
+                        innerEnvelopesPool = new List<int>();
+                        if (!string.IsNullOrWhiteSpace(innerEnvelopeJson))
                         {
-                            string envName = kvp.Key.Replace("E", "");
-                            parts.Add($"{envName}*{kvp.Value}");
+                            try
+                            {
+                                var dict = JsonSerializer.Deserialize<Dictionary<string, string>>(innerEnvelopeJson);
+                                foreach (var kvp in dict)
+                                {
+                                    string envName = kvp.Key.Replace("E", "");
+                                    if (int.TryParse(envName, out int capacity) && int.TryParse(kvp.Value, out int count))
+                                    {
+                                        for (int i = 0; i < count; i++)
+                                            innerEnvelopesPool.Add(capacity);
+                                    }
+                                }
+                            }
+                            catch { }
                         }
-                        return string.Join(" & ", parts);
+                        innerEnvelopesPool = innerEnvelopesPool.OrderByDescending(x => x).ToList();
                     }
-                    catch { return null; }
+
+                    if (targetQty <= 0 || innerEnvelopesPool.Count == 0) return null;
+
+                    var used = new Dictionary<int, int>();
+                    int currentSum = 0;
+                    var remainingPool = new List<int>();
+
+                    foreach (var cap in innerEnvelopesPool)
+                    {
+                        if (currentSum < targetQty && currentSum + cap <= targetQty)
+                        {
+                            currentSum += cap;
+                            if (!used.ContainsKey(cap)) used[cap] = 0;
+                            used[cap]++;
+                        }
+                        else
+                        {
+                            remainingPool.Add(cap);
+                        }
+                    }
+
+                    innerEnvelopesPool = remainingPool;
+                    if (used.Count == 0) return null;
+                    return "[" + string.Join(" & ", used.OrderByDescending(x => x.Key).Select(kvp => $"{kvp.Key}*{kvp.Value}")) + "]";
                 }
 
                 // Helper: Create MSS rows for a given catch
@@ -284,27 +317,7 @@ namespace Tools.Controllers
                     int totalEnv = (int)Math.Ceiling((double)extra.Quantity / envCapacity);
                     extraCenterEnvCounter = 0;
 
-                    // Calculate PackingDenomination for Extras based on the loop logic
-                    var envCounts = new Dictionary<int, int>();
-                    for (int j = 1; j <= totalEnv; j++)
-                    {
-                        int tempQuantity;
-                        if (j == 1 && totalEnv > 1)
-                            tempQuantity = extra.Quantity - (envCapacity * (totalEnv - 1));
-                        else
-                            tempQuantity = Math.Min(extra.Quantity - (envCapacity * (j - 1)), envCapacity);
-
-                        if (!envCounts.ContainsKey(tempQuantity))
-                            envCounts[tempQuantity] = 0;
-                        envCounts[tempQuantity]++;
-                    }
-                    
-                    var extraParts = new List<string>();
-                    foreach (var kvp in envCounts.OrderByDescending(x => x.Key))
-                    {
-                        extraParts.Add($"{kvp.Key}*{kvp.Value}");
-                    }
-                    string extraPackingDenom = extraParts.Count > 0 ? string.Join(" & ", extraParts) : null;
+                    List<int> innerPool = null;
 
                     for (int j = 1; j <= totalEnv; j++)
                     {
@@ -314,6 +327,7 @@ namespace Tools.Controllers
                         else
                             envQuantity = Math.Min(extra.Quantity - (envCapacity * (j - 1)), envCapacity);
 
+                        string extraPackingDenom = GetPackingDenominationForQuantity(extra.InnerEnvelope, envQuantity, ref innerPool);
                         extraCenterEnvCounter++;
 
                         double modifiedCenterSort = extra.ExtraId switch
@@ -488,6 +502,8 @@ namespace Tools.Controllers
 
                     if (envelopeBreakdown.Count > 0)
                     {
+                        List<int> innerPool = null;
+                        string innerJson = envDict.TryGetValue(current.Id, out var eInfo) ? eInfo.InnerEnvelope : null;
                         int envelopeIndex = 1;
                         int remainingQty = current.Quantity;
                         foreach (var (envType, count, capacity) in envelopeBreakdown)
@@ -523,14 +539,7 @@ namespace Tools.Controllers
                                 nrDict["NrDataId"] = current.Id;
                                 nrDict["ExtraId"] = (int?)null;
                                 
-                                if (envDict.TryGetValue(current.Id, out var envData2))
-                                {
-                                    nrDict["PackingDenomination"] = FormatDenomination(envData2.InnerEnvelope);
-                                }
-                                else
-                                {
-                                    nrDict["PackingDenomination"] = null;
-                                }
+                                nrDict["PackingDenomination"] = GetPackingDenominationForQuantity(innerJson, envQty, ref innerPool);
 
                                 // ✅ Fill any sorting fields from NRDatas JSON
                                 FillDynamicFields(nrDict, current.Id);
@@ -573,14 +582,9 @@ namespace Tools.Controllers
                         nrDict["NrDataId"] = current.Id;
                         nrDict["ExtraId"] = (int?)null;
 
-                        if (envDict.TryGetValue(current.Id, out var envData2))
-                        {
-                            nrDict["PackingDenomination"] = FormatDenomination(envData2.InnerEnvelope);
-                        }
-                        else
-                        {
-                            nrDict["PackingDenomination"] = null;
-                        }
+                        List<int> innerPool = null;
+                        string innerJson = envDict.TryGetValue(current.Id, out var eInfo2) ? eInfo2.InnerEnvelope : null;
+                        nrDict["PackingDenomination"] = GetPackingDenominationForQuantity(innerJson, current.Quantity, ref innerPool);
 
                         // ✅ Fill any sorting fields from NRDatas JSON
                         FillDynamicFields(nrDict, current.Id);

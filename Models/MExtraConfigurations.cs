@@ -14,7 +14,8 @@ namespace Tools.Models
         public string Mode { get; set; }
         public string Value { get; set; }
         public string EnvelopeType { get; set; }
-        public string? RangeConfig { get; set; } 
+        public string? RangeConfig { get; set; }
+        public bool IsExtraProcessingAsPerNR { get; set; }
 
     }
 }
