@@ -4035,33 +4035,39 @@ namespace Tools.Controllers
                             Dictionary<string, object> existingData;
 
                             if (examDateUpdated)
-                                if (examDateUpdated)
+                            {
+                                // If both ExamDate and Day are exactly the same as DB, do nothing.
+                                if (string.Equals(oldExamDate, newExamDate, StringComparison.OrdinalIgnoreCase) &&
+                                    dayProvided &&
+                                    string.Equals(oldDay, payloadDay, StringComparison.OrdinalIgnoreCase))
                                 {
-                                    // If the user changed the Day in the payload, keep it.
-                                    if (dayProvided &&
-                                        !string.Equals(oldDay, payloadDay, StringComparison.OrdinalIgnoreCase))
-                                    {
-                                        row.Day = payloadDay;
-                                    }
-                                    else
-                                    {
-                                        // User didn't change Day, so regenerate it from ExamDate.
-                                        if (DateTime.TryParseExact(
-                                                newExamDate,
-                                                new[] { "dd-MM-yyyy", "dd/MM/yyyy", "yyyy-MM-dd" },
-                                                CultureInfo.InvariantCulture,
-                                                DateTimeStyles.None,
-                                                out DateTime newDate))
-                                        {
-                                            row.Day = newDate.ToString("dddd", CultureInfo.InvariantCulture);
-                                        }
-                                    }
+                                    // No changes required
                                 }
-                                else if (dayProvided)
+                                // User intentionally changed Day
+                                else if (dayProvided &&
+                                         !string.Equals(oldDay, payloadDay, StringComparison.OrdinalIgnoreCase))
                                 {
-                                    // ExamDate didn't change, but Day was edited.
                                     row.Day = payloadDay;
                                 }
+                                // Day wasn't changed, but ExamDate changed → regenerate Day
+                                else
+                                {
+                                    if (DateTime.TryParseExact(
+                                            newExamDate,
+                                            new[] { "dd-MM-yyyy", "dd/MM/yyyy", "yyyy-MM-dd" },
+                                            CultureInfo.InvariantCulture,
+                                            DateTimeStyles.None,
+                                            out DateTime newDate))
+                                    {
+                                        row.Day = newDate.ToString("dddd", CultureInfo.InvariantCulture);
+                                    }
+                                }
+                            }
+                            else if (dayProvided)
+                            {
+                                // Only Day changed
+                                row.Day = payloadDay;
+                            }
 
                             if (!string.IsNullOrWhiteSpace(row.NRDatas))
                             {
