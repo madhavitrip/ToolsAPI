@@ -4817,6 +4817,536 @@ namespace Tools.Controllers
                 });
             }
         }
+
+        public enum HeaderVerificationStatus
+        {
+            NotVerified = 0,
+            Verified = 1,
+            NotClear = 2
+        }
+
+        [HttpGet("~/api/Correction/HeaderVerification/{projectId}")]
+        public async Task<IActionResult> GetHeaderVerificationRecords(
+     int projectId,
+     [FromQuery] string? search = null,
+     [FromQuery] string? lotNo = null,
+     [FromQuery] string? status = null,
+     [FromQuery] int page = 1,
+     [FromQuery] int pageSize = 20,
+     [FromQuery] string sortBy = "catchNo",
+     [FromQuery] string sortOrder = "asc",
+     [FromQuery] string? a = null,
+     [FromQuery] string? b = null,
+     [FromQuery] string? c = null,
+     [FromQuery] string? d = null,
+     [FromQuery] string? catchNo = null,
+     [FromQuery] string? date = null,
+     [FromQuery] string? time = null
+ )
+        {
+            page = page < 1 ? 1 : page;
+            pageSize = pageSize <= 0 ? 20 : pageSize;
+
+            // Fetch one representative row for each distinct CatchNo
+            var query = _context.NRDatas
+                .Where(x =>
+                    x.ProjectId == projectId &&
+                    x.Status == true &&
+                    x.CatchNo != null
+                );
+
+            // Optional lot filter applied at DB level
+            if (!string.IsNullOrWhiteSpace(lotNo))
+            {
+                if (int.TryParse(lotNo, out int lotNoInt))
+                    query = query.Where(x => x.LotNo == lotNoInt);
+                else
+                    query = query.Where(x => false); // invalid lot → empty result
+            }
+
+            var records = await query
+                .GroupBy(x => x.CatchNo)
+                .Select(g => g.First())
+                .ToListAsync();
+
+            var result = new List<object>();
+
+            foreach (var nrData in records)
+            {
+                Dictionary<string, JsonElement> data = new();
+
+                if (!string.IsNullOrWhiteSpace(nrData.NRDatas))
+                {
+                    try
+                    {
+                        data =
+                            JsonSerializer.Deserialize<
+                                Dictionary<string, JsonElement>
+                            >(nrData.NRDatas)
+                            ?? new Dictionary<string, JsonElement>();
+                    }
+                    catch
+                    {
+                        data = new Dictionary<string, JsonElement>();
+                    }
+                }
+
+                string GetJsonValue(string key)
+                {
+                    if (data.TryGetValue(key, out var value))
+                    {
+                        return value.ValueKind == JsonValueKind.String
+                            ? value.GetString() ?? ""
+                            : value.ToString();
+                    }
+
+                    return "";
+                }
+
+                HeaderVerificationStatus verificationStatus =
+                    HeaderVerificationStatus.NotVerified;
+
+                if (
+                    data.TryGetValue(
+                        "VerificationStatus",
+                        out var statusElement
+                    )
+                )
+                {
+                    if (
+                        statusElement.ValueKind == JsonValueKind.Number &&
+                        statusElement.TryGetInt32(out int savedStatus) &&
+                        Enum.IsDefined(
+                            typeof(HeaderVerificationStatus),
+                            savedStatus
+                        )
+                    )
+                    {
+                        verificationStatus =
+                            (HeaderVerificationStatus)savedStatus;
+                    }
+                }
+
+                result.Add(new
+                {
+                    id = nrData.Id,
+                    projectId = nrData.ProjectId,
+                    catchNo = nrData.CatchNo ?? "",
+                    lotNo = nrData.LotNo.ToString() ?? "",
+                    A = GetJsonValue("A"),
+                    B = GetJsonValue("B"),
+                    C = GetJsonValue("C"),
+                    D = GetJsonValue("D"),
+                    date = nrData.ExamDate ?? "",
+                    time = nrData.ExamTime ?? "",
+                    status = (int)verificationStatus,
+                    statusLabel = verificationStatus.ToString()
+                });
+            }
+
+            // SEARCH
+            if (!string.IsNullOrWhiteSpace(search))
+            {
+                search = search.Trim();
+
+                result = result
+                    .Where(x =>
+                        x.GetType().GetProperty("catchNo")?.GetValue(x)?.ToString()
+                            ?.Contains(search, StringComparison.OrdinalIgnoreCase) == true
+
+                        || x.GetType().GetProperty("lotNo")?.GetValue(x)?.ToString()
+                            ?.Contains(search, StringComparison.OrdinalIgnoreCase) == true
+
+                        || x.GetType().GetProperty("A")?.GetValue(x)?.ToString()
+                            ?.Contains(search, StringComparison.OrdinalIgnoreCase) == true
+
+                        || x.GetType().GetProperty("B")?.GetValue(x)?.ToString()
+                            ?.Contains(search, StringComparison.OrdinalIgnoreCase) == true
+
+                        || x.GetType().GetProperty("C")?.GetValue(x)?.ToString()
+                            ?.Contains(search, StringComparison.OrdinalIgnoreCase) == true
+
+                        || x.GetType().GetProperty("D")?.GetValue(x)?.ToString()
+                            ?.Contains(search, StringComparison.OrdinalIgnoreCase) == true
+
+                        || x.GetType().GetProperty("date")?.GetValue(x)?.ToString()
+                            ?.Contains(search, StringComparison.OrdinalIgnoreCase) == true
+
+                        || x.GetType().GetProperty("time")?.GetValue(x)?.ToString()
+                            ?.Contains(search, StringComparison.OrdinalIgnoreCase) == true
+
+                        || x.GetType().GetProperty("statusLabel")?.GetValue(x)?.ToString()
+                            ?.Contains(search, StringComparison.OrdinalIgnoreCase) == true
+                    )
+                    .ToList();
+            }
+
+            // STATUS FILTER (optional)
+            if (!string.IsNullOrWhiteSpace(status))
+            {
+                var s = status.Trim().ToLower();
+                int? statusVal = null;
+                if (s == "verified" || s == "1" || s == "1" ) statusVal = 1;
+                else if (s == "unclear" || s == "notclear" || s == "2" ) statusVal = 2;
+                else if (s == "not_verified" || s == "not verified" || s == "notverified" || s == "0" ) statusVal = 0;
+
+                if (statusVal.HasValue)
+                {
+                    result = result.Where(x => (int)x.GetType().GetProperty("status")?.GetValue(x) == statusVal.Value).ToList();
+                }
+            }
+
+            // COLUMN FILTERS 
+            if (!string.IsNullOrWhiteSpace(a)) result = result.Where(x => x.GetType().GetProperty("A")?.GetValue(x)?.ToString()?.Contains(a.Trim(), StringComparison.OrdinalIgnoreCase) == true).ToList();
+            if (!string.IsNullOrWhiteSpace(b)) result = result.Where(x => x.GetType().GetProperty("B")?.GetValue(x)?.ToString()?.Contains(b.Trim(), StringComparison.OrdinalIgnoreCase) == true).ToList();
+            if (!string.IsNullOrWhiteSpace(c)) result = result.Where(x => x.GetType().GetProperty("C")?.GetValue(x)?.ToString()?.Contains(c.Trim(), StringComparison.OrdinalIgnoreCase) == true).ToList();
+            if (!string.IsNullOrWhiteSpace(d)) result = result.Where(x => x.GetType().GetProperty("D")?.GetValue(x)?.ToString()?.Contains(d.Trim(), StringComparison.OrdinalIgnoreCase) == true).ToList();
+            if (!string.IsNullOrWhiteSpace(catchNo)) result = result.Where(x => x.GetType().GetProperty("catchNo")?.GetValue(x)?.ToString()?.Contains(catchNo.Trim(), StringComparison.OrdinalIgnoreCase) == true).ToList();
+            if (!string.IsNullOrWhiteSpace(date)) result = result.Where(x => x.GetType().GetProperty("date")?.GetValue(x)?.ToString()?.Contains(date.Trim(), StringComparison.OrdinalIgnoreCase) == true).ToList();
+            if (!string.IsNullOrWhiteSpace(time)) result = result.Where(x => x.GetType().GetProperty("time")?.GetValue(x)?.ToString()?.Contains(time.Trim(), StringComparison.OrdinalIgnoreCase) == true).ToList();
+
+            // SORTING
+            bool isDescending =
+                sortOrder.Equals(
+                    "desc",
+                    StringComparison.OrdinalIgnoreCase
+                );
+
+            result = sortBy.ToLower() switch
+            {
+                "catchno" =>
+                    isDescending
+                        ? result.OrderByDescending(x =>
+                            x.GetType().GetProperty("catchNo")?.GetValue(x)
+                        ).ToList()
+                        : result.OrderBy(x =>
+                            x.GetType().GetProperty("catchNo")?.GetValue(x)
+                        ).ToList(),
+
+                "lotno" =>
+                    isDescending
+                        ? result.OrderByDescending(x =>
+                            x.GetType().GetProperty("lotNo")?.GetValue(x)
+                        ).ToList()
+                        : result.OrderBy(x =>
+                            x.GetType().GetProperty("lotNo")?.GetValue(x)
+                        ).ToList(),
+
+                "a" =>
+                    isDescending
+                        ? result.OrderByDescending(x =>
+                            x.GetType().GetProperty("A")?.GetValue(x)
+                        ).ToList()
+                        : result.OrderBy(x =>
+                            x.GetType().GetProperty("A")?.GetValue(x)
+                        ).ToList(),
+
+                "b" =>
+                    isDescending
+                        ? result.OrderByDescending(x =>
+                            x.GetType().GetProperty("B")?.GetValue(x)
+                        ).ToList()
+                        : result.OrderBy(x =>
+                            x.GetType().GetProperty("B")?.GetValue(x)
+                        ).ToList(),
+
+                "c" =>
+                    isDescending
+                        ? result.OrderByDescending(x =>
+                            x.GetType().GetProperty("C")?.GetValue(x)
+                        ).ToList()
+                        : result.OrderBy(x =>
+                            x.GetType().GetProperty("C")?.GetValue(x)
+                        ).ToList(),
+
+                "d" =>
+                    isDescending
+                        ? result.OrderByDescending(x =>
+                            x.GetType().GetProperty("D")?.GetValue(x)
+                        ).ToList()
+                        : result.OrderBy(x =>
+                            x.GetType().GetProperty("D")?.GetValue(x)
+                        ).ToList(),
+
+                "date" =>
+                    isDescending
+                        ? result.OrderByDescending(x =>
+                            x.GetType().GetProperty("date")?.GetValue(x)
+                        ).ToList()
+                        : result.OrderBy(x =>
+                            x.GetType().GetProperty("date")?.GetValue(x)
+                        ).ToList(),
+
+                "time" =>
+                    isDescending
+                        ? result.OrderByDescending(x =>
+                            x.GetType().GetProperty("time")?.GetValue(x)
+                        ).ToList()
+                        : result.OrderBy(x =>
+                            x.GetType().GetProperty("time")?.GetValue(x)
+                        ).ToList(),
+
+                "status" =>
+                    isDescending
+                        ? result.OrderByDescending(x =>
+                            x.GetType().GetProperty("status")?.GetValue(x)
+                        ).ToList()
+                        : result.OrderBy(x =>
+                            x.GetType().GetProperty("status")?.GetValue(x)
+                        ).ToList(),
+
+                _ => result
+            };
+
+            // PAGINATION
+            int totalRecords = result.Count;
+            int verifiedCount = result.Count(x => (int)x.GetType().GetProperty("status")?.GetValue(x) == 1);
+            int unclearCount = result.Count(x => (int)x.GetType().GetProperty("status")?.GetValue(x) == 2);
+            int notVerifiedCount = result.Count(x => (int)x.GetType().GetProperty("status")?.GetValue(x) == 0);
+
+            int totalPages = (int)Math.Ceiling(
+                totalRecords / (double)pageSize
+            );
+
+            var paginatedResult = result
+                .Skip((page - 1) * pageSize)
+                .Take(pageSize)
+                .ToList();
+
+            return Ok(new
+            {
+                data = paginatedResult,
+
+                pagination = new
+                {
+                    currentPage = page,
+                    pageSize = pageSize,
+                    totalRecords = totalRecords,
+                    totalPages = totalPages,
+                    hasNextPage = page < totalPages,
+                    hasPreviousPage = page > 1
+                },
+
+                summary = new
+                {
+                    totalRecords = totalRecords,
+                    verified = verifiedCount,
+                    unclear = unclearCount,
+                    notVerified = notVerifiedCount
+                }
+            });
+        }
+        [HttpPut("~/api/Correction/HeaderVerification/{id}")]
+        public async Task<IActionResult> UpdateHeaderVerificationRecord(
+            int id,
+            [FromQuery] int projectId,
+            [FromBody] Dictionary<string, object> updateModel
+        )
+        {
+            // ---------------------------------------------------------
+            // 1. Find the selected record
+            // ---------------------------------------------------------
+
+            var selectedRecord = await _context.NRDatas
+                .FirstOrDefaultAsync(x =>
+                    x.Id == id &&
+                    x.ProjectId == projectId &&
+                    x.Status == true
+                );
+
+            if (selectedRecord == null)
+            {
+                return NotFound(
+                    "Record not found, does not belong to this project, or is inactive."
+                );
+            }
+
+            // ---------------------------------------------------------
+            // 2. Validate status
+            // ---------------------------------------------------------
+
+            if (!updateModel.TryGetValue("status", out var statusObj))
+            {
+                return BadRequest(
+                    "Verification status is required."
+                );
+            }
+
+            if (!int.TryParse(statusObj?.ToString(), out int statusValue))
+            {
+                return BadRequest(
+                    "Invalid verification status. Allowed values are 0, 1, and 2."
+                );
+            }
+
+            if (!Enum.IsDefined(
+                typeof(HeaderVerificationStatus),
+                statusValue
+            ))
+            {
+                return BadRequest(
+                    "Invalid verification status. Allowed values are 0, 1, and 2."
+                );
+            }
+
+            var verificationStatus =
+                (HeaderVerificationStatus)statusValue;
+
+            // ---------------------------------------------------------
+            // 3. Fetch ALL active rows having the same CatchNo
+            // ---------------------------------------------------------
+
+            var catchRecords = await _context.NRDatas
+                .Where(x =>
+                    x.ProjectId == projectId &&
+                    x.CatchNo == selectedRecord.CatchNo &&
+                    x.Status == true
+                )
+                .ToListAsync();
+
+            if (catchRecords.Count == 0)
+            {
+                return NotFound(
+                    "No active records found for this catch."
+                );
+            }
+
+            // ---------------------------------------------------------
+            // 4. Update every row for this CatchNo
+            // ---------------------------------------------------------
+
+            foreach (var nrData in catchRecords)
+            {
+                // Update the actual database column
+                nrData.VerificationStatus = statusValue;
+
+                // -----------------------------------------------------
+                // Also update NRDatas JSON if required
+                // -----------------------------------------------------
+
+                Dictionary<string, JsonElement> data = new();
+
+                if (!string.IsNullOrWhiteSpace(nrData.NRDatas))
+                {
+                    try
+                    {
+                        data =
+                            JsonSerializer.Deserialize<
+                                Dictionary<string, JsonElement>
+                            >(nrData.NRDatas)
+                            ?? new Dictionary<string, JsonElement>();
+                    }
+                    catch
+                    {
+                        data = new Dictionary<string, JsonElement>();
+                    }
+                }
+
+                data["VerificationStatus"] =
+                    JsonSerializer.SerializeToElement(statusValue);
+
+                nrData.NRDatas =
+                    JsonSerializer.Serialize(data);
+            }
+
+            // ---------------------------------------------------------
+            // 5. Update A/B/C/D only for selected record
+            // ---------------------------------------------------------
+
+            Dictionary<string, JsonElement> selectedData = new();
+
+            if (!string.IsNullOrWhiteSpace(selectedRecord.NRDatas))
+            {
+                try
+                {
+                    selectedData =
+                        JsonSerializer.Deserialize<
+                            Dictionary<string, JsonElement>
+                        >(selectedRecord.NRDatas)
+                        ?? new Dictionary<string, JsonElement>();
+                }
+                catch
+                {
+                    selectedData =
+                        new Dictionary<string, JsonElement>();
+                }
+            }
+
+            void UpdateJsonValue(string key)
+            {
+                if (
+                    updateModel.TryGetValue(key, out var value) &&
+                    value != null
+                )
+                {
+                    selectedData[key] =
+                        JsonSerializer.SerializeToElement(
+                            value.ToString()
+                        );
+                }
+            }
+
+            UpdateJsonValue("A");
+            UpdateJsonValue("B");
+            UpdateJsonValue("C");
+            UpdateJsonValue("D");
+
+            selectedRecord.NRDatas =
+                JsonSerializer.Serialize(selectedData);
+
+            // ---------------------------------------------------------
+            // 6. Save all changes
+            // ---------------------------------------------------------
+
+            await _context.SaveChangesAsync();
+
+            // ---------------------------------------------------------
+            // 7. Return updated representative record
+            // ---------------------------------------------------------
+
+            string GetJsonValue(string key)
+            {
+                if (selectedData.TryGetValue(key, out var value))
+                {
+                    return value.ValueKind == JsonValueKind.String
+                        ? value.GetString() ?? ""
+                        : value.ToString();
+                }
+
+                return "";
+            }
+
+            return Ok(new
+            {
+                id = selectedRecord.Id,
+
+                projectId = selectedRecord.ProjectId,
+
+                catchNo = selectedRecord.CatchNo ?? "",
+
+                lotNo = selectedRecord.LotNo.ToString() ?? "",
+
+                A = GetJsonValue("A"),
+
+                B = GetJsonValue("B"),
+
+                C = GetJsonValue("C"),
+
+                D = GetJsonValue("D"),
+
+                date = selectedRecord.ExamDate ?? "",
+
+                time = selectedRecord.ExamTime ?? "",
+
+                status = statusValue,
+
+                statusLabel = verificationStatus.ToString(),
+
+                updatedRows = catchRecords.Count
+            });
+        }
+
+
         [HttpDelete("DeleteCatchNo/{projectId}/{catchNo}")]
         public async Task<IActionResult> DeleteCatchNo(int projectId, string catchNo)
         {

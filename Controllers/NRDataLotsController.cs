@@ -63,7 +63,7 @@ namespace Tools.Controllers
                 return BadRequest("ProjectId is required.");
 
             var catchItems = await _context.NRDatas
-                .Where(x => x.ProjectId == projectId && x.Status == true && x.EnvLotNo == 0 && !string.IsNullOrWhiteSpace(x.CatchNo))
+                .Where(x => x.ProjectId == projectId && x.Status == true && x.EnvLotNo == 0 && x.VerificationStatus == 1 && !string.IsNullOrWhiteSpace(x.CatchNo))
                 .GroupBy(x => x.CatchNo)
                 .Select(g => new
                 {
