@@ -40,6 +40,8 @@ namespace ERPToolsAPI.Data
         public DbSet<Mss> Mss { get; set; }
         public DbSet<RPTTemplate> RPTTemplates { get; set; }
 
+        public DbSet<ProcessSteps> ProcessSteps { get; set; }
+
         public DbSet<RPTMapping> RPTMappings { get; set; }
         public DbSet<EnvelopeLotReport> EnvelopeLotReports { get; set; }
         //public DbSet<UserAssignment> UserAssignments { get; set; }
