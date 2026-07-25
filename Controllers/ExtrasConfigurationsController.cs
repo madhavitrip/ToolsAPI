@@ -182,15 +182,15 @@ namespace Tools.Controllers
         {
             try
             {
-                var extrasConfiguration = await _context.ExtraConfigurations.FirstOrDefaultAsync(s=>s.ProjectId==id);
-                if (extrasConfiguration == null)
+                var extrasConfigurations = await _context.ExtraConfigurations.Where(s=>s.ProjectId==id).ToListAsync();
+                if (extrasConfigurations == null || !extrasConfigurations.Any())
                 {
                     return NotFound();
                 }
 
-                _context.ExtraConfigurations.Remove(extrasConfiguration);
+                _context.ExtraConfigurations.RemoveRange(extrasConfigurations);
                 await _context.SaveChangesAsync();
-                await _loggerService.LogEventAsync($"Deleted a ExtrasConfiguration with ID {id}", "ExtrasConfiguration", LogHelper.GetTriggeredBy(User), extrasConfiguration.ProjectId);
+                await _loggerService.LogEventAsync($"Deleted ExtrasConfigurations for ProjectId {id}", "ExtrasConfiguration", LogHelper.GetTriggeredBy(User), id);
 
                 return NoContent();
             }
