@@ -37,5 +37,7 @@ namespace ToolsAPI.Models
         // Navigation properties
         [ForeignKey("ProjectId")]
         public virtual Project? Project { get; set; }
+
+        public int LotNo { get; set; }
     }
 }

@@ -601,6 +601,206 @@ namespace Tools.Controllers
             return Ok(results);
         }
 
+        // GET: api/EnvelopeBreakages/Reports/DownloadAll?projectId=111&type=reports
+        // GET: api/EnvelopeBreakages/Reports/DownloadAll?projectId=111&type=templates
+        // Returns a ZIP containing all latest files for the project (reports or templates).
+        [HttpGet("Reports/DownloadAll")]
+        public async Task<IActionResult> DownloadAllReports(int projectId, string type = "reports")
+        {
+            if (projectId <= 0)
+                return BadRequest("projectId is required.");
+
+            type = (type ?? "reports").ToLowerInvariant();
+
+            if (type == "templates")
+            {
+                // Template download logic
+                try
+                {
+                    // Fetch all reports and group in memory to avoid LINQ translation issues
+                    var allReports = await _context.EnvelopeLotReports
+                        .Where(r => r.ProjectId == projectId)
+                        .ToListAsync();
+
+                    if (!allReports.Any())
+                        return NotFound(new { message = "No templates found for this project" });
+
+                    // Group in memory and get latest for each template
+                    var latestReports = allReports
+                        .GroupBy(r => r.TemplateId)
+                        .Select(g => g.OrderByDescending(r => r.GeneratedAt).FirstOrDefault())
+                        .Where(r => r != null)
+                        .ToList();
+
+                    if (!latestReports.Any())
+                        return NotFound(new { message = "No templates found for this project" });
+
+                    var filesToZip = new List<(string path, string name)>();
+
+                    foreach (var report in latestReports)
+                    {
+                        string filePath = report.FilePath;
+
+                        if (string.IsNullOrEmpty(filePath) || !System.IO.File.Exists(filePath))
+                        {
+                            // Try alternate paths
+                            var fileName = report.FileName;
+                            var basePaths = new[]
+                            {
+                                Path.Combine(Directory.GetCurrentDirectory(), "Uploads", "EnvelopeLotReports", fileName),
+                                Path.Combine(Directory.GetCurrentDirectory(), "Uploads", fileName),
+                                Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "Uploads", "EnvelopeLotReports", fileName),
+                                Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "uploads", "EnvelopeLotReports", fileName),
+                                Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", fileName),
+                                $"C:\\inetpub\\wwwroot\\ERPTools\\Uploads\\EnvelopeLotReports\\{fileName}",
+                                $"C:\\inetpub\\wwwroot\\ERPTools\\Uploads\\{fileName}",
+                            };
+
+                            foreach (var path in basePaths)
+                            {
+                                if (System.IO.File.Exists(path))
+                                {
+                                    filePath = path;
+                                    break;
+                                }
+                            }
+                        }
+
+                        if (!string.IsNullOrEmpty(filePath) && System.IO.File.Exists(filePath))
+                        {
+                            filesToZip.Add((filePath, report.FileName));
+                        }
+                    }
+
+                    if (!filesToZip.Any())
+                        return NotFound(new { message = "No template files found on server" });
+
+                    using var zipStream = new System.IO.MemoryStream();
+                    using (var archive = new System.IO.Compression.ZipArchive(zipStream, System.IO.Compression.ZipArchiveMode.Create, true))
+                    {
+                        foreach (var (filePath, fileName) in filesToZip)
+                        {
+                            var entry = archive.CreateEntry(fileName, System.IO.Compression.CompressionLevel.Fastest);
+                            using var entryStream = entry.Open();
+                            using var fs = System.IO.File.OpenRead(filePath);
+                            fs.CopyTo(entryStream);
+                        }
+                    }
+
+                    zipStream.Position = 0;
+                    var zipBytes = zipStream.ToArray();
+
+                    return File(
+                        zipBytes,
+                        "application/zip",
+                        $"templates_project{projectId}_{DateTime.Now:yyyyMMddHHmmss}.zip"
+                    );
+                }
+                catch (Exception ex)
+                {
+                    var fullMessage = ex.Message + (ex.InnerException != null ? " | Inner: " + ex.InnerException.Message : "");
+                    Console.WriteLine($"Error downloading all templates for project {projectId}: {fullMessage}");
+                    return StatusCode(500, new { message = "Failed to download all templates", error = fullMessage });
+                }
+            }
+            else
+            {
+                // Report download logic (from wwwroot/{projectId}/)
+                var rootFolder = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", projectId.ToString());
+
+                if (!Directory.Exists(rootFolder))
+                    return NotFound("No reports found for this project.");
+
+                var baseNames = new Dictionary<string, string>
+                {
+                    { "duplicate",         "DuplicateTool.xlsx" },
+                    { "extra",             "ExtrasCalculation.xlsx" },
+                    { "enhancement",       "EnhancementReport.xlsx" },
+                    { "envelopebreaking",  "EnvelopeBreaking.xlsx" },
+                    { "envelopeSummary",   "EnvelopeSummary.xlsx" },
+                    { "catchSummary",      "CatchSummary.xlsx" },
+                    { "catchOmrSerialing", "CatchWiseBookletAndOmrSerialing.xlsx" }
+                };
+
+                // Collect the latest file for each report type
+                var latestFiles = new List<string>();
+
+                foreach (var kvp in baseNames)
+                {
+                    var extension = Path.GetExtension(kvp.Value);
+                    var nameWithoutExt = Path.GetFileNameWithoutExtension(kvp.Value);
+
+                    var pattern = new System.Text.RegularExpressions.Regex(
+                        @"^" + System.Text.RegularExpressions.Regex.Escape(nameWithoutExt)
+                        + @"(?:_v(\d+))?" + System.Text.RegularExpressions.Regex.Escape(extension) + "$",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+                    var matches = Directory.GetFiles(rootFolder)
+                        .Select(f => new { path = f, name = Path.GetFileName(f), match = pattern.Match(Path.GetFileName(f)) })
+                        .Where(x => x.match.Success)
+                        .Select(x => new
+                        {
+                            x.path,
+                            x.name,
+                            version = x.match.Groups[1].Success ? int.Parse(x.match.Groups[1].Value) : 0
+                        })
+                        .OrderByDescending(x => x.version)
+                        .FirstOrDefault();
+
+                    if (matches != null)
+                        latestFiles.Add(matches.path);
+                }
+
+                // Box reports — one latest file per lot
+                var boxPattern = new System.Text.RegularExpressions.Regex(
+                    @"^BoxBreaking_(?:v(\d+)|(\d+)(?:_v(\d+))?)\.xlsx$",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+                var boxGroups = Directory.GetFiles(rootFolder)
+                    .Select(f => new { path = f, name = Path.GetFileName(f), match = boxPattern.Match(Path.GetFileName(f)) })
+                    .Where(x => x.match.Success)
+                    .Select(x =>
+                    {
+                        string lotNo = x.match.Groups[2].Success ? x.match.Groups[2].Value : null;
+                        int version = x.match.Groups[1].Success ? int.Parse(x.match.Groups[1].Value)
+                                      : x.match.Groups[3].Success ? int.Parse(x.match.Groups[3].Value)
+                                      : 0;
+                        return new { x.path, x.name, lotNo, version };
+                    })
+                    .GroupBy(x => x.lotNo ?? "global")
+                    .Select(g => g.OrderByDescending(x => x.version).First())
+                    .ToList();
+
+                foreach (var box in boxGroups)
+                    latestFiles.Add(box.path);
+
+                if (!latestFiles.Any())
+                    return NotFound("No report files found for this project.");
+
+                using var zipStream = new System.IO.MemoryStream();
+                using (var archive = new System.IO.Compression.ZipArchive(zipStream, System.IO.Compression.ZipArchiveMode.Create, true))
+                {
+                    foreach (var filePath in latestFiles)
+                    {
+                        var entryName = Path.GetFileName(filePath);
+                        var entry = archive.CreateEntry(entryName, System.IO.Compression.CompressionLevel.Fastest);
+                        using var entryStream = entry.Open();
+                        using var fs = System.IO.File.OpenRead(filePath);
+                        fs.CopyTo(entryStream);
+                    }
+                }
+
+                zipStream.Position = 0;
+                var zipBytes = zipStream.ToArray();
+
+                return File(
+                    zipBytes,
+                    "application/zip",
+                    $"reports_project{projectId}_{DateTime.Now:yyyyMMddHHmmss}.zip"
+                );
+            }
+        }
+
         [HttpGet("EnvelopeSummaryReport")]
         public async Task<IActionResult> EnvelopeSummaryReport(int ProjectId, int? uploadId = null)
         {

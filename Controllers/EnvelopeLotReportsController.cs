@@ -25,25 +25,129 @@ namespace ToolsAPI.Controllers
         }
 
         // GET: api/EnvelopeLotReports/ByProject/{projectId}
+        //[HttpGet("ByProject/{projectId}")]
+        //public async Task<ActionResult<IEnumerable<EnvelopeLotReport>>> GetEnvelopeLotReportsByProject(int projectId)
+        //{
+        //    try
+        //    {
+        //        Console.WriteLine($"Loading envelope lot reports for project: {projectId}");
+        //        var reports = await _context.EnvelopeLotReports
+        //            .Where(r => r.ProjectId == projectId)
+        //            .OrderByDescending(r => r.GeneratedAt)
+        //            .ToListAsync();
+
+        //        Console.WriteLine($"Found {reports.Count} reports for project {projectId}");
+        //        return Ok(reports);
+        //    }
+        //    catch (Exception ex)
+        //    {
+        //        var fullMessage = ex.Message + (ex.InnerException != null ? " | Inner: " + ex.InnerException.Message : "");
+        //        Console.WriteLine($"Error loading reports for project {projectId}: {fullMessage}");
+        //        return StatusCode(500, new { message = "Failed to retrieve reports", error = fullMessage });
+        //    }
+        //}
+
+        // POST: api/EnvelopeLotReports
         [HttpGet("ByProject/{projectId}")]
-        public async Task<ActionResult<IEnumerable<EnvelopeLotReport>>> GetEnvelopeLotReportsByProject(int projectId)
+        public async Task<IActionResult> GetEnvelopeLotReportsByProject(int projectId)
         {
             try
             {
                 Console.WriteLine($"Loading envelope lot reports for project: {projectId}");
+
+                // Get all reports for the project
                 var reports = await _context.EnvelopeLotReports
                     .Where(r => r.ProjectId == projectId)
                     .OrderByDescending(r => r.GeneratedAt)
                     .ToListAsync();
 
+                // Get all active NR data for the project
+                var nrData = await _context.NRDatas
+                    .Where(x => x.ProjectId == projectId && x.Status)
+                    .Select(x => new
+                    {
+                        x.EnvLotNo,
+                        x.LotNo,
+                        x.CatchNo
+                    })
+                    .ToListAsync();
+
+                var result = reports.Select(report =>
+                {
+                    // Convert comma separated EnvLotNumbers into List<int>
+                    var envLotNos = string.IsNullOrWhiteSpace(report.EnvLotNumbers)
+                        ? new List<int>()
+                        : report.EnvLotNumbers
+                            .Split(',', StringSplitOptions.RemoveEmptyEntries)
+                            .Select(x =>
+                            {
+                                int.TryParse(x.Trim(), out int envLot);
+                                return envLot;
+                            })
+                            .Where(x => x > 0)
+                            .Distinct()
+                            .ToList();
+
+                    var envLotDetails = nrData
+                        .Where(n => envLotNos.Contains(n.EnvLotNo))
+                        .GroupBy(x => x.EnvLotNo)
+                        .Select(envGroup => new
+                        {
+                            EnvLotNo = envGroup.Key,
+
+                            Lots = envGroup
+                                .GroupBy(x => x.LotNo)
+                                .Select(lotGroup => new
+                                {
+                                    LotNo = lotGroup.Key,
+
+                                    CatchNos = lotGroup
+                                        .Where(x => !string.IsNullOrWhiteSpace(x.CatchNo))
+                                        .Select(x => x.CatchNo)
+                                        .Distinct()
+                                        .OrderBy(x => x)
+                                        .ToList()
+                                })
+                                .OrderBy(x => x.LotNo)
+                                .ToList()
+                        })
+                        .OrderBy(x => x.EnvLotNo)
+                        .ToList();
+
+                    return new
+                    {
+                        report.Id,
+                        report.ProjectId,
+                        report.TemplateId,
+                        report.TemplateName,
+                        report.EnvLotNumbers,
+                        report.FileName,
+                        report.GeneratedAt,
+                        report.GeneratedBy,
+                        report.FilePath,
+
+                        EnvLotDetails = envLotDetails
+                    };
+                }).ToList();
+
                 Console.WriteLine($"Found {reports.Count} reports for project {projectId}");
-                return Ok(reports);
+
+                return Ok(result);
             }
             catch (Exception ex)
             {
-                var fullMessage = ex.Message + (ex.InnerException != null ? " | Inner: " + ex.InnerException.Message : "");
+                var fullMessage = ex.Message +
+                                  (ex.InnerException != null
+                                      ? " | Inner: " + ex.InnerException.Message
+                                      : "");
+
                 Console.WriteLine($"Error loading reports for project {projectId}: {fullMessage}");
-                return StatusCode(500, new { message = "Failed to retrieve reports", error = fullMessage });
+
+                return StatusCode(500, new
+                {
+                    message = "Failed to retrieve reports",
+                    error = fullMessage
+                });
             }
         }
 
@@ -152,6 +256,8 @@ namespace ToolsAPI.Controllers
 
         // Removed [Required] to allow for project-wide reports or empty selections
         public string EnvLotNumbers { get; set; } = ""; 
+
+        public int? LotNumber { get; set; } // Lot number for the template
 
         [Required]
         public string FileName { get; set; }
