@@ -199,6 +199,46 @@ namespace Tools.Controllers
             });
         }
 
+        //[HttpGet("GetByProjectId/{projectId}")]
+        //public async Task<IActionResult> GetUniqueLotsByProject(int projectId)
+        //{
+        //    if (projectId <= 0)
+        //        return BadRequest("ProjectId is required.");
+
+        //    try
+        //    {
+        //        // Get unique lots with catch counts
+        //        var lots = await _context.NRDatas
+        //            .Where(x => x.ProjectId == projectId && x.Status == true)
+        //            .GroupBy(x => x.LotNo)
+        //            .Select(g => new
+        //            {
+        //                lotNo = g.Key,
+        //                catchCount = g.Select(x => x.CatchNo).Distinct().Count(),
+
+        //                minStep = g.Min(x => x.Steps)
+        //            })
+        //            .OrderBy(x => x.lotNo)
+        //            .ToListAsync();
+
+        //        if (lots.Count == 0)
+        //        {
+        //            return Ok(new List<object>());
+        //        }
+
+        //        return Ok(lots);
+        //    }
+        //    catch (Exception ex)
+        //    {
+        //        await _loggerService.LogErrorAsync(
+        //            "Error fetching unique lots",
+        //            ex.Message,
+        //            nameof(NRDataLotsController)
+        //        );
+        //        return StatusCode(500, new { message = "Failed to fetch lots", error = ex.Message });
+        //    }
+        //}
+
         [HttpGet("GetByProjectId/{projectId}")]
         public async Task<IActionResult> GetUniqueLotsByProject(int projectId)
         {
@@ -215,7 +255,10 @@ namespace Tools.Controllers
                     {
                         lotNo = g.Key,
                         catchCount = g.Select(x => x.CatchNo).Distinct().Count(),
-                        minStep = g.Min(x => x.Steps)
+                        minStep = g.Min(x => x.Steps),
+
+                        // New: Check if any record in this lot has Pages > 0
+                        hasPages = g.All(x => x.Pages > 0)
                     })
                     .OrderBy(x => x.lotNo)
                     .ToListAsync();
@@ -234,7 +277,11 @@ namespace Tools.Controllers
                     ex.Message,
                     nameof(NRDataLotsController)
                 );
-                return StatusCode(500, new { message = "Failed to fetch lots", error = ex.Message });
+                return StatusCode(500, new
+                {
+                    message = "Failed to fetch lots",
+                    error = ex.Message
+                });
             }
         }
 

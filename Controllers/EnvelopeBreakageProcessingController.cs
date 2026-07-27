@@ -260,7 +260,7 @@ namespace Tools.Controllers
 
                     innerEnvelopesPool = remainingPool;
                     if (used.Count == 0) return null;
-                    return "[" + string.Join(" & ", used.OrderByDescending(x => x.Key).Select(kvp => $"{kvp.Key}*{kvp.Value}")) + "]";
+                    return "[" + string.Join(" & ", used.OrderByDescending(x => x.Key).Select(kvp => $"{kvp.Key}x{kvp.Value}")) + "]";
                 }
 
                 // Helper: Create MSS rows for a given catch
@@ -303,21 +303,26 @@ namespace Tools.Controllers
                 {
                     var extraConfig = extrasconfig.FirstOrDefault(e => e.ExtraType == extra.ExtraId);
                     int envCapacity = 0;
+                    string extraOuterTypeStr = null;
 
                     if (extraConfig != null && !string.IsNullOrEmpty(extraConfig.EnvelopeType))
                     {
                         var envType = JsonSerializer.Deserialize<Dictionary<string, string>>(extraConfig.EnvelopeType);
-                        if (envType != null && envType.TryGetValue("Outer", out string outerType)
-                            && envelopeCapacities.TryGetValue(outerType, out int cap))
+                        if (envType != null)
                         {
-                            envCapacity = cap;
+                            if (envType.TryGetValue("Outer", out string outerType))
+                            {
+                                if (envelopeCapacities.TryGetValue(outerType, out int cap))
+                                {
+                                    envCapacity = cap;
+                                }
+                                extraOuterTypeStr = outerType.Replace("E", "");
+                            }
                         }
                     }
 
                     int totalEnv = (int)Math.Ceiling((double)extra.Quantity / envCapacity);
                     extraCenterEnvCounter = 0;
-
-                    List<int> innerPool = null;
 
                     for (int j = 1; j <= totalEnv; j++)
                     {
@@ -327,7 +332,7 @@ namespace Tools.Controllers
                         else
                             envQuantity = Math.Min(extra.Quantity - (envCapacity * (j - 1)), envCapacity);
 
-                        string extraPackingDenom = GetPackingDenominationForQuantity(extra.InnerEnvelope, envQuantity, ref innerPool);
+                        string extraPackingDenom = !string.IsNullOrEmpty(extraOuterTypeStr) ? $"[{extraOuterTypeStr}x1]" : null;
                         extraCenterEnvCounter++;
 
                         double modifiedCenterSort = extra.ExtraId switch

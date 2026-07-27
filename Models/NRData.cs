@@ -35,5 +35,6 @@ namespace Tools.Models
         public int DistrictSort { get; set; }
         public int EnvLotNo { get; set; }
         public int VerificationStatus { get; set; }
+        public int Batch { get; set; }
     }
 }

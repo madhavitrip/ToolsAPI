@@ -21,7 +21,9 @@ namespace ToolsAPI.Models
         public string TemplateName { get; set; } = string.Empty;
 
         // Removed [Required] to allow for project-wide reports or empty lot selections
-        public string EnvLotNumbers { get; set; } = string.Empty; // Comma-separated envelope lot numbers
+        public string EnvLotNumbers { get; set; } = string.Empty; // Comma-separated envelope lot numbers (always 0 for lot-based reports)
+
+        public int? LotNo { get; set; } // The actual lot number for lot-based reports (e.g., box breaking)
 
         [Required]
         public string FileName { get; set; } = string.Empty;
