@@ -72,7 +72,7 @@ namespace ToolsAPI.Controllers
         {
             try
             {
-                Console.WriteLine($"Received request to create envelope lot report: ProjectId={request.ProjectId}, TemplateId={request.TemplateId}, EnvLotNumbers={request.EnvLotNumbers}");
+                Console.WriteLine($"Received request to create envelope lot report: ProjectId={request.ProjectId}, TemplateId={request.TemplateId}, EnvLotNumbers={request.EnvLotNumbers}, LotNo={request.LotNo}");
                 
                 if (!ModelState.IsValid)
                 {
@@ -94,6 +94,7 @@ namespace ToolsAPI.Controllers
                     TemplateId = request.TemplateId,
                     TemplateName = request.TemplateName,
                     EnvLotNumbers = request.EnvLotNumbers ?? "",
+                    LotNo = request.LotNo,
                     FileName = request.FileName,
                     GeneratedAt = DateTime.UtcNow,
                     GeneratedBy = request.GeneratedBy,
@@ -102,7 +103,7 @@ namespace ToolsAPI.Controllers
 
                 _context.EnvelopeLotReports.Add(newReport);
                 await _context.SaveChangesAsync();
-                Console.WriteLine($"New report created with ID: {newReport.Id}");
+                Console.WriteLine($"New report created with ID: {newReport.Id}, LotNo: {newReport.LotNo}");
 
                 return CreatedAtAction(nameof(GetEnvelopeLotReportsByProject), 
                     new { projectId = newReport.ProjectId }, newReport);
@@ -152,6 +153,8 @@ namespace ToolsAPI.Controllers
 
         // Removed [Required] to allow for project-wide reports or empty selections
         public string EnvLotNumbers { get; set; } = ""; 
+
+        public int? LotNo { get; set; } // The actual lot number for lot-based reports
 
         [Required]
         public string FileName { get; set; }
