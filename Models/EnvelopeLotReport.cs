@@ -40,6 +40,6 @@ namespace ToolsAPI.Models
         [ForeignKey("ProjectId")]
         public virtual Project? Project { get; set; }
 
-        public int LotNo { get; set; }
+        
     }
 }

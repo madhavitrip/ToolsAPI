@@ -4917,25 +4917,10 @@ namespace Tools.Controllers
                 HeaderVerificationStatus verificationStatus =
                     HeaderVerificationStatus.NotVerified;
 
-                if (
-                    data.TryGetValue(
-                        "VerificationStatus",
-                        out var statusElement
-                    )
-                )
+                // Use the database VerificationStatus column as the source of truth
+                if (Enum.IsDefined(typeof(HeaderVerificationStatus), nrData.VerificationStatus))
                 {
-                    if (
-                        statusElement.ValueKind == JsonValueKind.Number &&
-                        statusElement.TryGetInt32(out int savedStatus) &&
-                        Enum.IsDefined(
-                            typeof(HeaderVerificationStatus),
-                            savedStatus
-                        )
-                    )
-                    {
-                        verificationStatus =
-                            (HeaderVerificationStatus)savedStatus;
-                    }
+                    verificationStatus = (HeaderVerificationStatus)nrData.VerificationStatus;
                 }
 
                 result.Add(new
@@ -4944,6 +4929,7 @@ namespace Tools.Controllers
                     projectId = nrData.ProjectId,
                     catchNo = nrData.CatchNo ?? "",
                     lotNo = nrData.LotNo.ToString() ?? "",
+                    envLotNo = nrData.EnvLotNo.ToString() ?? "",
                     A = GetJsonValue("A"),
                     B = GetJsonValue("B"),
                     C = GetJsonValue("C"),
@@ -4951,7 +4937,11 @@ namespace Tools.Controllers
                     date = nrData.ExamDate ?? "",
                     time = nrData.ExamTime ?? "",
                     status = (int)verificationStatus,
-                    statusLabel = verificationStatus.ToString()
+                    statusLabel = verificationStatus.ToString(),
+                    verifiedBy = nrData.VerifiedBy > 0 ? nrData.VerifiedBy : null,
+                    verifiedOn = nrData.VerifiedOn.HasValue 
+                        ? nrData.VerifiedOn.Value.ToString("dd/MM/yyyy")
+                        : null
                 });
             }
 
@@ -5204,6 +5194,27 @@ namespace Tools.Controllers
                 (HeaderVerificationStatus)statusValue;
 
             // ---------------------------------------------------------
+            // 2.5 Validate A/B/C/D - At least one must have a value
+            // ---------------------------------------------------------
+
+            string valueA = (updateModel.TryGetValue("A", out var aObj) ? aObj?.ToString()?.Trim() : null) ?? "";
+            string valueB = (updateModel.TryGetValue("B", out var bObj) ? bObj?.ToString()?.Trim() : null) ?? "";
+            string valueC = (updateModel.TryGetValue("C", out var cObj) ? cObj?.ToString()?.Trim() : null) ?? "";
+            string valueD = (updateModel.TryGetValue("D", out var dObj) ? dObj?.ToString()?.Trim() : null) ?? "";
+
+            bool allBlank = string.IsNullOrWhiteSpace(valueA) && 
+                           string.IsNullOrWhiteSpace(valueB) && 
+                           string.IsNullOrWhiteSpace(valueC) && 
+                           string.IsNullOrWhiteSpace(valueD);
+
+            if (allBlank)
+            {
+                return BadRequest(
+                    "At least one of the fields (A, B, C, or D) must have a value to update the status."
+                );
+            }
+
+            // ---------------------------------------------------------
             // 3. Fetch ALL active rows having the same CatchNo
             // ---------------------------------------------------------
 
@@ -5226,10 +5237,23 @@ namespace Tools.Controllers
             // 4. Update every row for this CatchNo
             // ---------------------------------------------------------
 
+            int userId = LogHelper.GetTriggeredBy(User);
+            DateTime utcNow = DateTime.UtcNow;
+
             foreach (var nrData in catchRecords)
             {
+                // Check if status is changing
+                bool statusIsChanging = nrData.VerificationStatus != statusValue;
+
                 // Update the actual database column
                 nrData.VerificationStatus = statusValue;
+
+                // Log who verified and when ONLY if status is changing
+                if (statusIsChanging)
+                {
+                    nrData.VerifiedBy = userId;
+                    nrData.VerifiedOn = utcNow;
+                }
 
                 // -----------------------------------------------------
                 // Also update NRDatas JSON if required
@@ -5261,49 +5285,60 @@ namespace Tools.Controllers
             }
 
             // ---------------------------------------------------------
-            // 5. Update A/B/C/D only for selected record
+            // 5. Update A/B/C/D for ALL catch records
             // ---------------------------------------------------------
 
-            Dictionary<string, JsonElement> selectedData = new();
-
-            if (!string.IsNullOrWhiteSpace(selectedRecord.NRDatas))
+            foreach (var nrData in catchRecords)
             {
-                try
+                Dictionary<string, JsonElement> nrDataJson = new();
+
+                if (!string.IsNullOrWhiteSpace(nrData.NRDatas))
                 {
-                    selectedData =
-                        JsonSerializer.Deserialize<
-                            Dictionary<string, JsonElement>
-                        >(selectedRecord.NRDatas)
-                        ?? new Dictionary<string, JsonElement>();
+                    try
+                    {
+                        nrDataJson =
+                            JsonSerializer.Deserialize<
+                                Dictionary<string, JsonElement>
+                            >(nrData.NRDatas)
+                            ?? new Dictionary<string, JsonElement>();
+                    }
+                    catch
+                    {
+                        nrDataJson =
+                            new Dictionary<string, JsonElement>();
+                    }
                 }
-                catch
+
+                void UpdateJsonValue(string key)
                 {
-                    selectedData =
-                        new Dictionary<string, JsonElement>();
+                    if (
+                        updateModel.TryGetValue(key, out var value) &&
+                        value != null
+                    )
+                    {
+                        nrDataJson[key] =
+                            JsonSerializer.SerializeToElement(
+                                value.ToString()
+                            );
+                    }
                 }
+
+                UpdateJsonValue("A");
+                UpdateJsonValue("B");
+                UpdateJsonValue("C");
+                UpdateJsonValue("D");
+
+                nrData.NRDatas =
+                    JsonSerializer.Serialize(nrDataJson);
             }
 
-            void UpdateJsonValue(string key)
+            // Log verification for the selected record ONLY if status is changing
+            bool selectedStatusIsChanging = selectedRecord.VerificationStatus != statusValue;
+            if (selectedStatusIsChanging)
             {
-                if (
-                    updateModel.TryGetValue(key, out var value) &&
-                    value != null
-                )
-                {
-                    selectedData[key] =
-                        JsonSerializer.SerializeToElement(
-                            value.ToString()
-                        );
-                }
+                selectedRecord.VerifiedBy = userId;
+                selectedRecord.VerifiedOn = utcNow;
             }
-
-            UpdateJsonValue("A");
-            UpdateJsonValue("B");
-            UpdateJsonValue("C");
-            UpdateJsonValue("D");
-
-            selectedRecord.NRDatas =
-                JsonSerializer.Serialize(selectedData);
 
             // ---------------------------------------------------------
             // 6. Save all changes
@@ -5315,9 +5350,27 @@ namespace Tools.Controllers
             // 7. Return updated representative record
             // ---------------------------------------------------------
 
+            Dictionary<string, JsonElement> selectedRecordData = new();
+            if (!string.IsNullOrWhiteSpace(selectedRecord.NRDatas))
+            {
+                try
+                {
+                    selectedRecordData =
+                        JsonSerializer.Deserialize<
+                            Dictionary<string, JsonElement>
+                        >(selectedRecord.NRDatas)
+                        ?? new Dictionary<string, JsonElement>();
+                }
+                catch
+                {
+                    selectedRecordData =
+                        new Dictionary<string, JsonElement>();
+                }
+            }
+
             string GetJsonValue(string key)
             {
-                if (selectedData.TryGetValue(key, out var value))
+                if (selectedRecordData.TryGetValue(key, out var value))
                 {
                     return value.ValueKind == JsonValueKind.String
                         ? value.GetString() ?? ""
