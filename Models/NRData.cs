@@ -36,5 +36,8 @@ namespace Tools.Models
         public int EnvLotNo { get; set; }
         public int VerificationStatus { get; set; }
         public int Batch { get; set; }
+
+        public int? VerifiedBy { get; set; }
+        public DateTime? VerifiedOn { get; set; }
     }
 }
