@@ -37,7 +37,7 @@ namespace Tools.Models
         public int VerificationStatus { get; set; }
         public int Batch { get; set; }
 
-        public int? VerifiedBy { get; set; }
+        public int? VerifiedBy { get; set; } = 0;
         public DateTime? VerifiedOn { get; set; }
     }
 }

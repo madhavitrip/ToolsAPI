@@ -56,6 +56,34 @@ namespace Tools.Controllers
             public List<string> CatchNos { get; set; } = new();
         }
 
+        [HttpGet("GetCatchVerificationStatus/{projectId}/{catchNo}")]
+        public async Task<IActionResult> GetCatchVerificationStatus(int projectId, string catchNo)
+        {
+            if (projectId <= 0)
+                return BadRequest("ProjectId is required.");
+
+            if (string.IsNullOrWhiteSpace(catchNo))
+                return BadRequest("CatchNo is required.");
+
+            catchNo = catchNo.Trim();
+
+            var record = await _context.NRDatas
+                .Where(x => x.ProjectId == projectId &&
+                            x.Status == true &&
+                            x.CatchNo == catchNo)
+                .Select(x => new
+                {
+                    x.CatchNo,
+                    x.VerificationStatus
+                })
+                .FirstOrDefaultAsync();
+
+            if (record == null)
+                return NotFound(new { message = "Catch not found" });
+
+            return Ok(record);
+        }
+
         [HttpGet("GetMissingEnvLotCatches/{projectId}")]
         public async Task<IActionResult> GetMissingEnvLotCatches(int projectId)
         {
