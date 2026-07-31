@@ -114,7 +114,11 @@ namespace Tools.Controllers
                 if (projectconfig == null)
                     return NotFound("Project config not found");
 
-                var boxIds = projectconfig.BoxBreakingCriteria;
+                var boxIds = projectconfig.BoxBreakingCriteria ?? new List<int>();
+                var allBoxIds = new HashSet<int>(boxIds);
+                if (projectconfig.BoxBreakingCriteriaForNodalExtra != null) allBoxIds.UnionWith(projectconfig.BoxBreakingCriteriaForNodalExtra);
+                if (projectconfig.BoxBreakingCriteriaForUniExtra != null) allBoxIds.UnionWith(projectconfig.BoxBreakingCriteriaForUniExtra);
+                if (projectconfig.BoxBreakingCriteriaForOffcExtra != null) allBoxIds.UnionWith(projectconfig.BoxBreakingCriteriaForOffcExtra);
                 var sortingId = projectconfig.SortingBoxReport;
                 var duplicatesFields = projectconfig.DuplicateRemoveFields;
                 bool InnerBundling = projectconfig.IsInnerBundlingDone;
@@ -130,7 +134,7 @@ namespace Tools.Controllers
                 }
 
                 var fields = await _context.Fields
-                    .Where(f => boxIds.Contains(f.FieldId))
+                    .Where(f => allBoxIds.Contains(f.FieldId))
                     .ToListAsync();
 
                 var fieldsFromDb = await _context.Fields
@@ -239,6 +243,7 @@ namespace Tools.Controllers
                         rowDict["NrDataId"] = result.NrDataId;
                         rowDict["DistrictSort"] = result.DistrictSort;
                         rowDict["District"] = result.District;
+                        rowDict["ExtraId"] = result.ExtraId;
                         
                         // Get NRData for this catch
                         var nrRow = nrDataByCatch.TryGetValue(result.CatchNo ?? "", out var nr) ? nr : null;
@@ -515,9 +520,19 @@ namespace Tools.Controllers
                     }
 
                     string mergeKey = "";
-                    if (boxIds.Any())
+                    
+                    int? extraId = itemDict.ContainsKey("ExtraId") ? itemDict["ExtraId"] as int? : null;
+                    var currentBoxIds = boxIds; // fallback to regular
+                    if (extraId == 1 && projectconfig.BoxBreakingCriteriaForNodalExtra != null && projectconfig.BoxBreakingCriteriaForNodalExtra.Any())
+                        currentBoxIds = projectconfig.BoxBreakingCriteriaForNodalExtra;
+                    else if (extraId == 2 && projectconfig.BoxBreakingCriteriaForUniExtra != null && projectconfig.BoxBreakingCriteriaForUniExtra.Any())
+                        currentBoxIds = projectconfig.BoxBreakingCriteriaForUniExtra;
+                    else if (extraId == 3 && projectconfig.BoxBreakingCriteriaForOffcExtra != null && projectconfig.BoxBreakingCriteriaForOffcExtra.Any())
+                        currentBoxIds = projectconfig.BoxBreakingCriteriaForOffcExtra;
+
+                    if (currentBoxIds.Any())
                     {
-                        mergeKey = string.Join("_", boxIds.Select(fieldId =>
+                        mergeKey = string.Join("_", currentBoxIds.Select(fieldId =>
                         {
                             var fieldName = fields.FirstOrDefault(f => f.FieldId == fieldId)?.Name;
                             if (fieldName != null && itemDict.ContainsKey(fieldName))
