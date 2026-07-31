@@ -29,7 +29,6 @@ namespace Tools.Models
         public List<int> MssTypes { get; set; } = new List<int>();
         public string MssAttached {  get; set; }
         public bool RoundOffBeforeEnhancement { get; set; }
-
         public List<int> BoxBreakingCriteriaForNodalExtra { get; set; }
         public List<int> BoxBreakingCriteriaForUniExtra { get; set; }
         public List<int> BoxBreakingCriteriaForOffcExtra { get; set; }

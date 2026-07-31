@@ -34,6 +34,10 @@ namespace Tools.Models
         public string? District { get; set; }
         public int DistrictSort { get; set; }
         public int EnvLotNo { get; set; }
+        public int VerificationStatus { get; set; }
         public int Batch { get; set; }
+
+        public int? VerifiedBy { get; set; } = 0;
+        public DateTime? VerifiedOn { get; set; } = DateTime.MinValue;
     }
 }
