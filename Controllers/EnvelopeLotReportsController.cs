@@ -337,7 +337,7 @@ namespace ToolsAPI.Controllers
                     TemplateId = request.TemplateId,
                     TemplateName = request.TemplateName,
                     EnvLotNumbers = request.EnvLotNumbers ?? "",
-                    LotNo = request.LotNo,
+                    LotNo = request.LotNo ?? 0,
                     FileName = request.FileName,
                     GeneratedAt = DateTime.UtcNow,
                     GeneratedByUserId = request.GeneratedByUserId,

@@ -56,6 +56,34 @@ namespace Tools.Controllers
             public List<string> CatchNos { get; set; } = new();
         }
 
+        [HttpGet("GetCatchVerificationStatus/{projectId}/{catchNo}")]
+        public async Task<IActionResult> GetCatchVerificationStatus(int projectId, string catchNo)
+        {
+            if (projectId <= 0)
+                return BadRequest("ProjectId is required.");
+
+            if (string.IsNullOrWhiteSpace(catchNo))
+                return BadRequest("CatchNo is required.");
+
+            catchNo = catchNo.Trim();
+
+            var record = await _context.NRDatas
+                .Where(x => x.ProjectId == projectId &&
+                            x.Status == true &&
+                            x.CatchNo == catchNo)
+                .Select(x => new
+                {
+                    x.CatchNo,
+                    x.VerificationStatus
+                })
+                .FirstOrDefaultAsync();
+
+            if (record == null)
+                return NotFound(new { message = "Catch not found" });
+
+            return Ok(record);
+        }
+
         [HttpGet("GetMissingEnvLotCatches/{projectId}")]
         public async Task<IActionResult> GetMissingEnvLotCatches(int projectId)
         {
@@ -77,13 +105,20 @@ namespace Tools.Controllers
         }
 
         [HttpGet("GetAssignedEnvLotCatches/{projectId}")]
-        public async Task<IActionResult> GetAssignedEnvLotCatches(int projectId)
+        public async Task<IActionResult> GetAssignedEnvLotCatches(int projectId, [FromQuery] int? lotNo = null)
         {
             if (projectId <= 0)
                 return BadRequest("ProjectId is required.");
 
-            var catchItems = await _context.NRDatas
-                .Where(x => x.ProjectId == projectId && x.Status == true && x.EnvLotNo > 0 && !string.IsNullOrWhiteSpace(x.CatchNo))
+            var query = _context.NRDatas
+                .Where(x => x.ProjectId == projectId && x.Status == true && x.EnvLotNo > 0 && !string.IsNullOrWhiteSpace(x.CatchNo));
+
+            if (lotNo.HasValue)
+            {
+                query = query.Where(x => x.LotNo == lotNo.Value);
+            }
+
+            var catchItems = await query
                 .GroupBy(x => new { x.EnvLotNo, x.CatchNo })
                 .Select(g => new
                 {
@@ -377,7 +412,7 @@ namespace Tools.Controllers
         }
 
         [HttpPut("assign")]
-        public async Task<IActionResult> AssignLots([FromBody] LotAssignmentRequest request)
+        public async Task<IActionResult> AssignLots([FromBody] LotAssignmentRequest request, [FromQuery(Name = "lotNo")] int? selectedLotNo = null)
         {
             if (!ModelState.IsValid)
                 return BadRequest(ModelState);
@@ -397,9 +432,15 @@ namespace Tools.Controllers
             if (catchNos.Count == 0)
                 return BadRequest("No valid CatchNo values provided.");
 
-            var rows = await _context.NRDatas
-                .Where(x => x.ProjectId == request.ProjectId && catchNos.Contains(x.CatchNo))
-                .ToListAsync();
+            var query = _context.NRDatas
+                .Where(x => x.ProjectId == request.ProjectId && catchNos.Contains(x.CatchNo));
+
+            if (selectedLotNo.HasValue)
+            {
+                query = query.Where(x => x.LotNo == selectedLotNo.Value);
+            }
+
+            var rows = await query.ToListAsync();
 
             if (rows.Count == 0)
                 return NotFound("No matching NRData rows found.");

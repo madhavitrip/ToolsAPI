@@ -79,12 +79,18 @@ namespace Tools.Controllers
             string? key = null,
             string? sortField = null,
             string? sortOrder = null,
-            string? filters = null)
+            string? filters = null,
+            [FromQuery] int? lotNo = null)
         {
             IQueryable<NRData> query = _context.NRDatas
      .Where(d => d.ProjectId == projectId
               && d.Status == true
               && d.Batch == 1);
+
+            if (lotNo.HasValue)
+            {
+                query = query.Where(d => d.LotNo == lotNo.Value);
+            }
 
             // Apply combination filters if provided
             if (!string.IsNullOrWhiteSpace(filters))
@@ -571,7 +577,7 @@ namespace Tools.Controllers
         }
 
         [HttpGet("CheckValueExists/{projectId}")]
-        public async Task<IActionResult> CheckValueExists(int projectId, [FromQuery] string fieldName, [FromQuery] string value)
+        public async Task<IActionResult> CheckValueExists(int projectId, [FromQuery] string fieldName, [FromQuery] string value, [FromQuery] int? lotNo = null)
         {
             if (string.IsNullOrWhiteSpace(fieldName) || string.IsNullOrWhiteSpace(value))
             {
@@ -588,6 +594,10 @@ namespace Tools.Controllers
             {
                 bool exists = false;
                 var query = _context.NRDatas.Where(d => d.ProjectId == projectId && d.Status == true);
+                if (lotNo.HasValue)
+                {
+                    query = query.Where(d => d.LotNo == lotNo.Value);
+                }
 
                 switch (prop.Name.ToLowerInvariant())
                 {
@@ -623,8 +633,13 @@ namespace Tools.Controllers
 
             // 2. Check dynamic fields in NRDatas JSON
             var likePattern = $"%\"{fieldName}\":%";
-            var jsonRecords = await _context.NRDatas
-                .Where(d => d.ProjectId == projectId && d.Status == true && d.NRDatas != null && EF.Functions.Like(d.NRDatas, likePattern))
+            var jsonQuery = _context.NRDatas
+                .Where(d => d.ProjectId == projectId && d.Status == true && d.NRDatas != null && EF.Functions.Like(d.NRDatas, likePattern));
+            if (lotNo.HasValue)
+            {
+                jsonQuery = jsonQuery.Where(d => d.LotNo == lotNo.Value);
+            }
+            var jsonRecords = await jsonQuery
                 .Select(d => d.NRDatas)
                 .ToListAsync();
 
@@ -694,7 +709,7 @@ namespace Tools.Controllers
         }
 
         [HttpPost("merge-catchnos")]
-        public async Task<ActionResult> MergeCatchNos(int ProjectId, [FromBody] MergeCatchNoRequest request)
+        public async Task<ActionResult> MergeCatchNos(int ProjectId, [FromBody] MergeCatchNoRequest request, [FromQuery] int? lotNo = null)
         {
             if (request == null)
             {
@@ -723,13 +738,19 @@ namespace Tools.Controllers
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
-            var selectedRows = await _context.NRDatas
+            var query = _context.NRDatas
                 .Where(item =>
                     item.ProjectId == ProjectId &&
                     item.Status == true &&
                     item.CatchNo != null &&
-                    normalizedRequestedCatchNos.Contains(item.CatchNo))
-                .ToListAsync();
+                    normalizedRequestedCatchNos.Contains(item.CatchNo));
+
+            if (lotNo.HasValue)
+            {
+                query = query.Where(item => item.LotNo == lotNo.Value);
+            }
+
+            var selectedRows = await query.ToListAsync();
 
             if (selectedRows.Count == 0)
             {
@@ -1226,7 +1247,7 @@ namespace Tools.Controllers
 
         // PUT: api/NRDatas/UpdateSingle/{id}
         [HttpPut("UpdateSingle/{id}")]
-        public async Task<IActionResult> UpdateSingleNRData(int id, [FromBody] JsonElement inputData)
+        public async Task<IActionResult> UpdateSingleNRData(int id, [FromBody] JsonElement inputData, [FromQuery] int? lotNo = null)
         {
             using var transaction = await _context.Database.BeginTransactionAsync();
 
@@ -1236,6 +1257,11 @@ namespace Tools.Controllers
 
                 if (existingRecord == null)
                     return NotFound($"NRData with ID {id} not found");
+
+                if (lotNo.HasValue && existingRecord.LotNo != lotNo.Value)
+                {
+                    return BadRequest("The selected record does not belong to the selected lot.");
+                }
 
                 // =====================
                 // OLD VALUES
@@ -1709,7 +1735,7 @@ namespace Tools.Controllers
 
         // PUT: api/NRDatas/UpdateCatchwise/{catchNo}
         [HttpPut("UpdateCatchwise/{catchNo}")]
-        public async Task<IActionResult> UpdateCatchwiseNRData(string catchNo, [FromBody] JsonElement inputData)
+        public async Task<IActionResult> UpdateCatchwiseNRData(string catchNo, [FromBody] JsonElement inputData, [FromQuery] int? lotNo = null)
         {
             using var transaction = await _context.Database.BeginTransactionAsync();
 
@@ -1721,9 +1747,15 @@ namespace Tools.Controllers
                     projectId = projProp.GetInt32();
                 }
 
-                var records = await _context.NRDatas
-                    .Where(x => x.CatchNo == catchNo && (projectId == 0 || x.ProjectId == projectId) && x.Status)
-                    .ToListAsync();
+                var query = _context.NRDatas
+                    .Where(x => x.CatchNo == catchNo && (projectId == 0 || x.ProjectId == projectId) && x.Status);
+
+                if (lotNo.HasValue)
+                {
+                    query = query.Where(x => x.LotNo == lotNo.Value);
+                }
+
+                var records = await query.ToListAsync();
 
                 if (!records.Any())
                     return NotFound($"No active NRData records found for catch {catchNo}");
@@ -1967,7 +1999,7 @@ namespace Tools.Controllers
 
 
         [HttpPost]
-        public async Task<IActionResult> PostNRData([FromBody] JsonElement inputData)
+        public async Task<IActionResult> PostNRData([FromBody] JsonElement inputData, [FromQuery] int? lotNo = null)
         {
             if (!ModelState.IsValid)
                 return BadRequest(ModelState);
@@ -1997,9 +2029,12 @@ namespace Tools.Controllers
                     matchingFields = new List<string> { "CatchNo", "CenterCode" };
 
                 // 3. Load existing project data
-                var existingNRDataList = await _context.NRDatas
-                    .Where(x => x.ProjectId == projectId)
-                    .ToListAsync();
+                var existingQuery = _context.NRDatas.Where(x => x.ProjectId == projectId);
+                if (lotNo.HasValue)
+                {
+                    existingQuery = existingQuery.Where(x => x.LotNo == lotNo.Value);
+                }
+                var existingNRDataList = await existingQuery.ToListAsync();
 
                 var properties = typeof(NRData)
                     .GetProperties()
@@ -2022,6 +2057,10 @@ namespace Tools.Controllers
                         var item = incomingData[i];
 
                         var nRData = MapJsonToNRData(item, projectId, properties);
+                        if (lotNo.HasValue)
+                        {
+                            nRData.LotNo = lotNo.Value;
+                        }
                         Console.WriteLine($"After mapping Steps = {nRData.Steps}");
                         nRData.Batch = 1;
                         nRData.Status = true;
@@ -2161,6 +2200,10 @@ namespace Tools.Controllers
                     var item = incomingData[i];
 
                     var nRData = MapJsonToNRData(item, projectId, properties);
+                    if (lotNo.HasValue)
+                    {
+                        nRData.LotNo = lotNo.Value;
+                    }
                     nRData.Batch = nextBatchId;
                     nRData.Status = true;
                     if (!string.IsNullOrWhiteSpace(nRData.ExamDate))
@@ -2359,7 +2402,7 @@ namespace Tools.Controllers
         }
 
         [HttpPost("single")]
-        public async Task<IActionResult> PostSingleCatch([FromBody] JsonElement inputData)
+        public async Task<IActionResult> PostSingleCatch([FromBody] JsonElement inputData, [FromQuery] int? lotNo = null)
         {
             if (!ModelState.IsValid)
                 return BadRequest(ModelState);
@@ -2387,6 +2430,10 @@ namespace Tools.Controllers
                     .ToDictionary(p => p.Name.ToLower(), p => p);
 
                 var nRData = MapJsonToNRData(item, projectId, properties);
+                if (lotNo.HasValue)
+                {
+                    nRData.LotNo = lotNo.Value;
+                }
 
                 if (!string.IsNullOrWhiteSpace(nRData.ExamDate))
                 {
@@ -2492,11 +2539,17 @@ namespace Tools.Controllers
 
 
         [HttpGet("ErrorReport")]
-        public async Task<ActionResult> GetDuplicateswrtCatch(int ProjectId)
+        public async Task<ActionResult> GetDuplicateswrtCatch(int ProjectId, [FromQuery] int? lotNo = null)
         {
-            var nrData = await _context.NRDatas
-                .Where(item => item.ProjectId == ProjectId && item.Status == true)
-                .ToListAsync();
+            var dataQuery = _context.NRDatas
+                .Where(item => item.ProjectId == ProjectId && item.Status == true);
+
+            if (lotNo.HasValue)
+            {
+                dataQuery = dataQuery.Where(item => item.LotNo == lotNo.Value);
+            }
+
+            var nrData = await dataQuery.ToListAsync();
             if (nrData.Count == 0)
             {
                 return Ok(new
@@ -2698,7 +2751,7 @@ namespace Tools.Controllers
         }
 
         [HttpPut]
-        public async Task<ActionResult> ResolveConflicts(int ProjectId, [FromBody] ConflictResolutionDto payload)
+        public async Task<ActionResult> ResolveConflicts(int ProjectId, [FromBody] ConflictResolutionDto payload, [FromQuery] int? lotNo = null)
         {
             try
             {
@@ -2708,6 +2761,11 @@ namespace Tools.Controllers
                 }
 
                 var rowsToUpdate = await GetRowsForConflict(ProjectId, payload);
+                if (lotNo.HasValue)
+                {
+                    rowsToUpdate = rowsToUpdate.Where(r => r.LotNo == lotNo.Value).ToList();
+                }
+
                 if (!rowsToUpdate.Any())
                 {
                     return NotFound("No matching records found");
@@ -2732,7 +2790,7 @@ namespace Tools.Controllers
         }
 
         [HttpPut("conflicts/status")]
-        public async Task<ActionResult> UpdateConflictStatus(int ProjectId, [FromBody] ConflictStatusUpdateDto payload)
+        public async Task<ActionResult> UpdateConflictStatus(int ProjectId, [FromBody] ConflictStatusUpdateDto payload, [FromQuery] int? lotNo = null)
         {
             if (payload == null || string.IsNullOrWhiteSpace(payload.ConflictType))
             {
@@ -2743,6 +2801,20 @@ namespace Tools.Controllers
             if (normalizedStatus == ConflictStatusIgnored && !CanIgnoreConflict(payload.ConflictType))
             {
                 return BadRequest("Ignore is not allowed for this conflict type.");
+            }
+
+            if (lotNo.HasValue)
+            {
+                var rowIds = payload.RowIds ?? new List<int>();
+                if (rowIds.Any())
+                {
+                    var invalidRowsExist = await _context.NRDatas
+                        .AnyAsync(r => rowIds.Contains(r.Id) && r.LotNo != lotNo.Value);
+                    if (invalidRowsExist)
+                    {
+                        return BadRequest("One or more conflict records do not belong to the selected lot.");
+                    }
+                }
             }
 
             await UpsertConflictStatus(ProjectId, payload, normalizedStatus);
@@ -3870,7 +3942,7 @@ namespace Tools.Controllers
         }
 
         [HttpPost("missing-data")]
-        public async Task<ActionResult> SaveMissingData([FromBody] MissingDataSaveRequest request)
+        public async Task<ActionResult> SaveMissingData([FromBody] MissingDataSaveRequest request, [FromQuery] int? lotNo = null)
         {
             if (request == null || request.ProjectId <= 0)
                 return BadRequest("Valid projectId is required.");
@@ -3905,14 +3977,20 @@ namespace Tools.Controllers
                     .ToList();
 
               
-                var projectRows = await _context.NRDatas
+                var query = _context.NRDatas
                     .Where(x =>
                         x.ProjectId == request.ProjectId &&
                         (
                             (ids.Any() && ids.Contains(x.Id)) ||
                             (x.CatchNo != null && catchNumbers.Contains(x.CatchNo))
-                        ))
-                    .ToListAsync();
+                        ));
+
+                if (lotNo.HasValue)
+                {
+                    query = query.Where(x => x.LotNo == lotNo.Value);
+                }
+
+                var projectRows = await query.ToListAsync();
 
                 if (!projectRows.Any())
                     return NotFound("No matching NRData rows found.");
@@ -4722,30 +4800,48 @@ namespace Tools.Controllers
         }
 
         [HttpDelete("DeleteByProject/{ProjectId}")]
-        public async Task<IActionResult> DeleteNR(int ProjectId)
+        public async Task<IActionResult> DeleteNR(int ProjectId, [FromQuery] int? lotNo = null)
         {
             try
             {
                 // Get all related data
-                var nrDataList = await _context.NRDatas
-                    .Where(d => d.ProjectId == ProjectId)
-                    .ToListAsync();
+                var nrDataQuery = _context.NRDatas.Where(d => d.ProjectId == ProjectId);
+                if (lotNo.HasValue)
+                {
+                    nrDataQuery = nrDataQuery.Where(d => d.LotNo == lotNo.Value);
+                }
+                var nrDataList = await nrDataQuery.ToListAsync();
 
-                var conflictList = await _context.ConflictingFields
-                    .Where(c => c.ProjectId == ProjectId)
-                    .ToListAsync();
+                var nrDataIds = nrDataList.Select(n => n.Id).ToList();
+                var conflictQuery = _context.ConflictingFields.Where(c => c.ProjectId == ProjectId);
+                if (lotNo.HasValue)
+                {
+                    conflictQuery = conflictQuery.Where(c => nrDataIds.Contains(c.NRDataId));
+                }
+                var conflictList = await conflictQuery.ToListAsync();
 
-                var envelopeResults = await _context.EnvelopeBreakingResults
-                    .Where(e => e.ProjectId == ProjectId)
-                    .ToListAsync();
+                var envelopeResults = new List<EnvelopeBreakingResult>();
+                var boxResults = new List<BoxBreakingResult>();
+                var envelopeBreaking = new List<EnvelopeBreakage>();
+                var extra = new List<ExtraEnvelopes>();
 
-                var boxResults = await _context.BoxBreakingResults
-                    .Where(b => b.ProjectId == ProjectId)
-                    .ToListAsync();
-                var envelopeBreaking = await _context.EnvelopeBreakages
-                    .Where(e => e.ProjectId == ProjectId).ToListAsync();
-                var extra = await _context.ExtrasEnvelope
-                    .Where(s=>s.ProjectId==ProjectId).ToListAsync();
+                if (!lotNo.HasValue)
+                {
+                    envelopeResults = await _context.EnvelopeBreakingResults
+                        .Where(e => e.ProjectId == ProjectId)
+                        .ToListAsync();
+
+                    boxResults = await _context.BoxBreakingResults
+                        .Where(b => b.ProjectId == ProjectId)
+                        .ToListAsync();
+
+                    envelopeBreaking = await _context.EnvelopeBreakages
+                        .Where(e => e.ProjectId == ProjectId).ToListAsync();
+
+                    extra = await _context.ExtrasEnvelope
+                        .Where(s => s.ProjectId == ProjectId).ToListAsync();
+                }
+
                 // If nothing exists for the project
                 if (!nrDataList.Any() &&
                     !envelopeResults.Any() &&
@@ -4756,14 +4852,17 @@ namespace Tools.Controllers
 
                 // OPTIONAL:
                 // Remove this block if you want a complete soft delete
-                var reportPath = Path.Combine(
-                    Directory.GetCurrentDirectory(),
-                    "wwwroot",
-                    ProjectId.ToString());
-
-                if (Directory.Exists(reportPath))
+                if (!lotNo.HasValue)
                 {
-                    Directory.Delete(reportPath, true);
+                    var reportPath = Path.Combine(
+                        Directory.GetCurrentDirectory(),
+                        "wwwroot",
+                        ProjectId.ToString());
+
+                    if (Directory.Exists(reportPath))
+                    {
+                        Directory.Delete(reportPath, true);
+                    }
                 }
 
                 // Soft delete NRData
