@@ -6058,57 +6058,91 @@ namespace Tools.Controllers
 
                 var allComparisonFields = fieldsToCompare.ToList();
 
-                // Step 1: Get lot range from ProjectLotRange table
-                var lotRange = await _context.ProjectLotRanges
-                    .Where(x => x.ProjectId == projectId && x.LotNo == lotNo)
-                    .FirstOrDefaultAsync();
+                DateTime? startDate = null;
+                DateTime? endDate = null;
+                ProjectLotRange? lotRange = null;
 
-                if (lotRange == null)
-                    return NotFound(new { message = $"Lot {lotNo} range not found for this project." });
+                if (lotNo > 0)
+                {
+                    // Step 1: Get lot range from ProjectLotRange table
+                    lotRange = await _context.ProjectLotRanges
+                        .Where(x => x.ProjectId == projectId && x.LotNo == lotNo)
+                        .FirstOrDefaultAsync();
 
-                // Parse dates from DD-MM-YYYY format
-                if (!DateTime.TryParseExact(lotRange.StartDate, "dd-MM-yyyy", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out DateTime startDate))
-                    return BadRequest(new { message = $"Invalid StartDate format in ProjectLotRange: {lotRange.StartDate}" });
+                    if (lotRange == null)
+                        return NotFound(new { message = $"Lot {lotNo} range not found for this project." });
 
-                if (!DateTime.TryParseExact(lotRange.EndDate, "dd-MM-yyyy", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out DateTime endDate))
-                    return BadRequest(new { message = $"Invalid EndDate format in ProjectLotRange: {lotRange.EndDate}" });
+                    // Parse dates from DD-MM-YYYY format
+                    if (!DateTime.TryParseExact(lotRange.StartDate, "dd-MM-yyyy", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out DateTime parsedStartDate))
+                        return BadRequest(new { message = $"Invalid StartDate format in ProjectLotRange: {lotRange.StartDate}" });
+                    startDate = parsedStartDate;
 
-                Console.WriteLine($"[CompareBatches] ProjectId={projectId}, LotNo={lotNo}, BaseDateRange={startDate:yyyy-MM-dd} to {endDate:yyyy-MM-dd}");
+                    if (!DateTime.TryParseExact(lotRange.EndDate, "dd-MM-yyyy", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out DateTime parsedEndDate))
+                        return BadRequest(new { message = $"Invalid EndDate format in ProjectLotRange: {lotRange.EndDate}" });
+                    endDate = parsedEndDate;
 
-                // Step 2: Base batch (Batch 1) - filter by LotNo
-                var baseBatch = await _context.NRDatas
+                    Console.WriteLine($"[CompareBatches] ProjectId={projectId}, LotNo={lotNo}, BaseDateRange={startDate:yyyy-MM-dd} to {endDate:yyyy-MM-dd}");
+                }
+                else
+                {
+                    Console.WriteLine($"[CompareBatches] ProjectId={projectId}, Comparing all records (No Lot Filter)");
+                }
+
+                // Step 2: Base batch (Batch 1)
+                var baseBatchQuery = _context.NRDatas
                     .Where(x =>
                         x.ProjectId == projectId &&
                         x.Batch == 1 &&
-                        x.LotNo == lotNo &&
-                        x.Status)
-                    .ToListAsync();
+                        x.Status);
+
+                if (lotNo > 0)
+                {
+                    baseBatchQuery = baseBatchQuery.Where(x => x.LotNo == lotNo);
+                }
+
+                var baseBatch = await baseBatchQuery.ToListAsync();
 
                 if (!baseBatch.Any())
-                    return NotFound(new { message = $"Base Batch (Batch 1) with Lot {lotNo} not found." });
+                {
+                    string message = lotNo > 0 ? $"Base Batch (Batch 1) with Lot {lotNo} not found." : "Base Batch (Batch 1) not found for this project.";
+                    return NotFound(new { message = message });
+                }
 
-                // Step 3: Revised batch (compareBatch) - filter by exam date range (NO LotNo needed)
-                var selectedBatchAll = await _context.NRDatas
+                // Step 3: Revised batch (compareBatch)
+                var selectedBatchAllQuery = _context.NRDatas
                     .Where(x =>
                         x.ProjectId == projectId &&
                         x.Batch == compareBatch &&
-                        x.Status &&
+                        x.Status);
+
+                if (lotNo > 0)
+                {
+                    selectedBatchAllQuery = selectedBatchAllQuery.Where(x =>
                         x.ExamDate != null &&
                         x.ExamDate != "" &&
-                        x.ExamDate != "null")
-                    .ToListAsync();
+                        x.ExamDate != "null");
+                }
 
-                // Filter by exam date range
+                var selectedBatchAll = await selectedBatchAllQuery.ToListAsync();
+
+                // Filter by exam date range if lotNo > 0
                 var selectedBatch = new List<NRData>();
-                foreach (var record in selectedBatchAll)
+                if (lotNo > 0)
                 {
-                    if (DateTime.TryParseExact(record.ExamDate, "dd-MM-yyyy", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out DateTime examDate))
+                    foreach (var record in selectedBatchAll)
                     {
-                        if (examDate >= startDate && examDate <= endDate)
+                        if (DateTime.TryParseExact(record.ExamDate, "dd-MM-yyyy", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out DateTime examDate))
                         {
-                            selectedBatch.Add(record);
+                            if (examDate >= startDate && examDate <= endDate)
+                            {
+                                selectedBatch.Add(record);
+                            }
                         }
                     }
+                }
+                else
+                {
+                    selectedBatch = selectedBatchAll;
                 }
 
                 // Step 4: Check if revised batch has any records in the date range
@@ -6121,10 +6155,11 @@ namespace Tools.Controllers
                     if (!batchExists)
                         return NotFound(new { message = $"Batch {compareBatch} not found." });
 
-                    return BadRequest(new 
-                    { 
-                        message = $"Cannot compare lot-wise: Batch {compareBatch} doesn't have exam dates in the range {lotRange.StartDate} to {lotRange.EndDate}." 
-                    });
+                    string message = lotNo > 0
+                        ? $"Cannot compare lot-wise: Batch {compareBatch} doesn't have exam dates in the range {lotRange?.StartDate} to {lotRange?.EndDate}."
+                        : $"Batch {compareBatch} has no records.";
+
+                    return BadRequest(new { message = message });
                 }
 
                 Console.WriteLine($"[CompareBatches] BaseBatch records: {baseBatch.Count}, SelectedBatch records: {selectedBatch.Count}");
@@ -6321,6 +6356,74 @@ namespace Tools.Controllers
                     }
                 }
 
+                // Step 5: Detect consistent catch-level changes
+                // For each catch, check if unique fields changed consistently across ALL occurrences
+                var catchGroups = comparisonResult
+                    .Where(x => x.Changes.Any(c => c.IsUniqueField))
+                    .GroupBy(x => x.CatchNo)
+                    .ToList();
+
+                foreach (var catchGroup in catchGroups)
+                {
+                    var catchRecords = catchGroup.ToList();
+                    
+                    // Skip if this catch has "Added" or "Removed" status (not consistency check)
+                    if (catchRecords.Any(x => x.Status == "Centre Catch Added" || x.Status == "Centre Catch Removed"))
+                    {
+                        continue;
+                    }
+
+                    // For each unique field in this catch group
+                    var uniqueFieldsInCatch = catchRecords
+                        .SelectMany(x => x.Changes.Where(c => c.IsUniqueField))
+                        .GroupBy(c => c.Field)
+                        .ToList();
+
+                    foreach (var fieldGroup in uniqueFieldsInCatch)
+                    {
+                        var fieldChanges = fieldGroup.ToList();
+                        
+                        // Check if all records for this catch have the same change for this field
+                        if (fieldChanges.Count == catchRecords.Count)
+                        {
+                            // Get the first change as reference
+                            var firstChange = fieldChanges.First();
+                            
+                            // Check if ALL changes for this field are identical
+                            bool allIdentical = fieldChanges.All(c => 
+                                c.PreviousValue == firstChange.PreviousValue && 
+                                c.NewValue == firstChange.NewValue);
+
+                            // If all identical, mark as consistent catch-level change
+                            if (allIdentical)
+                            {
+                                foreach (var record in catchRecords)
+                                {
+                                    var changeToMark = record.Changes.FirstOrDefault(c => 
+                                        c.Field == fieldGroup.Key && c.IsUniqueField);
+                                    
+                                    if (changeToMark != null)
+                                    {
+                                        changeToMark.IsConsistentCatchLevelChange = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Step 6: Mark records with catch-level changes (but don't overwrite Status)
+                // Set CatchLevelStatus to indicate this record has consistent catch-level changes
+                foreach (var record in comparisonResult)
+                {
+                    if (record.Changes.Any(c => c.IsConsistentCatchLevelChange))
+                    {
+                        record.CatchLevelStatus = "Catch-Level Change";
+                    }
+                }
+
+                Console.WriteLine($"[CompareBatches] Consistency check complete");
+
                 // Summary counts BEFORE filtering
                 int totalBaseBatchRecords = baseBatch.Count;
                 int totalComparedBatchRecords = selectedBatch.Count;
@@ -6366,6 +6469,9 @@ namespace Tools.Controllers
                     "centercode" => isAscending
                         ? comparisonResult.OrderBy(x => x.CenterCode).ToList()
                         : comparisonResult.OrderByDescending(x => x.CenterCode).ToList(),
+                    "status" => isAscending
+                        ? comparisonResult.OrderBy(x => x.Status).ToList()
+                        : comparisonResult.OrderByDescending(x => x.Status).ToList(),
                     _ => comparisonResult.OrderBy(x => x.CatchNo).ToList()
                 };
 
@@ -6380,11 +6486,11 @@ namespace Tools.Controllers
                     BaseBatch = 1,
                     ComparedBatch = compareBatch,
                     LotNo = lotNo,
-                    DateRange = new
+                    DateRange = lotRange != null ? new
                     {
                         StartDate = lotRange.StartDate,
                         EndDate = lotRange.EndDate
-                    },
+                    } : null,
                     ComparisonFields = allComparisonFields,
                     Summary = new
                     {
@@ -6397,6 +6503,15 @@ namespace Tools.Controllers
                         QuantityChanged = quantityChangedCount,
                         OtherUpdated = updatedCount
                     },
+                    // New: Counts for All Changes and Catch-Level Changes
+                    AllChangesCount = comparisonResult.Count(x => 
+                        x.Changes.Any(c => !c.IsUniqueField || (c.IsUniqueField && !c.IsConsistentCatchLevelChange)) ||
+                        x.Status == "Centre Catch Added" || x.Status == "Centre Catch Removed"),
+                    CatchLevelChangesCount = comparisonResult
+                        .Where(x => x.Changes.Any(c => c.IsConsistentCatchLevelChange))
+                        .Select(x => x.CatchNo)
+                        .Distinct()
+                        .Count(),
                     PageNo = pageNo,
                     PageSize = pageSize,
                     TotalCount = filteredTotalCount,
@@ -6417,6 +6532,7 @@ namespace Tools.Controllers
             public string? CatchNo { get; set; }
             public string? CenterCode { get; set; }
             public string? Status { get; set; }
+            public string? CatchLevelStatus { get; set; } = null; // Only set if this record has catch-level changes
             public List<ChangeDto> Changes { get; set; } = new();
         }
 
@@ -6426,6 +6542,7 @@ namespace Tools.Controllers
             public string? PreviousValue { get; set; }
             public string? NewValue { get; set; }
             public bool IsUniqueField { get; set; } = false;
+            public bool IsConsistentCatchLevelChange { get; set; } = false;
         }
         [HttpGet("get-comparison-fields/{projectId}")]
         public async Task<IActionResult> GetComparisonFields(int projectId)
