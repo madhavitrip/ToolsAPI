@@ -34,13 +34,32 @@ namespace Tools.Controllers
         }
 
         [HttpPost]
-        public async Task<IActionResult> MergeFields(int ProjectId)
+        public async Task<IActionResult> MergeFields(int ProjectId, int? batchId = null)
         {
             try
             {
-                var data = await _context.NRDatas
-                    .Where(p => p.ProjectId == ProjectId && p.Status == true && p.Steps == Tools.Models.PipelineNavigator.STEP_UPLOADED)
-                    .ToListAsync();
+                // Log incoming parameters for debugging
+                Console.WriteLine($"[DuplicateController] Received ProjectId: {ProjectId}, batchId: {batchId}");
+                
+                IQueryable<NRData> query = _context.NRDatas
+                    .Where(p => p.ProjectId == ProjectId && p.Status == true);
+
+                // If batchId is provided, filter by that specific batch
+                // Newly uploaded data should be processed regardless of step value
+                if (batchId.HasValue && batchId.Value > 0)
+                {
+                    Console.WriteLine($"[DuplicateController] Filtering by batchId: {batchId.Value}");
+                    query = query.Where(p => p.Batch == batchId.Value);
+                }
+                else
+                {
+                    // Only look for records with STEP_UPLOADED when no batch is specified
+                    Console.WriteLine($"[DuplicateController] No batchId provided, processing records with STEP_UPLOADED");
+                    query = query.Where(p => p.Steps == Tools.Models.PipelineNavigator.STEP_UPLOADED);
+                }
+
+                var data = await query.ToListAsync();
+                Console.WriteLine($"[DuplicateController] Found {data.Count} records to process");
 
                 if (!data.Any())
                     return BadRequest("No new data found to process duplication. All data is already processed or no new data added.");

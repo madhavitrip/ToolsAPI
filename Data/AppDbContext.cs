@@ -43,6 +43,8 @@ namespace ERPToolsAPI.Data
         public DbSet<ProcessSteps> ProcessSteps { get; set; }
 
         public DbSet<RPTMapping> RPTMappings { get; set; }
+
+        public DbSet<ProjectLotRange> ProjectLotRanges { get; set; }
         public DbSet<EnvelopeLotReport> EnvelopeLotReports { get; set; }
         //public DbSet<UserAssignment> UserAssignments { get; set; }
         protected override void OnModelCreating(ModelBuilder modelBuilder)
