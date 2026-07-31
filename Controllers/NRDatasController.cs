@@ -5564,18 +5564,36 @@ namespace Tools.Controllers
                     try
                     {
                         var targetType = Nullable.GetUnderlyingType(propInfo.PropertyType) ?? propInfo.PropertyType;
-                        object convertedValue;
+                        object? convertedValue = null;
+
                         if (propInfo.Name.Equals("IsNep", StringComparison.OrdinalIgnoreCase))
                         {
-                            if (value.Equals("nep", StringComparison.OrdinalIgnoreCase)) convertedValue = true;
-                            else if (value.Equals("non-nep", StringComparison.OrdinalIgnoreCase)) convertedValue = false;
-                            else convertedValue = null;
+                            if (!string.IsNullOrWhiteSpace(value))
+                            {
+                                if (value.Equals("nep", StringComparison.OrdinalIgnoreCase)) convertedValue = true;
+                                else if (value.Equals("non-nep", StringComparison.OrdinalIgnoreCase)) convertedValue = false;
+                            }
                         }
                         else
                         {
-                            convertedValue = string.IsNullOrWhiteSpace(value) ? null : Convert.ChangeType(value, targetType);
+                            if (!string.IsNullOrWhiteSpace(value))
+                            {
+                                convertedValue = Convert.ChangeType(value, targetType);
+                            }
                         }
-                        propInfo.SetValue(nRData, convertedValue);
+
+                        // Only set the property when we have a non-null converted value.
+                        // For reference/string types, allow null assignment. For value types (including nullable value types),
+                        // skip setting when convertedValue is null so the model's default stays (e.g., VerifiedBy = 0).
+                        if (convertedValue != null)
+                        {
+                            propInfo.SetValue(nRData, convertedValue);
+                        }
+                        else if (!propInfo.PropertyType.IsValueType)
+                        {
+                            // Reference type (string, etc.) - explicitly set null
+                            propInfo.SetValue(nRData, null);
+                        }
                     }
                     catch { }
                 }
@@ -5673,9 +5691,12 @@ namespace Tools.Controllers
                 if (!dateOrUniqueChanged) foreach (var f in uniqueFields) if (IsDifferent(GetFieldValue(primaryMatch, f), GetFieldValue(nRData, f))) { dateOrUniqueChanged = true; break; }
                 foreach (var f in sortingFields) if (IsDifferent(GetFieldValue(primaryMatch, f), GetFieldValue(nRData, f))) { sortingFieldChanged = true; break; }
 
-                if (centerChanged) { if (IsDifferent(primaryMatch.NodalCode, nRData.NodalCode)) nRData.Steps = Tools.Models.PipelineNavigator.STEP_ENHANCEMENT; else nRData.Steps = Tools.Models.PipelineNavigator.STEP_ENV_BREAKING; result.LotsToReset.Add(nRData.LotNo); }
-                else if (dateOrUniqueChanged) { nRData.Steps = Tools.Models.PipelineNavigator.STEP_ENV_BREAKING; if (sortingFieldChanged) result.LotsToReset.Add(nRData.LotNo); }
-                else nRData.Steps = Tools.Models.PipelineNavigator.STEP_ENV_BREAKING;
+                // Always set newly uploaded data to STEP_UPLOADED (0) to allow duplicate removal to process it
+                nRData.Steps = Tools.Models.PipelineNavigator.STEP_UPLOADED;
+                
+                // Track lot resets if center or sorting fields changed
+                if (centerChanged) result.LotsToReset.Add(nRData.LotNo);
+                else if (sortingFieldChanged) result.LotsToReset.Add(nRData.LotNo);
 
                 result.NewRecords.Add(nRData);
                 if (!string.IsNullOrWhiteSpace(nRData.CatchNo)) result.CatchesToReset.Add(nRData.CatchNo.Trim());
@@ -5889,291 +5910,406 @@ namespace Tools.Controllers
 
         [HttpGet("compare-batches")]
         public async Task<IActionResult> CompareBatches(
-      int projectId,
-      int compareBatch,
-      int lotNo,
-      int pageNo = 1,
-      int pageSize = 20,
-      string? search = null,
-      string? sortField = null,
-      string? sortOrder = null,
-      string? status = null)
+            int projectId,
+            int compareBatch,
+            int lotNo,
+            int pageNo = 1,
+            int pageSize = 20,
+            string? search = null,
+            string? sortField = null,
+            string? sortOrder = null,
+            string? status = null,
+            string? additionalFields = null)
         {
-            // Base batch is always Batch = 1
-            var baseBatch = await _context.NRDatas
-    .Where(x =>
-        x.ProjectId == projectId &&
-        x.Batch == 1 &&
-        x.LotNo == lotNo &&
-        x.Status)
-    .ToListAsync();
-
-            var lotExamDates = await _context.NRDatas
-    .Where(x =>
-        x.ProjectId == projectId &&
-        x.Batch == 1 &&
-        x.LotNo == lotNo &&
-        x.Status)
-    .Select(x => x.ExamDate)
-    .Distinct()
-    .ToListAsync();
-
-
-
-            // User-selected batch
-            var selectedBatch = await _context.NRDatas
-    .Where(x =>
-        x.ProjectId == projectId &&
-        x.Batch == compareBatch &&
-        x.Status &&
-        lotExamDates.Contains(x.ExamDate))
-    .ToListAsync();
-
-            if (!baseBatch.Any())
-                return NotFound("Base Batch (Batch 1) not found.");
-
-            if (!selectedBatch.Any())
-                return NotFound($"Batch {compareBatch} not found.");
-
-            // Create lookup for Batch 1 (handles duplicate CatchNo + CenterCode)
-            var baseLookup = baseBatch
-                .GroupBy(x => $"{x.CatchNo?.Trim().ToLower()}|{x.CenterCode?.Trim().ToLower()}")
-                .ToDictionary(g => g.Key, g => g.ToList());
-
-            var comparisonResult = new List<ComparisonResultDto>();
-
-            // Compare records from selected batch
-            foreach (var newRecord in selectedBatch)
+            try
             {
-                var key = $"{newRecord.CatchNo?.Trim().ToLower()}|{newRecord.CenterCode?.Trim().ToLower()}";
+                // Step 0: Fetch all fields from Fields table for uniqueness checking
+                var fieldsFromDb = await _context.Fields.ToListAsync();
+                var fieldDictionary = fieldsFromDb.ToDictionary(
+                    f => f.Name.ToLower(), 
+                    f => f.IsUnique
+                );
 
-                if (baseLookup.TryGetValue(key, out var oldRecords) && oldRecords.Any())
+                Console.WriteLine($"[CompareBatches] Loaded {fieldsFromDb.Count} fields from Fields table");
+
+                // Standard fields that are always compared
+                var standardFields = new List<string> 
+                { 
+                    "CenterCode", "NodalCode", "Route", "NRQuantity", 
+                    "SubjectName", "CourseName", "ExamDate", "ExamTime" 
+                };
+
+                // Get additional JSON keys from parameter (comma-separated)
+                var additionalJsonKeys = new List<string>();
+                if (!string.IsNullOrWhiteSpace(additionalFields))
                 {
-                    var oldRecord = oldRecords.First();
-                    oldRecords.RemoveAt(0);
-
-                    if (!oldRecords.Any())
-                        baseLookup.Remove(key);
-
-                    var changes = new List<ChangeDto>();
-
-                    void CompareField(string fieldName, object? oldValue, object? newValue)
-                    {
-                        var oldVal = oldValue?.ToString();
-                        var newVal = newValue?.ToString();
-
-                        if ((oldVal ?? "") != (newVal ?? ""))
-                        {
-                            changes.Add(new ChangeDto
-                            {
-                                Field = fieldName,
-                                PreviousValue = oldVal,
-                                NewValue = newVal
-                            });
-                        }
-                    }
-
-                    // Compare only required fields
-                    CompareField("CenterCode", oldRecord.CenterCode, newRecord.CenterCode);
-                    CompareField("NodalCode", oldRecord.NodalCode, newRecord.NodalCode);
-                    CompareField("Route", oldRecord.Route, newRecord.Route);
-                    CompareField("NRQuantity", oldRecord.NRQuantity, newRecord.NRQuantity);
-                    CompareField("SubjectName", oldRecord.SubjectName, newRecord.SubjectName);
-                    CompareField("CourseName", oldRecord.CourseName, newRecord.CourseName);
-                    CompareField("ExamDate", oldRecord.ExamDate, newRecord.ExamDate);
-                    CompareField("ExamTime", oldRecord.ExamTime, newRecord.ExamTime);
-
-                    if (changes.Any())
-                    {
-                        string recordStatus = "Updated";
-
-                        if (changes.Any(c => c.Field == "NodalCode"))
-                            recordStatus = "Nodal Changed";
-                        else if (changes.Any(c => c.Field == "NRQuantity"))
-                            recordStatus = "Centre Catch Quantity Changed";
-
-                        comparisonResult.Add(new ComparisonResultDto
-                        {
-                            CatchNo = newRecord.CatchNo,
-                            CenterCode = newRecord.CenterCode,
-                            Status = recordStatus,
-                            Changes = changes
-                        });
-                    }
+                    additionalJsonKeys = additionalFields
+                        .Split(',')
+                        .Select(f => f.Trim())
+                        .Where(f => !string.IsNullOrWhiteSpace(f))
+                        .ToList();
                 }
-                else
+
+                // Combine all fields to compare
+                var fieldsToCompare = new HashSet<string>(standardFields);
+                foreach (var field in additionalJsonKeys)
                 {
-                    // New record added in selected batch
-                    var changes = new List<ChangeDto>();
-
-                    void AddNewField(string fieldName, object? value)
-                    {
-                        var val = value?.ToString();
-                        if (!string.IsNullOrWhiteSpace(val))
-                        {
-                            changes.Add(new ChangeDto
-                            {
-                                Field = fieldName,
-                                PreviousValue = null,
-                                NewValue = val
-                            });
-                        }
-                    }
-
-                    AddNewField("CenterCode", newRecord.CenterCode);
-                    AddNewField("NodalCode", newRecord.NodalCode);
-                    AddNewField("Route", newRecord.Route);
-                    AddNewField("NRQuantity", newRecord.NRQuantity);
-                    AddNewField("SubjectName", newRecord.SubjectName);
-                    AddNewField("CourseName", newRecord.CourseName);
-                    AddNewField("ExamDate", newRecord.ExamDate);
-                    AddNewField("ExamTime", newRecord.ExamTime);
-
-                    if (changes.Any())
-                    {
-                        comparisonResult.Add(new ComparisonResultDto
-                        {
-                            CatchNo = newRecord.CatchNo,
-                            CenterCode = newRecord.CenterCode,
-                            Status = "Centre Catch Added",
-                            Changes = changes
-                        });
-                    }
+                    fieldsToCompare.Add(field);
                 }
-            }
 
-            // Records present in Batch 1 but not in comparison batch
-            foreach (var recordList in baseLookup.Values)
-            {
-                foreach (var removedRecord in recordList)
-                {
-                    var changes = new List<ChangeDto>();
+                var allComparisonFields = fieldsToCompare.ToList();
 
-                    void AddRemovedField(string fieldName, object? value)
-                    {
-                        var val = value?.ToString();
-                        if (!string.IsNullOrWhiteSpace(val))
-                        {
-                            changes.Add(new ChangeDto
-                            {
-                                Field = fieldName,
-                                PreviousValue = val,
-                                NewValue = null
-                            });
-                        }
-                    }
+                // Step 1: Get lot range from ProjectLotRange table
+                var lotRange = await _context.ProjectLotRanges
+                    .Where(x => x.ProjectId == projectId && x.LotNo == lotNo)
+                    .FirstOrDefaultAsync();
 
-                    AddRemovedField("CenterCode", removedRecord.CenterCode);
-                    AddRemovedField("NodalCode", removedRecord.NodalCode);
-                    AddRemovedField("Route", removedRecord.Route);
-                    AddRemovedField("NRQuantity", removedRecord.NRQuantity);
-                    AddRemovedField("SubjectName", removedRecord.SubjectName);
-                    AddRemovedField("CourseName", removedRecord.CourseName);
-                    AddRemovedField("ExamDate", removedRecord.ExamDate);
-                    AddRemovedField("ExamTime", removedRecord.ExamTime);
+                if (lotRange == null)
+                    return NotFound(new { message = $"Lot {lotNo} range not found for this project." });
 
-                    if (changes.Any())
-                    {
-                        comparisonResult.Add(new ComparisonResultDto
-                        {
-                            CatchNo = removedRecord.CatchNo,
-                            CenterCode = removedRecord.CenterCode,
-                            Status = "Centre Catch Removed",
-                            Changes = changes
-                        });
-                    }
-                }
-            }
+                // Parse dates from DD-MM-YYYY format
+                if (!DateTime.TryParseExact(lotRange.StartDate, "dd-MM-yyyy", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out DateTime startDate))
+                    return BadRequest(new { message = $"Invalid StartDate format in ProjectLotRange: {lotRange.StartDate}" });
 
-            // Summary counts BEFORE filtering
-            int totalBaseBatchRecords = baseBatch.Count;
-            int totalComparedBatchRecords = selectedBatch.Count;
+                if (!DateTime.TryParseExact(lotRange.EndDate, "dd-MM-yyyy", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out DateTime endDate))
+                    return BadRequest(new { message = $"Invalid EndDate format in ProjectLotRange: {lotRange.EndDate}" });
 
-            int addedCount = comparisonResult.Count(x => x.Status == "Centre Catch Added");
-            int removedCount = comparisonResult.Count(x => x.Status == "Centre Catch Removed");
-            int nodalChangedCount = comparisonResult.Count(x => x.Status == "Nodal Changed");
-            int quantityChangedCount = comparisonResult.Count(x => x.Status == "Centre Catch Quantity Changed");
-            int updatedCount = comparisonResult.Count(x => x.Status == "Updated");
+                Console.WriteLine($"[CompareBatches] ProjectId={projectId}, LotNo={lotNo}, BaseDateRange={startDate:yyyy-MM-dd} to {endDate:yyyy-MM-dd}");
 
-            int totalDifferences = comparisonResult.Count;
-
-            // Filter by Status
-            if (!string.IsNullOrWhiteSpace(status))
-            {
-                comparisonResult = comparisonResult
-                    .Where(x => (x.Status ?? "")
-                        .Equals(status.Trim(), StringComparison.OrdinalIgnoreCase))
-                    .ToList();
-            }
-
-            // Search on CatchNo, CenterCode, Status, Field, PreviousValue, and NewValue
-            if (!string.IsNullOrWhiteSpace(search))
-            {
-                search = search.Trim().ToLower();
-
-                comparisonResult = comparisonResult
+                // Step 2: Base batch (Batch 1) - filter by LotNo
+                var baseBatch = await _context.NRDatas
                     .Where(x =>
-                        (x.CatchNo ?? "").ToLower().Contains(search) ||
-                        (x.CenterCode ?? "").ToLower().Contains(search) ||
-                        (x.Status ?? "").ToLower().Contains(search) ||
-                        x.Changes.Any(c =>
-                            (c.Field ?? "").ToLower().Contains(search) ||
-                            (c.PreviousValue ?? "").ToLower().Contains(search) ||
-                            (c.NewValue ?? "").ToLower().Contains(search)))
-                    .ToList();
-            }
+                        x.ProjectId == projectId &&
+                        x.Batch == 1 &&
+                        x.LotNo == lotNo &&
+                        x.Status)
+                    .ToListAsync();
 
-            // Sorting
-            bool isAscending = string.IsNullOrWhiteSpace(sortOrder) ||
-                               sortOrder.ToLower() != "desc";
+                if (!baseBatch.Any())
+                    return NotFound(new { message = $"Base Batch (Batch 1) with Lot {lotNo} not found." });
 
-            comparisonResult = sortField?.ToLower() switch
-            {
-                "catchno" => isAscending
-                    ? comparisonResult.OrderBy(x => x.CatchNo).ToList()
-                    : comparisonResult.OrderByDescending(x => x.CatchNo).ToList(),
+                // Step 3: Revised batch (compareBatch) - filter by exam date range (NO LotNo needed)
+                var selectedBatchAll = await _context.NRDatas
+                    .Where(x =>
+                        x.ProjectId == projectId &&
+                        x.Batch == compareBatch &&
+                        x.Status &&
+                        x.ExamDate != null &&
+                        x.ExamDate != "" &&
+                        x.ExamDate != "null")
+                    .ToListAsync();
 
-                "centercode" => isAscending
-                    ? comparisonResult.OrderBy(x => x.CenterCode).ToList()
-                    : comparisonResult.OrderByDescending(x => x.CenterCode).ToList(),
-
-                _ => comparisonResult.OrderBy(x => x.CatchNo).ToList()
-            };
-
-            // Pagination
-            int filteredTotalCount = comparisonResult.Count;
-            int totalPages = (int)Math.Ceiling(filteredTotalCount / (double)pageSize);
-
-            var pagedResult = comparisonResult
-                .Skip((pageNo - 1) * pageSize)
-                .Take(pageSize)
-                .ToList();
-
-            return Ok(new
-            {
-                ProjectId = projectId,
-                BaseBatch = 1,
-                ComparedBatch = compareBatch,
-
-                // Summary counts
-                Summary = new
+                // Filter by exam date range
+                var selectedBatch = new List<NRData>();
+                foreach (var record in selectedBatchAll)
                 {
-                    TotalBaseBatchRecords = totalBaseBatchRecords,
-                    TotalComparedBatchRecords = totalComparedBatchRecords,
-                    TotalDifferences = totalDifferences,
-                    Added = addedCount,
-                    Removed = removedCount,
-                    NodalChanged = nodalChangedCount,
-                    QuantityChanged = quantityChangedCount,
-                    OtherUpdated = updatedCount
-                },
+                    if (DateTime.TryParseExact(record.ExamDate, "dd-MM-yyyy", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out DateTime examDate))
+                    {
+                        if (examDate >= startDate && examDate <= endDate)
+                        {
+                            selectedBatch.Add(record);
+                        }
+                    }
+                }
 
-                PageNo = pageNo,
-                PageSize = pageSize,
-                TotalCount = filteredTotalCount,
-                TotalPages = totalPages,
-                Data = pagedResult
-            });
+                // Step 4: Check if revised batch has any records in the date range
+                if (!selectedBatch.Any())
+                {
+                    var batchExists = await _context.NRDatas
+                        .Where(x => x.ProjectId == projectId && x.Batch == compareBatch && x.Status)
+                        .AnyAsync();
+
+                    if (!batchExists)
+                        return NotFound(new { message = $"Batch {compareBatch} not found." });
+
+                    return BadRequest(new 
+                    { 
+                        message = $"Cannot compare lot-wise: Batch {compareBatch} doesn't have exam dates in the range {lotRange.StartDate} to {lotRange.EndDate}." 
+                    });
+                }
+
+                Console.WriteLine($"[CompareBatches] BaseBatch records: {baseBatch.Count}, SelectedBatch records: {selectedBatch.Count}");
+
+                // Create lookup for Batch 1 (handles duplicate CatchNo + CenterCode)
+                var baseLookup = baseBatch
+                    .GroupBy(x => $"{x.CatchNo?.Trim().ToLower()}|{x.CenterCode?.Trim().ToLower()}")
+                    .ToDictionary(g => g.Key, g => g.ToList());
+
+                var comparisonResult = new List<ComparisonResultDto>();
+
+                // Helper function to check if a field is unique
+                Func<string, bool> IsFieldUnique = (fieldName) =>
+                {
+                    var fieldNameLower = fieldName.ToLower();
+                    if (fieldDictionary.TryGetValue(fieldNameLower, out var isUnique))
+                    {
+                        return isUnique;
+                    }
+                    // If field not found in Fields table, treat as non-unique (false)
+                    return false;
+                };
+
+                // Helper function to get field value from NRData object by field name
+                // Handles both standard NRData properties and JSON keys from NRDatas column
+                Func<NRData, string, object?> GetFieldValue = (record, fieldName) =>
+                {
+                    // First check standard NRData properties
+                    var standardValue = (object?)fieldName switch
+                    {
+                        "CenterCode" => record.CenterCode,
+                        "NodalCode" => record.NodalCode,
+                        "Route" => record.Route,
+                        "NRQuantity" => (object?)record.NRQuantity,
+                        "SubjectName" => record.SubjectName,
+                        "CourseName" => record.CourseName,
+                        "ExamDate" => record.ExamDate,
+                        "ExamTime" => record.ExamTime,
+                        "Quantity" => (object?)record.Quantity,
+                        "Day" => record.Day,
+                        "Pages" => (object?)record.Pages,
+                        "RouteSort" => (object?)record.RouteSort,
+                        "CenterSort" => (object?)record.CenterSort,
+                        "NodalSort" => (object?)record.NodalSort,
+                        "Symbol" => record.Symbol,
+                        "District" => record.District,
+                        "DistrictSort" => (object?)record.DistrictSort,
+                        _ => null
+                    };
+
+                    // If standard value found, return it
+                    if (standardValue != null)
+                        return standardValue;
+
+                    // Otherwise, try to get from NRDatas JSON
+                    if (string.IsNullOrWhiteSpace(record.NRDatas))
+                        return null;
+
+                    try
+                    {
+                        using (var doc = System.Text.Json.JsonDocument.Parse(record.NRDatas))
+                        {
+                            var root = doc.RootElement;
+                            if (root.ValueKind == System.Text.Json.JsonValueKind.Object && root.TryGetProperty(fieldName, out var value))
+                            {
+                                return value.GetString() ?? value.ToString();
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[CompareBatches] Error parsing NRDatas JSON for field {fieldName}: {ex.Message}");
+                    }
+
+                    return null;
+                };
+
+                // Compare records from selected batch
+                foreach (var newRecord in selectedBatch)
+                {
+                    var key = $"{newRecord.CatchNo?.Trim().ToLower()}|{newRecord.CenterCode?.Trim().ToLower()}";
+
+                    if (baseLookup.TryGetValue(key, out var oldRecords) && oldRecords.Any())
+                    {
+                        var oldRecord = oldRecords.First();
+                        oldRecords.RemoveAt(0);
+
+                        if (!oldRecords.Any())
+                            baseLookup.Remove(key);
+
+                        var changes = new List<ChangeDto>();
+
+                        // Compare all fields (standard + additional)
+                        foreach (var fieldName in allComparisonFields)
+                        {
+                            var oldVal = GetFieldValue(oldRecord, fieldName)?.ToString();
+                            var newVal = GetFieldValue(newRecord, fieldName)?.ToString();
+
+                            if ((oldVal ?? "") != (newVal ?? ""))
+                            {
+                                changes.Add(new ChangeDto
+                                {
+                                    Field = fieldName,
+                                    PreviousValue = oldVal,
+                                    NewValue = newVal,
+                                    IsUniqueField = IsFieldUnique(fieldName)
+                                });
+                            }
+                        }
+
+                        if (changes.Any())
+                        {
+                            string recordStatus = "Updated";
+
+                            if (changes.Any(c => c.Field == "NodalCode"))
+                                recordStatus = "Nodal Changed";
+                            else if (changes.Any(c => c.Field == "NRQuantity"))
+                                recordStatus = "Centre Catch Quantity Changed";
+
+                            comparisonResult.Add(new ComparisonResultDto
+                            {
+                                CatchNo = newRecord.CatchNo,
+                                CenterCode = newRecord.CenterCode,
+                                Status = recordStatus,
+                                Changes = changes
+                            });
+                        }
+                    }
+                    else
+                    {
+                        // New record added in selected batch
+                        var changes = new List<ChangeDto>();
+
+                        foreach (var fieldName in allComparisonFields)
+                        {
+                            var val = GetFieldValue(newRecord, fieldName)?.ToString();
+                            if (!string.IsNullOrWhiteSpace(val))
+                            {
+                                changes.Add(new ChangeDto
+                                {
+                                    Field = fieldName,
+                                    PreviousValue = null,
+                                    NewValue = val,
+                                    IsUniqueField = IsFieldUnique(fieldName)
+                                });
+                            }
+                        }
+
+                        if (changes.Any())
+                        {
+                            comparisonResult.Add(new ComparisonResultDto
+                            {
+                                CatchNo = newRecord.CatchNo,
+                                CenterCode = newRecord.CenterCode,
+                                Status = "Centre Catch Added",
+                                Changes = changes
+                            });
+                        }
+                    }
+                }
+
+                // Records present in Batch 1 but not in comparison batch
+                foreach (var recordList in baseLookup.Values)
+                {
+                    foreach (var removedRecord in recordList)
+                    {
+                        var changes = new List<ChangeDto>();
+
+                        foreach (var fieldName in allComparisonFields)
+                        {
+                            var val = GetFieldValue(removedRecord, fieldName)?.ToString();
+                            if (!string.IsNullOrWhiteSpace(val))
+                            {
+                                changes.Add(new ChangeDto
+                                {
+                                    Field = fieldName,
+                                    PreviousValue = val,
+                                    NewValue = null,
+                                    IsUniqueField = IsFieldUnique(fieldName)
+                                });
+                            }
+                        }
+
+                        if (changes.Any())
+                        {
+                            comparisonResult.Add(new ComparisonResultDto
+                            {
+                                CatchNo = removedRecord.CatchNo,
+                                CenterCode = removedRecord.CenterCode,
+                                Status = "Centre Catch Removed",
+                                Changes = changes
+                            });
+                        }
+                    }
+                }
+
+                // Summary counts BEFORE filtering
+                int totalBaseBatchRecords = baseBatch.Count;
+                int totalComparedBatchRecords = selectedBatch.Count;
+                int addedCount = comparisonResult.Count(x => x.Status == "Centre Catch Added");
+                int removedCount = comparisonResult.Count(x => x.Status == "Centre Catch Removed");
+                int nodalChangedCount = comparisonResult.Count(x => x.Status == "Nodal Changed");
+                int quantityChangedCount = comparisonResult.Count(x => x.Status == "Centre Catch Quantity Changed");
+                int updatedCount = comparisonResult.Count(x => x.Status == "Updated");
+                int totalDifferences = comparisonResult.Count;
+
+                // Filter by Status
+                if (!string.IsNullOrWhiteSpace(status))
+                {
+                    comparisonResult = comparisonResult
+                        .Where(x => (x.Status ?? "").Equals(status.Trim(), StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+                }
+
+                // Search on CatchNo, CenterCode, Status, Field, PreviousValue, and NewValue
+                if (!string.IsNullOrWhiteSpace(search))
+                {
+                    search = search.Trim().ToLower();
+                    comparisonResult = comparisonResult
+                        .Where(x =>
+                            (x.CatchNo ?? "").ToLower().Contains(search) ||
+                            (x.CenterCode ?? "").ToLower().Contains(search) ||
+                            (x.Status ?? "").ToLower().Contains(search) ||
+                            x.Changes.Any(c =>
+                                (c.Field ?? "").ToLower().Contains(search) ||
+                                (c.PreviousValue ?? "").ToLower().Contains(search) ||
+                                (c.NewValue ?? "").ToLower().Contains(search)))
+                        .ToList();
+                }
+
+                // Sorting
+                bool isAscending = string.IsNullOrWhiteSpace(sortOrder) || sortOrder.ToLower() != "desc";
+
+                comparisonResult = sortField?.ToLower() switch
+                {
+                    "catchno" => isAscending
+                        ? comparisonResult.OrderBy(x => x.CatchNo).ToList()
+                        : comparisonResult.OrderByDescending(x => x.CatchNo).ToList(),
+                    "centercode" => isAscending
+                        ? comparisonResult.OrderBy(x => x.CenterCode).ToList()
+                        : comparisonResult.OrderByDescending(x => x.CenterCode).ToList(),
+                    _ => comparisonResult.OrderBy(x => x.CatchNo).ToList()
+                };
+
+                // Pagination
+                int filteredTotalCount = comparisonResult.Count;
+                int totalPages = (int)Math.Ceiling(filteredTotalCount / (double)pageSize);
+                var pagedResult = comparisonResult.Skip((pageNo - 1) * pageSize).Take(pageSize).ToList();
+
+                return Ok(new
+                {
+                    ProjectId = projectId,
+                    BaseBatch = 1,
+                    ComparedBatch = compareBatch,
+                    LotNo = lotNo,
+                    DateRange = new
+                    {
+                        StartDate = lotRange.StartDate,
+                        EndDate = lotRange.EndDate
+                    },
+                    ComparisonFields = allComparisonFields,
+                    Summary = new
+                    {
+                        TotalBaseBatchRecords = totalBaseBatchRecords,
+                        TotalComparedBatchRecords = totalComparedBatchRecords,
+                        TotalDifferences = totalDifferences,
+                        Added = addedCount,
+                        Removed = removedCount,
+                        NodalChanged = nodalChangedCount,
+                        QuantityChanged = quantityChangedCount,
+                        OtherUpdated = updatedCount
+                    },
+                    PageNo = pageNo,
+                    PageSize = pageSize,
+                    TotalCount = filteredTotalCount,
+                    TotalPages = totalPages,
+                    Data = pagedResult
+                });
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[CompareBatches] Exception: {ex}");
+                return StatusCode(500, new { message = "An error occurred during batch comparison.", error = ex.Message });
+            }
         }
 
         // DTOs
@@ -6190,7 +6326,75 @@ namespace Tools.Controllers
             public string? Field { get; set; }
             public string? PreviousValue { get; set; }
             public string? NewValue { get; set; }
+            public bool IsUniqueField { get; set; } = false;
         }
+        [HttpGet("get-comparison-fields/{projectId}")]
+        public async Task<IActionResult> GetComparisonFields(int projectId)
+        {
+            try
+            {
+                Console.WriteLine($"[GetComparisonFields] Starting for projectId: {projectId}");
+
+                // Get all NRData records for the project that have NRDatas content
+                var nrDataRecords = await _context.NRDatas
+                    .Where(x => x.ProjectId == projectId && x.NRDatas != null && x.NRDatas != "")
+                    .Select(x => x.NRDatas)
+                    .ToListAsync();
+
+                Console.WriteLine($"[GetComparisonFields] Found {nrDataRecords.Count} records with NRDatas content");
+
+                var allKeys = new HashSet<string>();
+
+                // Extract all keys from JSON data
+                foreach (var nrDataJson in nrDataRecords)
+                {
+                    if (string.IsNullOrWhiteSpace(nrDataJson))
+                        continue;
+
+                    try
+                    {
+                        Console.WriteLine($"[GetComparisonFields] Parsing JSON: {nrDataJson.Substring(0, Math.Min(100, nrDataJson.Length))}...");
+
+                        // Parse JSON and extract keys
+                        using (var doc = System.Text.Json.JsonDocument.Parse(nrDataJson))
+                        {
+                            var root = doc.RootElement;
+                            if (root.ValueKind == System.Text.Json.JsonValueKind.Object)
+                            {
+                                foreach (var prop in root.EnumerateObject())
+                                {
+                                    allKeys.Add(prop.Name);
+                                    Console.WriteLine($"[GetComparisonFields] Added key: {prop.Name}");
+                                }
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[GetComparisonFields] Error parsing JSON: {ex.Message}");
+                        // Continue with next record if JSON parsing fails
+                        continue;
+                    }
+                }
+
+                Console.WriteLine($"[GetComparisonFields] Total unique keys found: {allKeys.Count}");
+                var fieldsList = allKeys.OrderBy(k => k).ToList();
+                Console.WriteLine($"[GetComparisonFields] Returning fields: {string.Join(", ", fieldsList)}");
+
+                return Ok(new
+                {
+                    success = true,
+                    fields = fieldsList,
+                    count = allKeys.Count
+                });
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[GetComparisonFields] Exception: {ex}");
+                return StatusCode(500, new { message = "An error occurred while retrieving comparison fields.", error = ex.Message });
+            }
+        }
+
         [HttpGet("active-batches/{projectId}")]
         public async Task<IActionResult> GetActiveBatches(int projectId)
         {

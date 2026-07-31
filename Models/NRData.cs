@@ -38,6 +38,6 @@ namespace Tools.Models
         public int Batch { get; set; }
 
         public int? VerifiedBy { get; set; } = 0;
-        public DateTime? VerifiedOn { get; set; }
+        public DateTime? VerifiedOn { get; set; } = DateTime.MinValue;
     }
 }
