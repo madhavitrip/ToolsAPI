@@ -61,7 +61,7 @@ namespace Tools.Controllers
             return Ok(templates.Select(t => new
             {
                 t.TemplateId, t.GroupId, t.TypeId, t.ProjectId, t.UploadedByUserId,
-                t.ModuleIds, t.TemplateName, t.RPTFilePath, t.ParsedFieldsJson,
+                t.ModuleIds, t.TemplateName, t.SubName, t.RPTFilePath, t.ParsedFieldsJson,
                 t.Version, t.CreatedDate, t.UpdatedDate, t.IsActive, t.IsDeleted,
                 HasMapping = mappedIds.Contains(t.TemplateId)
             }));
@@ -184,7 +184,7 @@ namespace Tools.Controllers
             return Ok(versions.Select(t => new
             {
                 t.TemplateId, t.GroupId, t.TypeId, t.ProjectId, t.UploadedByUserId,
-                t.ModuleIds, t.TemplateName, t.RPTFilePath, t.ParsedFieldsJson,
+                t.ModuleIds, t.TemplateName, t.SubName, t.RPTFilePath, t.ParsedFieldsJson,
                 t.Version, t.CreatedDate, t.UpdatedDate, t.IsActive, t.IsDeleted,
                 HasMapping = mappedIds.Contains(t.TemplateId),
                 MappingWarning = mappedIds.Contains(t.TemplateId)
@@ -478,6 +478,7 @@ namespace Tools.Controllers
                 {
                     if (hasName) item.TemplateName = newName;
                     if (req.ModuleIds != null) item.ModuleIds = req.ModuleIds;
+                    if (req.SubName != null) item.SubName = req.SubName;
                     item.UpdatedDate = DateTime.Now;
                 }
             }
@@ -485,6 +486,7 @@ namespace Tools.Controllers
             {
                 if (hasName) template.TemplateName = newName;
                 if (req.ModuleIds != null) template.ModuleIds = req.ModuleIds;
+                if (req.SubName != null) template.SubName = req.SubName;
                 template.UpdatedDate = DateTime.Now;
             }
 
@@ -497,7 +499,7 @@ namespace Tools.Controllers
         // multipart/form-data: file (.rpt), typeId, templateName, optional groupId, optional projectId
         [Authorize]
         [HttpPost("upload")]
-        public async Task<ActionResult> Upload([FromForm] int typeId, [FromForm] string templateName, IFormFile file,
+        public async Task<ActionResult> Upload([FromForm] int typeId, [FromForm] string templateName, [FromForm] string? subName, IFormFile file,
             [FromForm] int? groupId, [FromForm] int? projectId, [FromForm] List<int>? moduleIds, [FromForm] bool forceUpload = false)
         {
             if (file == null || file.Length == 0)
@@ -712,6 +714,7 @@ namespace Tools.Controllers
                 UploadedByUserId = uploadedByUserId,
                 ModuleIds    = moduleIds != null && moduleIds.Count > 0 ? moduleIds : null,
                 TemplateName = templateName,
+                SubName      = subName,
                 RPTFilePath  = relativePath,   // store relative path only
                 ParsedFieldsJson = parsedFieldsJson,
                 RequiredFieldsJson = requiredFieldsJson,
@@ -1771,7 +1774,7 @@ namespace Tools.Controllers
             return templates.Select(t => (object)new
             {
                 t.TemplateId, t.GroupId, t.TypeId, t.ProjectId, t.UploadedByUserId,
-                t.ModuleIds, t.TemplateName, t.RPTFilePath, t.ParsedFieldsJson,
+                t.ModuleIds, t.TemplateName, t.SubName, t.RPTFilePath, t.ParsedFieldsJson,
                 t.Version, t.CreatedDate, t.UpdatedDate, t.IsActive, t.IsDeleted,
                 HasMapping = mappedIds.Contains(t.TemplateId),
                 MappingWarning = mappedIds.Contains(t.TemplateId)
@@ -1811,6 +1814,7 @@ namespace Tools.Controllers
     public class UpdateTemplateRequest
     {
         public string? TemplateName { get; set; }
+        public string? SubName { get; set; }
         public List<int>? ModuleIds { get; set; }
         public bool ApplyToAllVersions { get; set; } = true;
     }
