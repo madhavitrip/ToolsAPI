@@ -969,6 +969,91 @@ namespace Tools.Controllers
             return Ok(new { templateId = template.TemplateId, message = "Template activated." });
         }
 
+        [Authorize]
+        [HttpGet("importable-templates")]
+        public async Task<ActionResult> GetImportableTemplates(
+     [FromQuery] string sourceScope,
+     [FromQuery] int? sourceGroupId,
+     [FromQuery] int? sourceProjectId,
+     [FromQuery] int? sourceTypeId)
+        {
+            if (string.IsNullOrWhiteSpace(sourceScope))
+                return BadRequest("Source scope is required.");
+
+            if (sourceScope == "project")
+            {
+                if (!sourceProjectId.HasValue || !sourceTypeId.HasValue)
+                    return BadRequest("SourceProjectId and SourceTypeId are required for project scope.");
+
+                var projectTemplates = await _context.RPTTemplates
+                    .Where(t =>
+                        t.ProjectId == sourceProjectId.Value &&
+                        t.TypeId == sourceTypeId.Value &&
+                        t.IsDeleted == false)
+                    .OrderBy(t => t.TemplateName)
+                    .ThenByDescending(t => t.Version)
+                    .Select(t => new
+                    {
+                        t.TemplateId,
+                        t.TemplateName,
+                        t.Version,
+                        t.SubName
+                    })
+                    .ToListAsync();
+
+                return Ok(projectTemplates);
+            }
+
+            if (sourceScope == "group")
+            {
+                if (!sourceGroupId.HasValue || !sourceTypeId.HasValue)
+                    return BadRequest("SourceGroupId and SourceTypeId are required for group scope.");
+
+                var groupTemplates = await _context.MRPTTemplates
+                    .Where(t =>
+                        t.GroupId == sourceGroupId.Value &&
+                        t.TypeId == sourceTypeId.Value &&
+                        t.IsDeleted == false)
+                    .OrderBy(t => t.TemplateName)
+                    .ThenByDescending(t => t.Version)
+                    .Select(t => new
+                    {
+                        t.TemplateId,
+                        t.TemplateName,
+                        t.Version,
+                        t.SubName
+                    })
+                    .ToListAsync();
+
+                return Ok(groupTemplates);
+            }
+
+            if (sourceScope == "standard")
+            {
+                if (!sourceTypeId.HasValue)
+                    return BadRequest("SourceTypeId is required for standard scope.");
+
+                var standardTemplates = await _context.MRPTTemplates
+                    .Where(t =>
+                        t.GroupId == null &&
+                        t.TypeId == sourceTypeId.Value &&
+                        t.IsDeleted == false)
+                    .OrderBy(t => t.TemplateName)
+                    .ThenByDescending(t => t.Version)
+                    .Select(t => new
+                    {
+                        t.TemplateId,
+                        t.TemplateName,
+                        t.Version,
+                        t.SubName
+                    })
+                    .ToListAsync();
+
+                return Ok(standardTemplates);
+            }
+
+            return BadRequest("Invalid source scope.");
+        }
         // POST: api/RPTTemplates/import-from-group
         // Copy all active templates from a source group+type to a new group+type
         [Authorize]
@@ -1015,71 +1100,88 @@ namespace Tools.Controllers
                     return BadRequest("TargetGroupId and TargetTypeId are required.");
             }
 
-            List<RPTTemplate> sourceTemplates;
-            if (sourceScope == "standard")
-            {
-                var query = _context.RPTTemplates
-                    .Where(t => t.GroupId == null && t.ProjectId == null && t.IsActive == true);
-                if (sourceTypeId.HasValue)
-                    query = query.Where(t => t.TypeId == sourceTypeId);
-                sourceTemplates = await query.ToListAsync();
-            }
-            else if (sourceScope == "project")
+            // Fetch source templates based on scope
+            var sourceTemplates = new List<RPTTemplate>();
+
+            if (sourceScope == "project")
             {
                 if (!req.SourceProjectId.HasValue || req.SourceProjectId.Value <= 0)
                     return BadRequest("SourceProjectId is required for project imports.");
 
-                var project = await _context.Projects
-                    .FirstOrDefaultAsync(p => p.ProjectId == req.SourceProjectId.Value);
-                if (project == null)
-                    return NotFound("Source project not found.");
-
-                var effectiveTypeId = sourceTypeId ?? (project.TypeId > 0 ? project.TypeId : (int?)null);
-                var effectiveGroupId = project.GroupId > 0 ? project.GroupId : (int?)null;
-                if (!effectiveTypeId.HasValue || !effectiveGroupId.HasValue)
-                    return BadRequest("Source project is missing GroupId/TypeId.");
-
-                sourceTemplates = await ResolveTemplatesForContext(
-                    effectiveTypeId.Value,
-                    effectiveGroupId.Value,
-                    req.SourceProjectId.Value);
-            }
-            else
-            {
-                if (req.SourceGroupId <= 0)
-                    return BadRequest("SourceGroupId is required for group imports.");
-
-                var groupQuery = _context.RPTTemplates
-                    .Where(t => t.GroupId == req.SourceGroupId && t.ProjectId == null && t.IsActive == true);
-                if (sourceTypeId.HasValue)
-                    groupQuery = groupQuery.Where(t => t.TypeId == sourceTypeId);
-
-                var sourceGroupTemplates = await groupQuery.ToListAsync();
-
-                sourceTemplates = new List<RPTTemplate>(sourceGroupTemplates);
-                if (req.IncludeStandard)
+                if (req.SelectedTemplateIds != null && req.SelectedTemplateIds.Any())
                 {
-                    var standardQuery = _context.RPTTemplates
-                        .Where(t => t.GroupId == null && t.ProjectId == null && t.IsActive == true);
-                    if (sourceTypeId.HasValue)
-                        standardQuery = standardQuery.Where(t => t.TypeId == sourceTypeId);
+                    sourceTemplates = await _context.RPTTemplates
+                        .Where(t => req.SelectedTemplateIds.Contains(t.TemplateId))
+                        .ToListAsync();
+                }
+                else
+                {
+                    var project = await _context.Projects.FirstOrDefaultAsync(p => p.ProjectId == req.SourceProjectId.Value);
+                    if (project == null) return NotFound("Source project not found.");
 
-                    var standardTemplates = await standardQuery.ToListAsync();
+                    var effectiveTypeId = sourceTypeId ?? (project.TypeId > 0 ? project.TypeId : (int?)null);
+                    var effectiveGroupId = project.GroupId > 0 ? project.GroupId : (int?)null;
+                    if (!effectiveTypeId.HasValue || !effectiveGroupId.HasValue)
+                        return BadRequest("Source project is missing GroupId/TypeId.");
 
-                    var existingNames = new HashSet<string>(
-                        sourceGroupTemplates.Select(t => t.TemplateName ?? string.Empty),
-                        StringComparer.OrdinalIgnoreCase);
-
-                    foreach (var std in standardTemplates)
+                    sourceTemplates = await ResolveTemplatesForContext(effectiveTypeId.Value, effectiveGroupId.Value, req.SourceProjectId.Value);
+                }
+            }
+            else // "group" or "standard"
+            {
+                List<MRPTTemplate> masterSources;
+                
+                if (req.SelectedTemplateIds != null && req.SelectedTemplateIds.Any())
+                {
+                    masterSources = await _context.MRPTTemplates
+                        .Where(t => req.SelectedTemplateIds.Contains(t.TemplateId))
+                        .ToListAsync();
+                }
+                else
+                {
+                    var query = _context.MRPTTemplates.Where(t => t.IsActive == true && t.IsDeleted == false);
+                    if (sourceTypeId.HasValue) query = query.Where(t => t.TypeId == sourceTypeId);
+                    
+                    if (sourceScope == "group")
                     {
-                        if (!existingNames.Contains(std.TemplateName ?? string.Empty))
-                            sourceTemplates.Add(std);
+                        if (req.SourceGroupId <= 0) return BadRequest("SourceGroupId is required for group imports.");
+                        if (req.IncludeStandard)
+                            query = query.Where(t => t.GroupId == req.SourceGroupId || t.GroupId == null);
+                        else
+                            query = query.Where(t => t.GroupId == req.SourceGroupId);
                     }
+                    else // standard
+                    {
+                        query = query.Where(t => t.GroupId == null);
+                    }
+
+                    var allMatches = await query.ToListAsync();
+                    // Keep only latest active per template name if importing blindly
+                    masterSources = allMatches.GroupBy(t => t.TemplateName)
+                        .Select(g => g.OrderByDescending(x => x.Version).First())
+                        .ToList();
+                }
+
+                // Map MRPTTemplate to RPTTemplate for unified import logic downstream
+                foreach (var mt in masterSources)
+                {
+                    sourceTemplates.Add(new RPTTemplate
+                    {
+                        TemplateId = mt.TemplateId, 
+                        TemplateName = mt.TemplateName,
+                        SubName = mt.SubName,
+                        RPTFilePath = mt.RPTFilePath,
+                        ParsedFieldsJson = mt.ParsedFieldsJson,
+                        RequiredFieldsJson = mt.RequiredFieldsJson,
+                        DesignSnapshotJson = mt.DesignSnapshotJson,
+                        ModuleIds = mt.ModuleIds,
+                        TypeId = mt.TypeId
+                    });
                 }
             }
 
             if (!sourceTemplates.Any())
-                return NotFound("No active templates found for source group/type.");
+                return NotFound("No templates found to import.");
 
             var imported = new List<object>();
 
@@ -1140,6 +1242,165 @@ namespace Tools.Controllers
 
             await _loggerService.LogEventAsync($"Imported {imported.Count} template(s) from group {req.SourceGroupId} to group {targetGroupId}", "RPTTemplate", LogHelper.GetTriggeredBy(User), 0);
             return Ok(new { imported });
+        }
+
+        public class PromoteToMasterRequest
+        {
+            public List<int> TemplateIds { get; set; } = new();
+            public int TargetGroupId { get; set; }
+        }
+
+        [Authorize]
+        [HttpPost("promote-to-group-master")]
+        public async Task<ActionResult> PromoteToGroupMaster([FromBody] PromoteToMasterRequest req)
+        {
+            if (req.TemplateIds == null || !req.TemplateIds.Any())
+                return BadRequest("TemplateIds are required.");
+
+            var uploadedByUserId = LogHelper.GetTriggeredBy(User);
+            var promoted = new List<object>();
+
+            using (var transaction = await _context.Database.BeginTransactionAsync())
+            {
+                try
+                {
+                    foreach (var templateId in req.TemplateIds)
+                    {
+                        var source = await _context.RPTTemplates.FirstOrDefaultAsync(t => t.TemplateId == templateId);
+                        if (source == null)
+                            continue;
+
+                        if (source.ProjectId == null)
+                        {
+                            // Already a master template, skip or return error
+                            continue;
+                        }
+
+                        // Deactivate existing active Group Master templates with the same name
+                        var allExistingMasters = await _context.MRPTTemplates
+                            .Where(t => t.GroupId == req.TargetGroupId && t.TypeId == source.TypeId
+                                        && t.TemplateName == source.TemplateName)
+                            .ToListAsync();
+
+                        var existingActiveMasters = allExistingMasters.Where(t => t.IsActive == true).ToList();
+                        var latestMaster = allExistingMasters.OrderByDescending(t => t.Version).FirstOrDefault();
+
+                        var lastVersion = latestMaster?.Version ?? 0;
+                        var nextVersion = lastVersion + 1;
+
+                        var webRoot = _env.WebRootPath ?? Path.Combine(Directory.GetCurrentDirectory(), "wwwroot");
+
+                        // Get mapping from source
+                        var srcMapping = await _context.RPTMappings.FirstOrDefaultAsync(m => m.TemplateId == source.TemplateId);
+
+                        // Check if identical to latest master
+                        if (latestMaster != null)
+                        {
+                            var latestMasterMapping = await _context.RPTMappings.FirstOrDefaultAsync(m => m.TemplateId == latestMaster.TemplateId);
+
+                            bool isIdentical = string.Equals(source.SubName, latestMaster.SubName, StringComparison.OrdinalIgnoreCase) &&
+                                               string.Equals(source.ParsedFieldsJson, latestMaster.ParsedFieldsJson, StringComparison.OrdinalIgnoreCase) &&
+                                               string.Equals(source.RequiredFieldsJson, latestMaster.RequiredFieldsJson, StringComparison.OrdinalIgnoreCase) &&
+                                               string.Equals(source.DesignSnapshotJson, latestMaster.DesignSnapshotJson, StringComparison.OrdinalIgnoreCase) &&
+                                               string.Equals(srcMapping?.MappingJson, latestMasterMapping?.MappingJson, StringComparison.OrdinalIgnoreCase) &&
+                                               AreModuleIdsEqual(source.ModuleIds, latestMaster.ModuleIds);
+
+                            if (isIdentical)
+                            {
+                                var sourceAbsolutePath = !string.IsNullOrEmpty(source.RPTFilePath) ? Path.Combine(webRoot, source.RPTFilePath.Replace('/', Path.DirectorySeparatorChar).Replace('\\', Path.DirectorySeparatorChar).TrimStart(Path.DirectorySeparatorChar)) : null;
+                                var masterAbsolutePath = !string.IsNullOrEmpty(latestMaster.RPTFilePath) ? Path.Combine(webRoot, latestMaster.RPTFilePath.Replace('/', Path.DirectorySeparatorChar).Replace('\\', Path.DirectorySeparatorChar).TrimStart(Path.DirectorySeparatorChar)) : null;
+                                
+                                var sourceHash = sourceAbsolutePath != null && System.IO.File.Exists(sourceAbsolutePath) ? ComputeFileHash(sourceAbsolutePath) : null;
+                                var masterHash = masterAbsolutePath != null && System.IO.File.Exists(masterAbsolutePath) ? ComputeFileHash(masterAbsolutePath) : null;
+                                
+                                if (sourceHash == masterHash)
+                                {
+                                    // Skip promotion because it's identical
+                                    continue;
+                                }
+                            }
+                        }
+
+                        existingActiveMasters.ForEach(t => t.IsActive = false);
+
+                        // Calculate physical paths
+                        
+                        var targetFolderParts = new List<string> { webRoot, "rpt-templates", req.TargetGroupId.ToString(), source.TypeId.ToString() };
+                        var targetFolder = Path.Combine(targetFolderParts.ToArray());
+                        Directory.CreateDirectory(targetFolder);
+
+                        var ext = !string.IsNullOrEmpty(source.RPTFilePath) ? Path.GetExtension(source.RPTFilePath) : ".rpt";
+                        var scopeSlug = $"g{req.TargetGroupId}_t{source.TypeId}";
+                        var newFileName = $"{source.TemplateName}_{scopeSlug}_v{nextVersion}{ext}";
+                        var targetAbsolutePath = Path.Combine(targetFolder, newFileName);
+
+                        var targetRelativeParts = new List<string> { "rpt-templates", req.TargetGroupId.ToString(), source.TypeId.ToString() };
+                        var targetRelativePath = Path.Combine(targetRelativeParts.ToArray());
+                        targetRelativePath = Path.Combine(targetRelativePath, newFileName);
+
+                        // Copy physical file if source exists
+                        if (!string.IsNullOrEmpty(source.RPTFilePath))
+                        {
+                            var sourceAbsolutePath = Path.Combine(webRoot, source.RPTFilePath.Replace('/', Path.DirectorySeparatorChar).Replace('\\', Path.DirectorySeparatorChar).TrimStart(Path.DirectorySeparatorChar));
+                            if (System.IO.File.Exists(sourceAbsolutePath))
+                            {
+                                System.IO.File.Copy(sourceAbsolutePath, targetAbsolutePath, true);
+                            }
+                        }
+
+                        // Create new row
+                        var newTemplate = new MRPTTemplate
+                        {
+                            GroupId = req.TargetGroupId,
+                            TypeId = source.TypeId,
+                            TemplateName = source.TemplateName,
+                            SubName = source.SubName,
+                            RPTFilePath = targetRelativePath.Replace('\\', '/'),
+                            ParsedFieldsJson = source.ParsedFieldsJson,
+                            RequiredFieldsJson = source.RequiredFieldsJson,
+                            DesignSnapshotJson = source.DesignSnapshotJson,
+                            ModuleIds = source.ModuleIds,
+                            Version = nextVersion,
+                            IsActive = true,
+                            UploadedByUserId = uploadedByUserId,
+                            CreatedDate = DateTime.Now,
+                            UpdatedDate = DateTime.Now
+                        };
+
+                        _context.MRPTTemplates.Add(newTemplate);
+                        await _context.SaveChangesAsync();
+
+                        // Copy mapping into RPTMappings table
+                        if (srcMapping != null && !string.IsNullOrEmpty(srcMapping.MappingJson))
+                        {
+                            _context.RPTMappings.Add(new RPTMapping
+                            {
+                                TemplateId = newTemplate.TemplateId,
+                                MappingJson = srcMapping.MappingJson
+                            });
+                            await _context.SaveChangesAsync();
+                        }
+
+                        promoted.Add(new { newTemplate.TemplateId, newTemplate.TemplateName, newTemplate.Version });
+                    }
+
+                    await transaction.CommitAsync();
+                }
+                catch (Exception ex)
+                {
+                    await transaction.RollbackAsync();
+                    await _loggerService.LogErrorAsync("Failed to promote templates to group master", ex.Message, nameof(RPTTemplatesController));
+                    return StatusCode(500, $"An error occurred: {ex.Message} - {ex.InnerException?.Message}");
+                }
+            }
+
+            if (promoted.Count == 0 && req.TemplateIds.Count > 0)
+            {
+                return BadRequest("No changes detected between the selected templates and their latest master versions.");
+            }
+
+            await _loggerService.LogEventAsync($"Promoted {promoted.Count} project templates to group {req.TargetGroupId}", "RPTTemplate", uploadedByUserId, 0);
+            return Ok(new { promoted });
         }
 
         // GET: api/RPTTemplates/5/mapping
@@ -1692,6 +1953,22 @@ namespace Tools.Controllers
             return ComputeFileHash(absolutePath);
         }
 
+        private static string? TryGetPreviousHash(MRPTTemplate? prev, string webRoot)
+        {
+            if (prev == null || string.IsNullOrWhiteSpace(prev.RPTFilePath)) return null;
+            var absolutePath = Path.Combine(webRoot, prev.RPTFilePath);
+            if (!System.IO.File.Exists(absolutePath)) return null;
+            return ComputeFileHash(absolutePath);
+        }
+
+        private static bool AreModuleIdsEqual(List<int>? m1, List<int>? m2)
+        {
+            if (m1 == null && m2 == null) return true;
+            if (m1 == null || m2 == null) return false;
+            if (m1.Count != m2.Count) return false;
+            return new HashSet<int>(m1).SetEquals(m2);
+        }
+
         private int GetNextVersion(int templateId)
         {
             var lastVersion = _context.RPTTemplates
@@ -1804,6 +2081,7 @@ namespace Tools.Controllers
         public string? SourceScope { get; set; }
         public bool CopyMappings { get; set; } = true;
         public bool IncludeStandard { get; set; } = true;
+        public List<int>? SelectedTemplateIds { get; set; }
     }
 
     public class SaveMappingRequest
