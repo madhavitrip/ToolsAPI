@@ -17,6 +17,7 @@ namespace Tools.Models
         public List<int>? ModuleIds { get; set; }
         [Required]
         public string? TemplateName { get; set; }
+        public string? SubName { get; set; }
         public string? RPTFilePath { get; set; }
         public string? ParsedFieldsJson { get; set; }
         public string? DesignSnapshotJson { get; set; }
