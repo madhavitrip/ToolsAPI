@@ -4937,22 +4937,25 @@ namespace Tools.Controllers
 
         [HttpGet("~/api/Correction/HeaderVerification/{projectId}")]
         public async Task<IActionResult> GetHeaderVerificationRecords(
-     int projectId,
-     [FromQuery] string? search = null,
-     [FromQuery] string? lotNo = null,
-     [FromQuery] string? status = null,
-     [FromQuery] int page = 1,
-     [FromQuery] int pageSize = 20,
-     [FromQuery] string sortBy = "catchNo",
-     [FromQuery] string sortOrder = "asc",
-     [FromQuery] string? a = null,
-     [FromQuery] string? b = null,
-     [FromQuery] string? c = null,
-     [FromQuery] string? d = null,
-     [FromQuery] string? catchNo = null,
-     [FromQuery] string? date = null,
-     [FromQuery] string? time = null
- )
+            int projectId,
+            [FromQuery] string? search = null,
+            [FromQuery] string? lotNo = null,
+            [FromQuery] string? status = null,
+            [FromQuery] int page = 1,
+            [FromQuery] int pageSize = 20,
+            [FromQuery] string sortBy = "catchNo",
+            [FromQuery] string sortOrder = "asc",
+            [FromQuery] string? a = null,
+            [FromQuery] string? b = null,
+            [FromQuery] string? c = null,
+            [FromQuery] string? d = null,
+            [FromQuery] string? remark = null,
+            [FromQuery] string? catchNo = null,
+            [FromQuery] string? date = null,
+            [FromQuery] string? time = null,
+            [FromQuery] bool? hasRemark = null,
+            [FromQuery] bool? isCorrection = null
+        )
         {
             page = page < 1 ? 1 : page;
             pageSize = pageSize <= 0 ? 20 : pageSize;
@@ -4972,6 +4975,23 @@ namespace Tools.Controllers
                     query = query.Where(x => x.LotNo == lotNoInt);
                 else
                     query = query.Where(x => false); // invalid lot → empty result
+            }
+
+            // Total unique catches with non-empty remarks for this project/lot
+            int totalCorrectionCatches = await query
+                .Where(x => x.Remark != null && x.Remark.Trim() != "")
+                .Select(x => x.CatchNo)
+                .Distinct()
+                .CountAsync();
+
+            // Filter for records with/without remarks (Correction filter)
+            bool? filterHasRemark = hasRemark ?? isCorrection;
+            if (filterHasRemark.HasValue)
+            {
+                if (filterHasRemark.Value)
+                    query = query.Where(x => x.Remark != null && x.Remark.Trim() != "");
+                else
+                    query = query.Where(x => x.Remark == null || x.Remark.Trim() == "");
             }
 
             var records = await query
@@ -5033,6 +5053,7 @@ namespace Tools.Controllers
                     B = GetJsonValue("B"),
                     C = GetJsonValue("C"),
                     D = GetJsonValue("D"),
+                    remark = nrData.Remark ?? "",
                     date = nrData.ExamDate ?? "",
                     time = nrData.ExamTime ?? "",
                     status = (int)verificationStatus,
@@ -5069,6 +5090,9 @@ namespace Tools.Controllers
                         || x.GetType().GetProperty("D")?.GetValue(x)?.ToString()
                             ?.Contains(search, StringComparison.OrdinalIgnoreCase) == true
 
+                        || x.GetType().GetProperty("remark")?.GetValue(x)?.ToString()
+                            ?.Contains(search, StringComparison.OrdinalIgnoreCase) == true
+
                         || x.GetType().GetProperty("date")?.GetValue(x)?.ToString()
                             ?.Contains(search, StringComparison.OrdinalIgnoreCase) == true
 
@@ -5096,11 +5120,21 @@ namespace Tools.Controllers
                 }
             }
 
+            // CORRECTION / HAS REMARK FILTER
+            if (filterHasRemark.HasValue)
+            {
+                if (filterHasRemark.Value)
+                    result = result.Where(x => !string.IsNullOrWhiteSpace(x.GetType().GetProperty("remark")?.GetValue(x)?.ToString())).ToList();
+                else
+                    result = result.Where(x => string.IsNullOrWhiteSpace(x.GetType().GetProperty("remark")?.GetValue(x)?.ToString())).ToList();
+            }
+
             // COLUMN FILTERS 
             if (!string.IsNullOrWhiteSpace(a)) result = result.Where(x => x.GetType().GetProperty("A")?.GetValue(x)?.ToString()?.Contains(a.Trim(), StringComparison.OrdinalIgnoreCase) == true).ToList();
             if (!string.IsNullOrWhiteSpace(b)) result = result.Where(x => x.GetType().GetProperty("B")?.GetValue(x)?.ToString()?.Contains(b.Trim(), StringComparison.OrdinalIgnoreCase) == true).ToList();
             if (!string.IsNullOrWhiteSpace(c)) result = result.Where(x => x.GetType().GetProperty("C")?.GetValue(x)?.ToString()?.Contains(c.Trim(), StringComparison.OrdinalIgnoreCase) == true).ToList();
             if (!string.IsNullOrWhiteSpace(d)) result = result.Where(x => x.GetType().GetProperty("D")?.GetValue(x)?.ToString()?.Contains(d.Trim(), StringComparison.OrdinalIgnoreCase) == true).ToList();
+            if (!string.IsNullOrWhiteSpace(remark)) result = result.Where(x => x.GetType().GetProperty("remark")?.GetValue(x)?.ToString()?.Contains(remark.Trim(), StringComparison.OrdinalIgnoreCase) == true).ToList();
             if (!string.IsNullOrWhiteSpace(catchNo)) result = result.Where(x => x.GetType().GetProperty("catchNo")?.GetValue(x)?.ToString()?.Contains(catchNo.Trim(), StringComparison.OrdinalIgnoreCase) == true).ToList();
             if (!string.IsNullOrWhiteSpace(date)) result = result.Where(x => x.GetType().GetProperty("date")?.GetValue(x)?.ToString()?.Contains(date.Trim(), StringComparison.OrdinalIgnoreCase) == true).ToList();
             if (!string.IsNullOrWhiteSpace(time)) result = result.Where(x => x.GetType().GetProperty("time")?.GetValue(x)?.ToString()?.Contains(time.Trim(), StringComparison.OrdinalIgnoreCase) == true).ToList();
@@ -5168,6 +5202,15 @@ namespace Tools.Controllers
                             x.GetType().GetProperty("D")?.GetValue(x)
                         ).ToList(),
 
+                "remark" =>
+                    isDescending
+                        ? result.OrderByDescending(x =>
+                            x.GetType().GetProperty("remark")?.GetValue(x)
+                        ).ToList()
+                        : result.OrderBy(x =>
+                            x.GetType().GetProperty("remark")?.GetValue(x)
+                        ).ToList(),
+
                 "date" =>
                     isDescending
                         ? result.OrderByDescending(x =>
@@ -5232,10 +5275,50 @@ namespace Tools.Controllers
                     totalRecords = totalRecords,
                     verified = verifiedCount,
                     unclear = unclearCount,
-                    notVerified = notVerifiedCount
+                    notVerified = notVerifiedCount,
+                    correctionCount = totalCorrectionCatches,
+                    hasRemarkCount = totalCorrectionCatches
                 }
             });
         }
+
+        [HttpGet("~/api/Correction/PendingProjects")]
+        public async Task<IActionResult> GetPendingCorrectionProjects()
+        {
+            int roleId = LogHelper.GetUserRoleId(User, Request);
+            if (roleId > 4)
+            {
+                return Ok(new List<object>());
+            }
+
+            var records = await _context.NRDatas
+                .Where(x => x.Status == true && x.CatchNo != null && (
+                    (x.Remark != null && x.Remark.Trim() != "") ||
+                    x.VerificationStatus == (int)HeaderVerificationStatus.NotClear
+                ))
+                .Select(x => new
+                {
+                    x.ProjectId,
+                    x.CatchNo,
+                    HasRemark = x.Remark != null && x.Remark.Trim() != "",
+                    IsReview = x.VerificationStatus == (int)HeaderVerificationStatus.NotClear
+                })
+                .ToListAsync();
+
+            var projectStats = records
+                .GroupBy(x => x.ProjectId)
+                .Select(g => new
+                {
+                    projectId = g.Key,
+                    correctionCount = g.Where(x => x.HasRemark).Select(x => x.CatchNo).Distinct().Count(),
+                    reviewCount = g.Where(x => x.IsReview).Select(x => x.CatchNo).Distinct().Count(),
+                })
+                .Where(x => x.correctionCount > 0 || x.reviewCount > 0)
+                .ToList();
+
+            return Ok(projectStats);
+        }
+
         [HttpPut("~/api/Correction/HeaderVerification/{id}")]
         public async Task<IActionResult> UpdateHeaderVerificationRecord(
             int id,
@@ -5339,19 +5422,51 @@ namespace Tools.Controllers
             int userId = LogHelper.GetTriggeredBy(User);
             DateTime utcNow = DateTime.UtcNow;
 
+            int roleId = LogHelper.GetUserRoleId(User, Request);
+            bool canEditVerifiedFields = (roleId > 0 && roleId <= 4);
+
+            bool isAlreadyVerified = selectedRecord.VerificationStatus == (int)HeaderVerificationStatus.Verified && !canEditVerifiedFields;
+            if (isAlreadyVerified)
+            {
+                statusValue = (int)HeaderVerificationStatus.Verified;
+            }
+
+            bool hasRemark = updateModel.TryGetValue("remark", out var remObj) || updateModel.TryGetValue("Remark", out remObj);
+            string? newRemark = null;
+            if (hasRemark && remObj != null && !string.IsNullOrWhiteSpace(remObj.ToString()))
+            {
+                newRemark = remObj.ToString();
+            }
+
+            bool hasStatus = updateModel.TryGetValue("status", out var statObj) || updateModel.TryGetValue("Status", out statObj);
+
             foreach (var nrData in catchRecords)
             {
-                // Check if status is changing
-                bool statusIsChanging = nrData.VerificationStatus != statusValue;
-
-                // Update the actual database column
-                nrData.VerificationStatus = statusValue;
-
-                // Log who verified and when ONLY if status is changing
-                if (statusIsChanging)
+                bool statusIsChanging = false;
+                if (!isAlreadyVerified)
                 {
-                    nrData.VerifiedBy = userId;
-                    nrData.VerifiedOn = utcNow;
+                    // Check if status is changing
+                    statusIsChanging = nrData.VerificationStatus != statusValue;
+
+                    // Update the actual database column
+                    nrData.VerificationStatus = statusValue;
+
+                    // Log who verified and when ONLY if status is changing
+                    if (statusIsChanging)
+                    {
+                        nrData.VerifiedBy = userId;
+                        nrData.VerifiedOn = utcNow;
+                    }
+                }
+
+                if (hasRemark)
+                {
+                    nrData.Remark = newRemark;
+                }
+                else if (hasStatus && statusIsChanging)
+                {
+                    // Only status updated, clear remark
+                    nrData.Remark = null;
                 }
 
                 // -----------------------------------------------------
@@ -5376,67 +5491,82 @@ namespace Tools.Controllers
                     }
                 }
 
-                data["VerificationStatus"] =
-                    JsonSerializer.SerializeToElement(statusValue);
+                if (!isAlreadyVerified)
+                {
+                    data["VerificationStatus"] =
+                        JsonSerializer.SerializeToElement(statusValue);
+                }
+
+                if (hasRemark)
+                {
+                    data["Remark"] = JsonSerializer.SerializeToElement(newRemark ?? "");
+                }
+                else if (hasStatus && statusIsChanging)
+                {
+                    data["Remark"] = JsonSerializer.SerializeToElement("");
+                }
 
                 nrData.NRDatas =
                     JsonSerializer.Serialize(data);
             }
 
             // ---------------------------------------------------------
-            // 5. Update A/B/C/D for ALL catch records
+            // 5. Update A/B/C/D for ALL catch records (if not verified)
             // ---------------------------------------------------------
 
-            foreach (var nrData in catchRecords)
+            if (!isAlreadyVerified)
             {
-                Dictionary<string, JsonElement> nrDataJson = new();
-
-                if (!string.IsNullOrWhiteSpace(nrData.NRDatas))
+                foreach (var nrData in catchRecords)
                 {
-                    try
+                    Dictionary<string, JsonElement> nrDataJson = new();
+
+                    if (!string.IsNullOrWhiteSpace(nrData.NRDatas))
                     {
-                        nrDataJson =
-                            JsonSerializer.Deserialize<
-                                Dictionary<string, JsonElement>
-                            >(nrData.NRDatas)
-                            ?? new Dictionary<string, JsonElement>();
+                        try
+                        {
+                            nrDataJson =
+                                JsonSerializer.Deserialize<
+                                    Dictionary<string, JsonElement>
+                                >(nrData.NRDatas)
+                                ?? new Dictionary<string, JsonElement>();
+                        }
+                        catch
+                        {
+                            nrDataJson =
+                                new Dictionary<string, JsonElement>();
+                        }
                     }
-                    catch
+
+                    void UpdateJsonValue(string key)
                     {
-                        nrDataJson =
-                            new Dictionary<string, JsonElement>();
+                        if (
+                            updateModel.TryGetValue(key, out var value) &&
+                            value != null
+                        )
+                        {
+                            nrDataJson[key] =
+                                JsonSerializer.SerializeToElement(
+                                    value.ToString()
+                                );
+                        }
                     }
+
+                    UpdateJsonValue("A");
+                    UpdateJsonValue("B");
+                    UpdateJsonValue("C");
+                    UpdateJsonValue("D");
+
+                    nrData.NRDatas =
+                        JsonSerializer.Serialize(nrDataJson);
                 }
 
-                void UpdateJsonValue(string key)
+                // Log verification for the selected record ONLY if status is changing
+                bool selectedStatusIsChanging = selectedRecord.VerificationStatus != statusValue;
+                if (selectedStatusIsChanging)
                 {
-                    if (
-                        updateModel.TryGetValue(key, out var value) &&
-                        value != null
-                    )
-                    {
-                        nrDataJson[key] =
-                            JsonSerializer.SerializeToElement(
-                                value.ToString()
-                            );
-                    }
+                    selectedRecord.VerifiedBy = userId;
+                    selectedRecord.VerifiedOn = utcNow;
                 }
-
-                UpdateJsonValue("A");
-                UpdateJsonValue("B");
-                UpdateJsonValue("C");
-                UpdateJsonValue("D");
-
-                nrData.NRDatas =
-                    JsonSerializer.Serialize(nrDataJson);
-            }
-
-            // Log verification for the selected record ONLY if status is changing
-            bool selectedStatusIsChanging = selectedRecord.VerificationStatus != statusValue;
-            if (selectedStatusIsChanging)
-            {
-                selectedRecord.VerifiedBy = userId;
-                selectedRecord.VerifiedOn = utcNow;
             }
 
             // ---------------------------------------------------------
@@ -5489,6 +5619,8 @@ namespace Tools.Controllers
 
                 lotNo = selectedRecord.LotNo.ToString() ?? "",
 
+                envLotNo = selectedRecord.EnvLotNo.ToString() ?? "",
+
                 A = GetJsonValue("A"),
 
                 B = GetJsonValue("B"),
@@ -5497,6 +5629,8 @@ namespace Tools.Controllers
 
                 D = GetJsonValue("D"),
 
+                remark = selectedRecord.Remark ?? "",
+
                 date = selectedRecord.ExamDate ?? "",
 
                 time = selectedRecord.ExamTime ?? "",
@@ -5504,6 +5638,12 @@ namespace Tools.Controllers
                 status = statusValue,
 
                 statusLabel = verificationStatus.ToString(),
+
+                verifiedBy = selectedRecord.VerifiedBy > 0 ? selectedRecord.VerifiedBy : null,
+
+                verifiedOn = selectedRecord.VerifiedOn.HasValue
+                    ? selectedRecord.VerifiedOn.Value.ToString("dd/MM/yyyy")
+                    : null,
 
                 updatedRows = catchRecords.Count
             });
@@ -6891,5 +7031,7 @@ namespace Tools.Controllers
                 data = lots
             });
         }
+
+
     }
 }
