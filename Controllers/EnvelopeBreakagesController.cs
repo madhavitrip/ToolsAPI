@@ -560,7 +560,8 @@ namespace Tools.Controllers
                                 fileName = name,
                                 version = version,
                                 lotNo = lotNo,
-                                generatedAt = fileInfo.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss")
+                                generatedAt = fileInfo.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss"),
+                               
                             });
                         }
                     }
