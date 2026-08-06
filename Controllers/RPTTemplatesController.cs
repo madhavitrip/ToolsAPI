@@ -1060,6 +1060,11 @@ namespace Tools.Controllers
         [HttpPost("import-from-group")]
         public async Task<ActionResult> ImportFromGroup([FromBody] ImportGroupRequest req)
         {
+            Console.WriteLine($"[DEBUG] ImportFromGroup called. SourceScope={req.SourceScope}, SelectedTemplateIds.Count={(req.SelectedTemplateIds != null ? req.SelectedTemplateIds.Count : 0)}");
+            if (req.SelectedTemplateIds != null)
+            {
+                Console.WriteLine($"[DEBUG] SelectedTemplateIds: {string.Join(", ", req.SelectedTemplateIds)}");
+            }
             // Authorization check: Managers (RoleId 4) cannot import master/standard or group-level templates
             int userRoleId = LogHelper.GetUserRoleId(User, Request);
             var targetProjectId = NormalizeNullableId(req.TargetProjectId);
