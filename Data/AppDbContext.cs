@@ -1,4 +1,4 @@
-﻿using ERPToolsAPI.Models;
+using ERPToolsAPI.Models;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
@@ -39,6 +39,7 @@ namespace ERPToolsAPI.Data
         public DbSet<EnvelopeBreakingResult> EnvelopeBreakingResults { get; set; }
         public DbSet<Mss> Mss { get; set; }
         public DbSet<RPTTemplate> RPTTemplates { get; set; }
+        public DbSet<MRPTTemplate> MRPTTemplates { get; set; }
 
         public DbSet<ProcessSteps> ProcessSteps { get; set; }
 
