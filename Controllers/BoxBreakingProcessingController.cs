@@ -213,6 +213,22 @@ namespace Tools.Controllers
                     }
                 }
 
+                string GetNormalizedCatchNo(string c)
+                {
+                    if (string.IsNullOrWhiteSpace(c)) return "";
+                    int dashIndex = c.LastIndexOf('-');
+                    if (dashIndex > 0 && dashIndex + 1 < c.Length)
+                    {
+                        char firstChar = char.ToUpper(c[dashIndex + 1]);
+                        // Strip suffix only if it starts with 'R' (e.g., -R1, -R2)
+                        if (firstChar == 'R')
+                        {
+                            return c.Substring(0, dashIndex).Trim();
+                        }
+                    }
+                    return c.Trim();
+                }
+
                 // ==============================
                 // Read from EnvelopeBreakingResults and build data rows
                 // ==============================
@@ -328,8 +344,9 @@ namespace Tools.Controllers
                 {
                     var rowDict = (IDictionary<string, object>)row;
                     string catchNo = rowDict["CatchNo"]?.ToString();
+                    string normCatchNo = GetNormalizedCatchNo(catchNo);
 
-                    int start = catchNo != previousCatchNo ? 1 : previousEnd + 1;
+                    int start = normCatchNo != previousCatchNo ? 1 : previousEnd + 1;
                     int end = start + (int)rowDict["TotalEnv"] - 1;
                     string serial = $"{start} to {end}";
 
@@ -339,7 +356,7 @@ namespace Tools.Controllers
 
                     enrichedList.Add(row);
 
-                    previousCatchNo = catchNo;
+                    previousCatchNo = normCatchNo;
                     previousEnd = end;
                 }
 
@@ -485,10 +502,11 @@ namespace Tools.Controllers
                         prevMergeKey = null;
                     }
 
-                    if (previousCatchForOmr != catchNo)
+                    string normCatch = GetNormalizedCatchNo(catchNo);
+                    if (previousCatchForOmr != normCatch)
                     {
                         runningOmrPointer = 0;
-                        previousCatchForOmr = catchNo;
+                        previousCatchForOmr = normCatch;
 
                         if (hasOmr && omrSerial.Contains("-"))
                         {
@@ -536,7 +554,14 @@ namespace Tools.Controllers
                         {
                             var fieldName = fields.FirstOrDefault(f => f.FieldId == fieldId)?.Name;
                             if (fieldName != null && itemDict.ContainsKey(fieldName))
-                                return itemDict[fieldName]?.ToString() ?? "";
+                            {
+                                string val = itemDict[fieldName]?.ToString() ?? "";
+                                if (fieldName.Equals("CatchNo", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    return GetNormalizedCatchNo(val);
+                                }
+                                return val;
+                            }
                             return "";
                         }));
                     }
@@ -584,7 +609,7 @@ namespace Tools.Controllers
                                     .Where(b =>
                                     {
                                         var dict = (IDictionary<string, object>)b;
-                                        return dict["CatchNo"]?.ToString() == catchNo;
+                                        return GetNormalizedCatchNo(dict["CatchNo"]?.ToString()) == normCatch;
                                     })
                                     .OrderBy(b =>
                                     {
