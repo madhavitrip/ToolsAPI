@@ -6149,26 +6149,26 @@ namespace Tools.Controllers
 
         [HttpGet("compare-batches")]
         public async Task<IActionResult> CompareBatches(
-            int projectId,
-            int compareBatch,
-            int lotNo,
-            int pageNo = 1,
-            int pageSize = 20,
-            string? search = null,
-            string? sortField = null,
-            string? sortOrder = null,
-            string? status = null,
-            string? catchNo = null,
-            string? centerCode = null,
-            string? additionalFields = null,
-            int processStep = 0)
+             int projectId,
+             int compareBatch,
+             int lotNo,
+             int pageNo = 1,
+             int pageSize = 20,
+             string? search = null,
+             string? sortField = null,
+             string? sortOrder = null,
+             string? status = null,
+             string? catchNo = null,
+             string? centerCode = null,
+             string? additionalFields = null,
+             int processStep = 0)
         {
             try
             {
                 // Step 0: Fetch all fields from Fields table for uniqueness checking
                 var fieldsFromDb = await _context.Fields.ToListAsync();
                 var fieldDictionary = fieldsFromDb.ToDictionary(
-                    f => f.Name.ToLower(), 
+                    f => f.Name.ToLower(),
                     f => f.IsUnique
                 );
 
@@ -6191,13 +6191,24 @@ namespace Tools.Controllers
                 bool hasCatchInEnv = HasEnvelopeCriteria("catchno") || HasEnvelopeCriteria("catch_no");
                 bool hasAnyEnvCriteria = envelopeCriteriaFieldNames.Any();
 
-                Console.WriteLine($"[CompareBatches] Loaded {fieldsFromDb.Count} fields from Fields table, EnvelopeCriteria: {string.Join(",", envelopeCriteriaFieldNames)}");
+                var duplicateCriteriaIds = projectConfig?.DuplicateCriteria ?? new List<int>();
+                var duplicateCriteriaFieldNames = fieldsFromDb
+                    .Where(f => duplicateCriteriaIds.Contains(f.FieldId))
+                    .Select(f => f.Name.Trim())
+                    .ToList();
+
+                if (!duplicateCriteriaFieldNames.Any())
+                {
+                    duplicateCriteriaFieldNames = new List<string> { "CatchNo", "CenterCode" };
+                }
+
+                Console.WriteLine($"[CompareBatches] Loaded {fieldsFromDb.Count} fields from Fields table, EnvelopeCriteria: {string.Join(",", envelopeCriteriaFieldNames)}, DuplicateCriteria: {string.Join(",", duplicateCriteriaFieldNames)}");
 
                 // Standard fields that are always compared
-                var standardFields = new List<string> 
-                { 
-                    "CenterCode", "NodalCode", "Route", "NRQuantity", 
-                    "SubjectName", "CourseName", "ExamDate", "ExamTime" 
+                var standardFields = new List<string>
+                {
+                    "CenterCode", "NodalCode", "Route", "NRQuantity",
+                    "SubjectName", "CourseName", "ExamDate", "ExamTime"
                 };
 
                 // Get additional JSON keys from parameter (comma-separated)
@@ -6224,12 +6235,31 @@ namespace Tools.Controllers
                 DateTime? endDate = null;
                 ProjectLotRange? lotRange = null;
 
+                var allProjectLotRanges = await _context.ProjectLotRanges
+                    .Where(x => x.ProjectId == projectId)
+                    .ToListAsync();
+
+                string[] lotDateFormats = { "dd-MM-yyyy", "d-M-yyyy", "dd/MM/yyyy", "d/M/yyyy", "yyyy-MM-dd", "yyyy/MM/dd", "dd.MM.yyyy" };
+                var parsedLotRanges = new List<(int LotNo, DateTime StartDate, DateTime EndDate)>();
+                foreach (var plr in allProjectLotRanges)
+                {
+                    if (DateTime.TryParseExact(plr.StartDate?.Trim(), lotDateFormats, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out DateTime sDate) &&
+                        DateTime.TryParseExact(plr.EndDate?.Trim(), lotDateFormats, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out DateTime eDate))
+                    {
+                        parsedLotRanges.Add((plr.LotNo, sDate, eDate));
+                    }
+                    else if (DateTime.TryParse(plr.StartDate, out DateTime sDate2) && DateTime.TryParse(plr.EndDate, out DateTime eDate2))
+                    {
+                        parsedLotRanges.Add((plr.LotNo, sDate2, eDate2));
+                    }
+                }
+
                 if (lotNo > 0)
                 {
                     // Step 1: Get lot range from ProjectLotRange table
-                    lotRange = await _context.ProjectLotRanges
-                        .Where(x => x.ProjectId == projectId && x.LotNo == lotNo)
-                        .FirstOrDefaultAsync();
+                    lotRange = allProjectLotRanges
+                        .Where(x => x.LotNo == lotNo)
+                        .FirstOrDefault();
 
                     if (lotRange == null)
                         return NotFound(new { message = $"Lot {lotNo} range not found for this project." });
@@ -6307,6 +6337,9 @@ namespace Tools.Controllers
                     selectedBatch = selectedBatchAll;
                 }
 
+                baseBatch = baseBatch.Where(x => x.Status).ToList();
+                selectedBatch = selectedBatch.Where(x => x.Status).ToList();
+
                 // Step 4: Check if revised batch has any records in the date range
                 if (!selectedBatch.Any())
                 {
@@ -6326,68 +6359,95 @@ namespace Tools.Controllers
 
                 Console.WriteLine($"[CompareBatches] BaseBatch records: {baseBatch.Count}, SelectedBatch records: {selectedBatch.Count}");
 
-                // Create lookup for Batch 1 (handles duplicate CatchNo + CenterCode)
-                var baseLookup = baseBatch
-                    .GroupBy(x => $"{x.CatchNo?.Trim().ToLower()}|{x.CenterCode?.Trim().ToLower()}")
-                    .ToDictionary(g => g.Key, g => g.ToList());
-
-                var comparisonResult = new List<ComparisonResultDto>();
-
                 // Helper function to check if a field is unique
                 Func<string, bool> IsFieldUnique = (fieldName) =>
                 {
-                    var fieldNameLower = fieldName.ToLower();
+                    var fieldNameLower = (fieldName ?? "").Replace(" ", "").Replace("_", "").ToLowerInvariant();
                     if (fieldDictionary.TryGetValue(fieldNameLower, out var isUnique))
                     {
                         return isUnique;
                     }
-                    // If field not found in Fields table, treat as non-unique (false)
+                    var match = fieldsFromDb.FirstOrDefault(f => f.Name.Replace(" ", "").Replace("_", "").Equals(fieldNameLower, StringComparison.OrdinalIgnoreCase));
+                    if (match != null) return match.IsUnique;
                     return false;
                 };
 
                 // Helper function to get field value from NRData object by field name
-                // Handles both standard NRData properties and JSON keys from NRDatas column
+                // Handles standard NRData properties (case-insensitive & whitespace/underscore agnostic) and JSON keys from NRDatas column
                 Func<NRData, string, object?> GetFieldValue = (record, fieldName) =>
                 {
-                    // First check standard NRData properties
-                    var standardValue = (object?)fieldName switch
+                    if (record == null || string.IsNullOrWhiteSpace(fieldName))
+                        return null;
+
+                    var cleanName = fieldName.Trim();
+                    var normName = cleanName.Replace(" ", "").Replace("_", "").ToLowerInvariant();
+
+                    // 1. Direct match on standard NRData properties
+                    var standardValue = normName switch
                     {
-                        "CenterCode" => record.CenterCode,
-                        "NodalCode" => record.NodalCode,
-                        "Route" => record.Route,
-                        "NRQuantity" => (object?)record.NRQuantity,
-                        "SubjectName" => record.SubjectName,
-                        "CourseName" => record.CourseName,
-                        "ExamDate" => record.ExamDate,
-                        "ExamTime" => record.ExamTime,
-                        "Quantity" => (object?)record.Quantity,
-                        "Day" => record.Day,
-                        "Pages" => (object?)record.Pages,
-                        "RouteSort" => (object?)record.RouteSort,
-                        "CenterSort" => (object?)record.CenterSort,
-                        "NodalSort" => (object?)record.NodalSort,
-                        "Symbol" => record.Symbol,
-                        "District" => record.District,
-                        "DistrictSort" => (object?)record.DistrictSort,
+                        "catchno" or "catch" or "catchnumber" => record.CatchNo,
+                        "centercode" or "centrecode" or "center" or "centre" => record.CenterCode,
+                        "nodalcode" or "nodal" or "nodalcenter" => record.NodalCode,
+                        "route" => record.Route,
+                        "nrquantity" or "nrqty" => (object?)record.NRQuantity,
+                        "quantity" or "qty" => (object?)record.Quantity,
+                        "subjectname" or "subject" => record.SubjectName,
+                        "coursename" or "course" => record.CourseName,
+                        "examdate" or "date" => record.ExamDate,
+                        "examtime" or "time" => record.ExamTime,
+                        "day" => record.Day,
+                        "pages" or "page" => (object?)record.Pages,
+                        "routesort" => (object?)record.RouteSort,
+                        "centersort" or "centresort" => (object?)record.CenterSort,
+                        "nodalsort" => (object?)record.NodalSort,
+                        "symbol" => record.Symbol,
+                        "district" => record.District,
+                        "districtsort" => (object?)record.DistrictSort,
+                        "lotno" or "lot" => (object?)record.LotNo,
+                        "envlotno" => (object?)record.EnvLotNo,
+                        "remark" => record.Remark,
                         _ => null
                     };
 
-                    // If standard value found, return it
                     if (standardValue != null)
                         return standardValue;
 
-                    // Otherwise, try to get from NRDatas JSON
+                    // 2. Reflection fallback on NRData properties
+                    var prop = typeof(NRData).GetProperties()
+                        .FirstOrDefault(p => p.Name.Replace(" ", "").Replace("_", "").Equals(normName, StringComparison.OrdinalIgnoreCase));
+                    if (prop != null)
+                    {
+                        var propVal = prop.GetValue(record);
+                        if (propVal != null)
+                            return propVal;
+                    }
+
+                    // 3. Check NRDatas JSON column
                     if (string.IsNullOrWhiteSpace(record.NRDatas))
                         return null;
 
                     try
                     {
-                        using (var doc = System.Text.Json.JsonDocument.Parse(record.NRDatas))
+                        using var doc = System.Text.Json.JsonDocument.Parse(record.NRDatas);
+                        var root = doc.RootElement;
+                        if (root.ValueKind == System.Text.Json.JsonValueKind.Object)
                         {
-                            var root = doc.RootElement;
-                            if (root.ValueKind == System.Text.Json.JsonValueKind.Object && root.TryGetProperty(fieldName, out var value))
+                            if (root.TryGetProperty(cleanName, out var value))
                             {
-                                return value.GetString() ?? value.ToString();
+                                return value.ValueKind == System.Text.Json.JsonValueKind.String
+                                    ? value.GetString()
+                                    : value.ToString();
+                            }
+
+                            foreach (var property in root.EnumerateObject())
+                            {
+                                var propNorm = property.Name.Replace(" ", "").Replace("_", "").ToLowerInvariant();
+                                if (propNorm == normName)
+                                {
+                                    return property.Value.ValueKind == System.Text.Json.JsonValueKind.String
+                                        ? property.Value.GetString()
+                                        : property.Value.ToString();
+                                }
                             }
                         }
                     }
@@ -6399,10 +6459,249 @@ namespace Tools.Controllers
                     return null;
                 };
 
-                // Compare records from selected batch
+                // Build composite comparison key based on configured DuplicateCriteria fields
+                Func<NRData, string> BuildComparisonKey = (record) =>
+                {
+                    if (record == null) return string.Empty;
+                    var keyParts = duplicateCriteriaFieldNames
+                        .Select(fName => (GetFieldValue(record, fName)?.ToString() ?? "").Trim().ToLowerInvariant());
+                    return string.Join("|", keyParts);
+                };
+
+                // Create lookup for Batch 1 (handles duplicate keys matching configured DuplicateCriteria)
+                var baseLookup = baseBatch
+                    .GroupBy(x => BuildComparisonKey(x))
+                    .ToDictionary(g => g.Key, g => g.ToList());
+
+                var comparisonResult = new List<ComparisonResultDto>();
+                var unmatchedSelectedBatch = new List<NRData>();
+
+                // Helper to get ImportRowNo from JSON if available
+                Func<NRData, string?> GetImportRowNo = (rec) =>
+                {
+                    if (rec == null || string.IsNullOrWhiteSpace(rec.NRDatas)) return null;
+                    try
+                    {
+                        using var doc = System.Text.Json.JsonDocument.Parse(rec.NRDatas);
+                        if (doc.RootElement.TryGetProperty("ImportRowNo", out var rowProp))
+                            return rowProp.GetString() ?? rowProp.ToString();
+                    }
+                    catch { }
+                    return null;
+                };
+
+                // Helper to resolve LotNo from ExamDate string and record LotNo
+                Func<string?, int, int> GetLotNoFromExamDate = (examDateStr, recordLotNo) =>
+                {
+                    if (recordLotNo > 0) return recordLotNo;
+                    if (string.IsNullOrWhiteSpace(examDateStr)) return lotNo > 0 ? lotNo : 0;
+
+                    DateTime? examDate = null;
+                    if (DateTime.TryParseExact(examDateStr.Trim(), lotDateFormats, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out DateTime parsedDate))
+                    {
+                        examDate = parsedDate;
+                    }
+                    else if (DateTime.TryParse(examDateStr.Trim(), out DateTime dt))
+                    {
+                        examDate = dt;
+                    }
+
+                    if (examDate.HasValue)
+                    {
+                        foreach (var range in parsedLotRanges)
+                        {
+                            if (examDate.Value.Date >= range.StartDate.Date && examDate.Value.Date <= range.EndDate.Date)
+                            {
+                                return range.LotNo;
+                            }
+                        }
+                    }
+
+                    return lotNo > 0 ? lotNo : 0;
+                };
+
+                // Helper to determine all applicable statuses for a comparison item
+                Func<List<ChangeDto>, bool, bool, List<string>> GetRecordStatuses = (recordChanges, isAdded, isRemoved) =>
+                {
+                    var list = new List<string>();
+                    if (isAdded)
+                    {
+                        list.Add("Centre Catch Added");
+                        return list;
+                    }
+                    if (isRemoved)
+                    {
+                        list.Add("Centre Catch Removed");
+                        return list;
+                    }
+
+                    if (recordChanges.Any(c => c.Field == "CenterCode" || c.Field == "CenterSort"))
+                    {
+                        list.Add("Center Code Changed");
+                    }
+                    if (recordChanges.Any(c => c.Field == "NRQuantity"))
+                    {
+                        list.Add("Centre Catch Quantity Changed");
+                    }
+                    if (recordChanges.Any(c => c.Field == "NodalCode" || c.Field == "NodalSort"))
+                    {
+                        list.Add("Nodal Changed");
+                    }
+
+                    if (!list.Any())
+                    {
+                        list.Add("Updated");
+                    }
+                    return list;
+                };
+
+                // Helper to construct dynamic and accurate recommendations based on changed fields and process steps
+                Func<NRData?, NRData, List<ChangeDto>, string, string> BuildRecommendation = (oldRec, newRec, recordChanges, status) =>
+                {
+                    if (status.Contains("Centre Catch Removed"))
+                    {
+                        return (processStep >= 7 && processStep <= 10)
+                            ? "No Changes"
+                            : "Remove Center Catch";
+                    }
+
+                    int baseNRQty = oldRec?.NRQuantity ?? 0;
+                    int revisedNRQty = newRec.NRQuantity;
+                    int baseQty = oldRec?.Quantity ?? 0;
+                    bool isNotFulfilled = (revisedNRQty > baseQty);
+
+                    if (processStep == 7)
+                    {
+                        if (status.Contains("Centre Catch Added") ||
+                            status.Contains("Center Code Changed") || status.Contains("Center Changed") ||
+                            status.Contains("Nodal Changed"))
+                        {
+                            return "Treat as New";
+                        }
+
+                        if (isNotFulfilled)
+                        {
+                            return "Treat as New";
+                        }
+
+                        return "No Changes";
+                    }
+
+                    if (processStep == 8 || processStep == 9 || processStep == 10)
+                    {
+                        if (isNotFulfilled)
+                        {
+                            if (processStep == 10)
+                            {
+                                return "Treat as New and Reprocess from Box Breaking";
+                            }
+
+                            string examDateStr = newRec.ExamDate ?? oldRec?.ExamDate ?? "";
+                            int recLotNo = GetLotNoFromExamDate(examDateStr, newRec.LotNo > 0 ? newRec.LotNo : (oldRec?.LotNo ?? 0));
+                            return recLotNo > 0
+                                ? $"Treat as New and Reprocess from Box Breaking for Lot {recLotNo}"
+                                : (lotNo > 0 ? $"Treat as New and Reprocess from Box Breaking for Lot {lotNo}" : "Treat as New and Reprocess from Box Breaking for Lot");
+                        }
+
+                        if (status.Contains("Centre Catch Added") ||
+                            status.Contains("Center Code Changed") || status.Contains("Center Changed") ||
+                            status.Contains("Nodal Changed"))
+                        {
+                            return "Treat as New";
+                        }
+
+                        return "No Changes";
+                    }
+
+                    if (status.Contains("Centre Catch Added"))
+                    {
+                        return ((processStep == 5 || processStep == 6) && (hasCatchInEnv || hasCenterInEnv || hasNodalInEnv || hasAnyEnvCriteria))
+                            ? "Add Centre Catch and Reprocess from Envelope Serializing"
+                            : "Add Centre Catch";
+                    }
+
+                    var nonDiffChanges = recordChanges
+                        .Where(c => c.Field != "Difference")
+                        .ToList();
+
+                    if (!nonDiffChanges.Any())
+                        return "No Changes";
+
+                    var changedFieldNames = new List<string>();
+                    foreach (var c in nonDiffChanges)
+                    {
+                        var f = c.Field ?? "";
+                        var normF = f.Replace(" ", "").Replace("_", "").ToLowerInvariant();
+
+                        if (normF == "centercode" || normF == "centrecode")
+                        {
+                            if (!changedFieldNames.Contains("Center Code"))
+                                changedFieldNames.Add("Center Code");
+                        }
+                        else if (normF == "nrquantity")
+                        {
+                            if (!changedFieldNames.Contains("NRQuantity"))
+                                changedFieldNames.Add("NRQuantity");
+                        }
+                        else if (normF == "nodalcode")
+                        {
+                            if (!changedFieldNames.Contains("Nodal Code"))
+                                changedFieldNames.Add("Nodal Code");
+                        }
+                        else
+                        {
+                            var formatted = System.Text.RegularExpressions.Regex.Replace(f, "([a-z])([A-Z])", "$1 $2");
+                            if (!changedFieldNames.Contains(formatted))
+                                changedFieldNames.Add(formatted);
+                        }
+                    }
+
+                    string fieldsText = "";
+                    if (changedFieldNames.Count == 1)
+                    {
+                        fieldsText = changedFieldNames[0];
+                    }
+                    else if (changedFieldNames.Count == 2)
+                    {
+                        fieldsText = $"{changedFieldNames[0]} and {changedFieldNames[1]}";
+                    }
+                    else
+                    {
+                        fieldsText = string.Join(", ", changedFieldNames.Take(changedFieldNames.Count - 1)) + " and " + changedFieldNames.Last();
+                    }
+
+                    // Reprocess from Enhancement is ONLY shown in Step 2 (and subsequent steps up to 6) when the row is Not Fulfilled (revisedNRQty > baseNRQty && revisedNRQty > baseQty)
+                    bool needsEnhancementReprocess = (processStep >= 2 && processStep <= 6 && isNotFulfilled);
+
+                    bool needsEnvelopeReprocess = (processStep == 5 || processStep == 6) && nonDiffChanges.Any(c =>
+                        HasEnvelopeCriteria(c.Field) ||
+                        (c.Field == "NodalCode" && hasNodalInEnv) ||
+                        (c.Field == "CenterCode" && hasCenterInEnv) ||
+                        (c.Field == "CatchNo" && hasCatchInEnv)
+                    );
+
+                    if (needsEnvelopeReprocess && needsEnhancementReprocess)
+                    {
+                        return $"Update {fieldsText} and Reprocess from Enhancement";
+                    }
+                    else if (needsEnvelopeReprocess)
+                    {
+                        return $"Update {fieldsText} and Reprocess from Envelope Serializing";
+                    }
+                    else if (needsEnhancementReprocess)
+                    {
+                        return $"Update {fieldsText} and Reprocess from Enhancement";
+                    }
+                    else
+                    {
+                        return $"Update {fieldsText}";
+                    }
+                };
+
+                // Stage 1: Exact Key Matching (Primary Match for existing records)
                 foreach (var newRecord in selectedBatch)
                 {
-                    var key = $"{newRecord.CatchNo?.Trim().ToLower()}|{newRecord.CenterCode?.Trim().ToLower()}";
+                    var key = BuildComparisonKey(newRecord);
 
                     if (baseLookup.TryGetValue(key, out var oldRecords) && oldRecords.Any())
                     {
@@ -6436,31 +6735,21 @@ namespace Tools.Controllers
                         int revisedNRQty = newRecord.NRQuantity;
                         int baseQty = oldRecord.Quantity;
 
-                        string fulfilment;
-
-                        if (revisedNRQty > baseNRQty)
-                        {
-                            fulfilment = revisedNRQty <= baseQty
-                                ? "Fulfilled"
-                                : "Not Fulfilled";
-                        }
-                        else
-                        {
-                            fulfilment = "Fulfilled";
-                        }
+                        string fulfilment = (revisedNRQty > baseQty) ? "Not Fulfilled" : "Fulfilled";
 
                         int difference = revisedNRQty - baseNRQty;
 
                         if (difference != 0)
                         {
-                            var diffData = new {
+                            var diffData = new
+                            {
                                 revised = revisedNRQty,
                                 baseNR = baseNRQty,
                                 baseQty = baseQty,
                                 fulfilment = fulfilment,
                                 remaining = fulfilment == "Not Fulfilled" ? (int?)(revisedNRQty - baseQty) : null
                             };
-                            
+
                             changes.Add(new ChangeDto
                             {
                                 Field = "Difference",
@@ -6470,16 +6759,10 @@ namespace Tools.Controllers
                             });
                         }
 
-                    if (changes.Any())
+                        if (changes.Any())
                         {
-                            string recordStatus = "Updated";
-
-                            if (changes.Any(c => c.Field == "NodalCode" || c.Field == "NodalSort"))
-                                recordStatus = "Nodal Changed";
-                            else if (changes.Any(c => c.Field == "CenterCode" || c.Field == "CenterSort"))
-                                recordStatus = "Center Code Changed";
-                            else if (changes.Any(c => c.Field == "NRQuantity"))
-                                recordStatus = "Centre Catch Quantity Changed";
+                            var statuses = GetRecordStatuses(changes, false, false);
+                            string recordStatus = string.Join(", ", statuses);
 
                             string? catchLevelStatus = null;
                             if (changes.Any(c => c.IsConsistentCatchLevelChange))
@@ -6487,80 +6770,14 @@ namespace Tools.Controllers
                                 catchLevelStatus = "Catch-Level Change";
                             }
 
-                            string recommendation = "";
-                            if (changes.Any(c => c.Field == "NRQuantity"))
-                            {
-                                if (processStep == 1 || baseQty >= revisedNRQty)
-                                {
-                                    recommendation = "Update NRQuantity";
-                                }
-                                else if (processStep == 2)
-                                {
-                                    recommendation = "Update NRQuantity and Reprocess from Enhancement";
-                                }
-                                else if (processStep == 3 || processStep == 4 || processStep == 5 || processStep == 6)
-                                {
-                                    recommendation = "Update NRQuantity, Reprocess from Enhancement";
-                                }
-                                else
-                                {
-                                    recommendation = "Update NRQuantity";
-                                }
-                            }
-                            else if (changes.Any(c => c.Field == "NodalCode" || c.Field == "NodalSort"))
-                            {
-                                if ((processStep == 5 || processStep == 6) && hasNodalInEnv)
-                                {
-                                    recommendation = "Update Nodal Code and Reprocess Envelope Serializing";
-                                }
-                                else
-                                {
-                                    recommendation = "Update Nodal Code";
-                                }
-                            }
-                            else if (changes.Any(c => c.Field == "CenterCode" || c.Field == "CenterSort"))
-                            {
-                                if ((processStep == 5 || processStep == 6) && hasCenterInEnv)
-                                {
-                                    recommendation = "Update Center Code and Reprocess from Envelope Serializing";
-                                }
-                                else
-                                {
-                                    recommendation = "Update Center Code";
-                                }
-                            }
-                            else
-                            {
-                                var nonDiffChanges = changes
-                                    .Where(c => c.Field != "Difference")
-                                    .ToList();
-
-                                var updatedFields = nonDiffChanges
-                                    .Select(c => System.Text.RegularExpressions.Regex.Replace(c.Field ?? "", "([a-z])([A-Z])", "$1 $2"))
-                                    .ToList();
-
-                                bool isAnyChangedFieldInEnv = (processStep == 5 || processStep == 6) && nonDiffChanges.Any(c => 
-                                    HasEnvelopeCriteria(c.Field) || 
-                                    (c.Field == "NodalCode" && hasNodalInEnv) || 
-                                    (c.Field == "CenterCode" && hasCenterInEnv) ||
-                                    (c.Field == "CatchNo" && hasCatchInEnv)
-                                );
-
-                                if (isAnyChangedFieldInEnv)
-                                {
-                                    recommendation = "Update " + string.Join(" and ", updatedFields) + " and Reprocess Envelope Serializing";
-                                }
-                                else
-                                {
-                                    recommendation = "Update " + string.Join(" and ", updatedFields);
-                                }
-                            }
+                            string recommendation = BuildRecommendation(oldRecord, newRecord, changes, recordStatus);
 
                             comparisonResult.Add(new ComparisonResultDto
                             {
                                 CatchNo = newRecord.CatchNo,
                                 CenterCode = newRecord.CenterCode,
                                 Status = recordStatus,
+                                Statuses = statuses,
                                 CatchLevelStatus = catchLevelStatus,
                                 Changes = changes,
                                 Recommendation = recommendation
@@ -6569,123 +6786,215 @@ namespace Tools.Controllers
                     }
                     else
                     {
-                        // Check whether this is actually a Center Code Changed
-                        var oldRecord = baseLookup
-                            .SelectMany(x => x.Value)
-                            .FirstOrDefault(x =>
-                                x.CatchNo == newRecord.CatchNo &&
-                                x.NodalCode == newRecord.NodalCode);
-
-                        if (oldRecord != null)
-                        {
-                            string centerCodeRecommendation = ((processStep == 5 || processStep == 6) && hasCenterInEnv)
-                                ? "Update Center Code and Reprocess from Envelope Serializing"
-                                : "Update Center Code";
-
-                            comparisonResult.Add(new ComparisonResultDto
-                            {
-                                CatchNo = newRecord.CatchNo,
-                                CenterCode = newRecord.CenterCode,
-                                Status = "Center Code Changed",
-                                Changes = new List<ChangeDto>
-                                {
-                                    new ChangeDto
-                                    {
-                                        Field = "CenterCode",
-                                        PreviousValue = oldRecord.CenterCode,
-                                        NewValue = newRecord.CenterCode,
-                                        IsUniqueField = true
-                                    }
-                                },
-                                Recommendation = centerCodeRecommendation
-                            });
-
-                            // Remove this record so it is not reported as Removed later
-                            var removeKey = $"{oldRecord.CatchNo?.Trim().ToLower()}|{oldRecord.CenterCode?.Trim().ToLower()}";
-
-                            if (baseLookup.TryGetValue(removeKey, out var list))
-                            {
-                                list.Remove(oldRecord);
-
-                                if (!list.Any())
-                                    baseLookup.Remove(removeKey);
-                            }
-                        }
-                        else
-                        {
-                            // Existing Centre Catch Added logic
-                            var addedChanges = new List<ChangeDto>();
-
-                            foreach (var fieldName in allComparisonFields)
-                            {
-                                var val = GetFieldValue(newRecord, fieldName)?.ToString();
-
-                                if (!string.IsNullOrWhiteSpace(val))
-                                {
-                                    addedChanges.Add(new ChangeDto
-                                    {
-                                        Field = fieldName,
-                                        PreviousValue = null,
-                                        NewValue = val,
-                                        IsUniqueField = IsFieldUnique(fieldName)
-                                    });
-                                }
-                            }
-
-                            if (addedChanges.Any())
-                            {
-                                string? addedCatchLevelStatus = null;
-                                if (addedChanges.Any(c => c.IsConsistentCatchLevelChange))
-                                {
-                                    addedCatchLevelStatus = "Catch-Level Change";
-                                }
-
-                                string addedRecommendation = ((processStep == 5 || processStep == 6) && (hasCatchInEnv || hasCenterInEnv || hasNodalInEnv || hasAnyEnvCriteria))
-                                    ? "Add Centre Catch and Reprocess Envelope Serializing"
-                                    : "Add Centre Catch";
-
-                                comparisonResult.Add(new ComparisonResultDto
-                                {
-                                    CatchNo = newRecord.CatchNo,
-                                    CenterCode = newRecord.CenterCode,
-                                    Status = "Centre Catch Added",
-                                    CatchLevelStatus = addedCatchLevelStatus,
-                                    Changes = addedChanges,
-                                    Recommendation = addedRecommendation
-                                });
-                            }
-                        }
+                        unmatchedSelectedBatch.Add(newRecord);
                     }
                 }
 
-                // Detect Center Code Changed here
+                // Helper to add Center Code Changed result
+                Action<NRData, NRData> AddCenterCodeChangedResult = (oldRecord, newRecord) =>
+                {
+                    var changes = new List<ChangeDto>();
 
+                    changes.Add(new ChangeDto
+                    {
+                        Field = "CenterCode",
+                        PreviousValue = oldRecord.CenterCode,
+                        NewValue = newRecord.CenterCode,
+                        IsUniqueField = true
+                    });
+
+                    // Compare all other fields
+                    foreach (var fieldName in allComparisonFields)
+                    {
+                        var normF = fieldName.Replace(" ", "").Replace("_", "").ToLowerInvariant();
+                        if (normF == "centercode" || normF == "centrecode")
+                            continue;
+
+                        var oldVal = GetFieldValue(oldRecord, fieldName)?.ToString();
+                        var newVal = GetFieldValue(newRecord, fieldName)?.ToString();
+
+                        if ((oldVal ?? "") != (newVal ?? ""))
+                        {
+                            changes.Add(new ChangeDto
+                            {
+                                Field = fieldName,
+                                PreviousValue = oldVal,
+                                NewValue = newVal,
+                                IsUniqueField = IsFieldUnique(fieldName)
+                            });
+                        }
+                    }
+
+                    int baseNRQty = oldRecord.NRQuantity;
+                    int revisedNRQty = newRecord.NRQuantity;
+                    int baseQty = oldRecord.Quantity;
+
+                    string fulfilment = (revisedNRQty > baseQty) ? "Not Fulfilled" : "Fulfilled";
+                    int difference = revisedNRQty - baseNRQty;
+                    if (difference != 0)
+                    {
+                        var diffData = new
+                        {
+                            revised = revisedNRQty,
+                            baseNR = baseNRQty,
+                            baseQty = baseQty,
+                            fulfilment = fulfilment,
+                            remaining = fulfilment == "Not Fulfilled" ? (int?)(revisedNRQty - baseQty) : null
+                        };
+
+                        changes.Add(new ChangeDto
+                        {
+                            Field = "Difference",
+                            PreviousValue = null,
+                            NewValue = System.Text.Json.JsonSerializer.Serialize(diffData),
+                            IsUniqueField = false
+                        });
+                    }
+
+                    var statuses = GetRecordStatuses(changes, false, false);
+                    string recordStatus = string.Join(", ", statuses);
+
+                    string recommendation = BuildRecommendation(oldRecord, newRecord, changes, recordStatus);
+
+                    comparisonResult.Add(new ComparisonResultDto
+                    {
+                        CatchNo = newRecord.CatchNo,
+                        CenterCode = newRecord.CenterCode,
+                        Status = recordStatus,
+                        Statuses = statuses,
+                        Changes = changes,
+                        Recommendation = recommendation
+                    });
+                };
+
+                // Stage 2: Group unmatched records by CatchNo to accurately identify Modified, Added, and Removed centers
                 var remainingBaseByCatch = baseLookup
-    .SelectMany(x => x.Value)
-    .GroupBy(x => x.CatchNo?.Trim().ToLower())
-    .ToDictionary(g => g.Key, g => g.ToList());
-
-                var remainingNewByCatch = selectedBatch
-                    .Where(x =>
-                        !baseBatch.Any(b =>
-                            b.CatchNo == x.CatchNo &&
-                            b.CenterCode == x.CenterCode))
-                    .GroupBy(x => x.CatchNo?.Trim().ToLower())
+                    .SelectMany(x => x.Value)
+                    .Where(x => x.Status)
+                    .GroupBy(x => (GetFieldValue(x, "CatchNo")?.ToString() ?? x.CatchNo ?? "").Trim().ToLower())
                     .ToDictionary(g => g.Key, g => g.ToList());
 
-                // Records present in Batch 1 but not in comparison batch
-                foreach (var recordList in baseLookup.Values)
+                var remainingNewByCatch = unmatchedSelectedBatch
+                    .Where(x => x.Status)
+                    .GroupBy(x => (GetFieldValue(x, "CatchNo")?.ToString() ?? x.CatchNo ?? "").Trim().ToLower())
+                    .ToDictionary(g => g.Key, g => g.ToList());
+
+                var allCatchKeys = remainingBaseByCatch.Keys.Union(remainingNewByCatch.Keys).Distinct().ToList();
+
+                foreach (var catchKey in allCatchKeys)
                 {
-                    foreach (var removedRecord in recordList)
+                    remainingBaseByCatch.TryGetValue(catchKey, out var catchBaseRecords);
+                    catchBaseRecords ??= new List<NRData>();
+
+                    remainingNewByCatch.TryGetValue(catchKey, out var catchNewRecords);
+                    catchNewRecords ??= new List<NRData>();
+
+                    var pairedNew = new HashSet<NRData>();
+                    var pairedBase = new HashSet<NRData>();
+
+                    // 1. Check if newRecord has explicit NRDataId pointing to an existing base record
+                    foreach (var newRec in catchNewRecords)
                     {
-                        var changes = new List<ChangeDto>();
+                        if (newRec.NRDataId > 0)
+                        {
+                            var match = catchBaseRecords.FirstOrDefault(b => !pairedBase.Contains(b) && b.Id == newRec.NRDataId);
+                            if (match != null)
+                            {
+                                pairedNew.Add(newRec);
+                                pairedBase.Add(match);
+                                AddCenterCodeChangedResult(match, newRec);
+                            }
+                        }
+                    }
+
+                    // 2. Check ImportRowNo match
+                    foreach (var newRec in catchNewRecords.Where(n => !pairedNew.Contains(n)))
+                    {
+                        var rowNo = GetImportRowNo(newRec);
+                        if (!string.IsNullOrWhiteSpace(rowNo))
+                        {
+                            var match = catchBaseRecords.FirstOrDefault(b => !pairedBase.Contains(b) && GetImportRowNo(b) == rowNo);
+                            if (match != null)
+                            {
+                                pairedNew.Add(newRec);
+                                pairedBase.Add(match);
+                                AddCenterCodeChangedResult(match, newRec);
+                            }
+                        }
+                    }
+
+                    // 3. If there is 1 remaining base and 1 remaining new in this catch, they form a modified center
+                    var remainingCatchBase = catchBaseRecords.Where(b => !pairedBase.Contains(b)).ToList();
+                    var remainingCatchNew = catchNewRecords.Where(n => !pairedNew.Contains(n)).ToList();
+
+                    if (remainingCatchBase.Count == 1 && remainingCatchNew.Count == 1)
+                    {
+                        var match = remainingCatchBase[0];
+                        var newRec = remainingCatchNew[0];
+                        pairedNew.Add(newRec);
+                        pairedBase.Add(match);
+                        AddCenterCodeChangedResult(match, newRec);
+                    }
+
+                    // 4. Any remaining new records for this catch are genuinely Added centers
+                    foreach (var newRec in catchNewRecords.Where(n => !pairedNew.Contains(n)))
+                    {
+                        var addedChanges = new List<ChangeDto>();
 
                         foreach (var fieldName in allComparisonFields)
                         {
-                            var val = GetFieldValue(removedRecord, fieldName)?.ToString();
+                            var val = GetFieldValue(newRec, fieldName)?.ToString();
+
                             if (!string.IsNullOrWhiteSpace(val))
                             {
-                                changes.Add(new ChangeDto
+                                addedChanges.Add(new ChangeDto
+                                {
+                                    Field = fieldName,
+                                    PreviousValue = null,
+                                    NewValue = val,
+                                    IsUniqueField = IsFieldUnique(fieldName)
+                                });
+                            }
+                        }
+
+                        if (addedChanges.Any())
+                        {
+                            string? addedCatchLevelStatus = null;
+                            if (addedChanges.Any(c => c.IsConsistentCatchLevelChange))
+                            {
+                                addedCatchLevelStatus = "Catch-Level Change";
+                            }
+
+                            string addedRecommendation = (processStep == 7 || processStep == 8 || processStep == 9 || processStep == 10)
+                                ? "Treat as New"
+                                : (((processStep == 5 || processStep == 6) && (hasCatchInEnv || hasCenterInEnv || hasNodalInEnv || hasAnyEnvCriteria))
+                                    ? "Add Centre Catch and Reprocess from Envelope Serializing"
+                                    : "Add Centre Catch");
+
+                            comparisonResult.Add(new ComparisonResultDto
+                            {
+                                CatchNo = newRec.CatchNo,
+                                CenterCode = newRec.CenterCode,
+                                Status = "Centre Catch Added",
+                                Statuses = new List<string> { "Centre Catch Added" },
+                                CatchLevelStatus = addedCatchLevelStatus,
+                                Changes = addedChanges,
+                                Recommendation = addedRecommendation
+                            });
+                        }
+                    }
+
+                    // 5. Any remaining base records for this catch are genuinely Removed centers
+                    foreach (var oldRec in catchBaseRecords.Where(b => !pairedBase.Contains(b)))
+                    {
+                        var removedChanges = new List<ChangeDto>();
+
+                        foreach (var fieldName in allComparisonFields)
+                        {
+                            var val = GetFieldValue(oldRec, fieldName)?.ToString();
+                            if (!string.IsNullOrWhiteSpace(val))
+                            {
+                                removedChanges.Add(new ChangeDto
                                 {
                                     Field = fieldName,
                                     PreviousValue = val,
@@ -6695,25 +7004,26 @@ namespace Tools.Controllers
                             }
                         }
 
-                        if (changes.Any())
+                        if (removedChanges.Any())
                         {
                             string? removedCatchLevelStatus = null;
-                            if (changes.Any(c => c.IsConsistentCatchLevelChange))
+                            if (removedChanges.Any(c => c.IsConsistentCatchLevelChange))
                             {
                                 removedCatchLevelStatus = "Catch-Level Change";
                             }
 
-                            string removedRecommendation = ((processStep == 5 || processStep == 6) && (hasCatchInEnv || hasCenterInEnv || hasNodalInEnv || hasAnyEnvCriteria))
-                                ? "Remove Centre Catch and Reprocess Envelope Serializing"
-                                : "Remove Centre Catch";
+                            string removedRecommendation = (processStep >= 7 && processStep <= 10)
+                                ? "No Changes"
+                                : "Remove Center Catch";
 
                             comparisonResult.Add(new ComparisonResultDto
                             {
-                                CatchNo = removedRecord.CatchNo,
-                                CenterCode = removedRecord.CenterCode,
+                                CatchNo = oldRec.CatchNo,
+                                CenterCode = oldRec.CenterCode,
                                 Status = "Centre Catch Removed",
+                                Statuses = new List<string> { "Centre Catch Removed" },
                                 CatchLevelStatus = removedCatchLevelStatus,
-                                Changes = changes,
+                                Changes = removedChanges,
                                 Recommendation = removedRecommendation
                             });
                         }
@@ -6733,7 +7043,7 @@ namespace Tools.Controllers
                 foreach (var catchGroup in catchGroups)
                 {
                     var catchRecords = catchGroup.ToList();
-                    
+
                     // Skip if this catch has "Added" or "Removed" status (not consistency check)
                     if (catchRecords.Any(x => x.Status == "Centre Catch Added" || x.Status == "Centre Catch Removed"))
                     {
@@ -6749,16 +7059,16 @@ namespace Tools.Controllers
                     foreach (var fieldGroup in uniqueFieldsInCatch)
                     {
                         var fieldChanges = fieldGroup.ToList();
-                        
+
                         // Check if all records for this catch have the same change for this field
                         if (fieldChanges.Count == catchRecords.Count)
                         {
                             // Get the first change as reference
                             var firstChange = fieldChanges.First();
-                            
+
                             // Check if ALL changes for this field are identical
-                            bool allIdentical = fieldChanges.All(c => 
-                                c.PreviousValue == firstChange.PreviousValue && 
+                            bool allIdentical = fieldChanges.All(c =>
+                                c.PreviousValue == firstChange.PreviousValue &&
                                 c.NewValue == firstChange.NewValue);
 
                             // If all identical, mark as consistent catch-level change
@@ -6766,9 +7076,9 @@ namespace Tools.Controllers
                             {
                                 foreach (var record in catchRecords)
                                 {
-                                    var changeToMark = record.Changes.FirstOrDefault(c => 
+                                    var changeToMark = record.Changes.FirstOrDefault(c =>
                                         c.Field == fieldGroup.Key && c.IsUniqueField);
-                                    
+
                                     if (changeToMark != null)
                                     {
                                         changeToMark.IsConsistentCatchLevelChange = true;
@@ -6779,13 +7089,117 @@ namespace Tools.Controllers
                     }
                 }
 
-                // Step 6: Mark records with catch-level changes (but don't overwrite Status)
+                // Step 6: Mark records with catch-level changes (but don't overwrite Status) & handle Step 7 recommendations
                 // Set CatchLevelStatus to indicate this record has consistent catch-level changes
                 foreach (var record in comparisonResult)
                 {
-                    if (record.Changes.Any(c => c.IsConsistentCatchLevelChange))
+                    var catchLevelChanges = record.Changes.Where(c => c.IsConsistentCatchLevelChange).ToList();
+                    if (catchLevelChanges.Any())
                     {
                         record.CatchLevelStatus = "Catch-Level Change";
+
+                        var catchFieldNames = new List<string>();
+                        foreach (var c in catchLevelChanges)
+                        {
+                            var f = c.Field ?? "";
+                            var normF = f.Replace(" ", "").Replace("_", "").ToLowerInvariant();
+
+                            if (normF == "centercode" || normF == "centrecode")
+                            {
+                                if (!catchFieldNames.Contains("Center Code")) catchFieldNames.Add("Center Code");
+                            }
+                            else if (normF == "nrquantity")
+                            {
+                                if (!catchFieldNames.Contains("NRQuantity")) catchFieldNames.Add("NRQuantity");
+                            }
+                            else if (normF == "nodalcode")
+                            {
+                                if (!catchFieldNames.Contains("Nodal Code")) catchFieldNames.Add("Nodal Code");
+                            }
+                            else
+                            {
+                                var formatted = System.Text.RegularExpressions.Regex.Replace(f, "([a-z])([A-Z])", "$1 $2");
+                                if (!catchFieldNames.Contains(formatted)) catchFieldNames.Add(formatted);
+                            }
+                        }
+
+                        string catchFieldsText = "";
+                        if (catchFieldNames.Count == 1) catchFieldsText = catchFieldNames[0];
+                        else if (catchFieldNames.Count == 2) catchFieldsText = $"{catchFieldNames[0]} and {catchFieldNames[1]}";
+                        else if (catchFieldNames.Count > 2) catchFieldsText = string.Join(", ", catchFieldNames.Take(catchFieldNames.Count - 1)) + " and " + catchFieldNames.Last();
+
+                        record.CatchLevelRecommendation = $"Update {catchFieldsText}";
+                    }
+
+                    if (record.Status == "Centre Catch Removed")
+                    {
+                        record.Recommendation = (processStep >= 7 && processStep <= 10)
+                            ? "No Changes"
+                            : "Remove Center Catch";
+                    }
+                    else if (processStep == 7)
+                    {
+                        var diffChange = record.Changes.FirstOrDefault(c => c.Field == "Difference");
+                        bool isNotFulfilled = diffChange?.NewValue != null && diffChange.NewValue.Contains("\"Not Fulfilled\"");
+
+                        var nonDiffChanges = record.Changes.Where(c => c.Field != "Difference").ToList();
+                        bool isPureCatchLevel = nonDiffChanges.Any() && nonDiffChanges.All(c => c.IsConsistentCatchLevelChange);
+
+                        bool isCodeOrAdded = (record.Statuses != null && (record.Statuses.Contains("Center Code Changed") || record.Statuses.Contains("Nodal Changed") || record.Statuses.Contains("Centre Catch Added"))) ||
+                            (record.Status != null && (record.Status.Contains("Center Code Changed") || record.Status.Contains("Nodal Changed") || record.Status.Contains("Centre Catch Added")));
+
+                        if (isNotFulfilled || isCodeOrAdded)
+                        {
+                            record.Recommendation = "Treat as New";
+                        }
+                        else if (isPureCatchLevel)
+                        {
+                            record.Recommendation = record.CatchLevelRecommendation ?? record.Recommendation;
+                        }
+                        else
+                        {
+                            record.Recommendation = "No Changes";
+                        }
+                    }
+                    else if (processStep == 8 || processStep == 9 || processStep == 10)
+                    {
+                        var diffChange = record.Changes.FirstOrDefault(c => c.Field == "Difference");
+                        bool isNotFulfilled = diffChange?.NewValue != null && diffChange.NewValue.Contains("\"Not Fulfilled\"");
+
+                        var nonDiffChanges = record.Changes.Where(c => c.Field != "Difference").ToList();
+                        bool isPureCatchLevel = nonDiffChanges.Any() && nonDiffChanges.All(c => c.IsConsistentCatchLevelChange);
+
+                        bool isCodeOrAdded = (record.Statuses != null && (record.Statuses.Contains("Center Code Changed") || record.Statuses.Contains("Nodal Changed") || record.Statuses.Contains("Centre Catch Added"))) ||
+                            (record.Status != null && (record.Status.Contains("Center Code Changed") || record.Status.Contains("Nodal Changed") || record.Status.Contains("Centre Catch Added")));
+
+                        if (isNotFulfilled)
+                        {
+                            if (processStep == 10)
+                            {
+                                record.Recommendation = "Treat as New and Reprocess from Box Breaking";
+                            }
+                            else if (string.IsNullOrEmpty(record.Recommendation) || !record.Recommendation.Contains("Reprocess from Box Breaking for Lot "))
+                            {
+                                var examDateChange = record.Changes.FirstOrDefault(c => c.Field == "ExamDate");
+                                string examDateStr = examDateChange?.NewValue ?? examDateChange?.PreviousValue ?? "";
+                                int recLotNo = GetLotNoFromExamDate(examDateStr, 0);
+                                record.Recommendation = recLotNo > 0
+                                    ? $"Treat as New and Reprocess from Box Breaking for Lot {recLotNo}"
+                                    : (lotNo > 0 ? $"Treat as New and Reprocess from Box Breaking for Lot {lotNo}" : "Treat as New and Reprocess from Box Breaking for Lot");
+                            }
+                        }
+                        else if (isCodeOrAdded)
+                        {
+                            record.Recommendation = "Treat as New";
+                        }
+                        else if (isPureCatchLevel)
+                        {
+                            record.Recommendation = record.CatchLevelRecommendation ?? record.Recommendation;
+                        }
+                        else
+                        {
+                            record.Recommendation = "No Changes";
+                        }
                     }
                 }
 
@@ -6794,19 +7208,21 @@ namespace Tools.Controllers
                 // Summary counts BEFORE filtering
                 int totalBaseBatchRecords = baseBatch.Count;
                 int totalComparedBatchRecords = selectedBatch.Count;
-                int addedCount = comparisonResult.Count(x => x.Status == "Centre Catch Added");
-                int removedCount = comparisonResult.Count(x => x.Status == "Centre Catch Removed");
-                int nodalChangedCount = comparisonResult.Count(x => x.Status == "Nodal Changed");
-                int quantityChangedCount = comparisonResult.Count(x => x.Status == "Centre Catch Quantity Changed");
-                int updatedCount = comparisonResult.Count(x => x.Status == "Updated");
-                int centerCodeChangedCount = comparisonResult.Count(x => x.Status == "Center Changed");
+                int addedCount = comparisonResult.Count(x => (x.Statuses != null && x.Statuses.Contains("Centre Catch Added")) || (x.Status ?? "").Contains("Centre Catch Added"));
+                int removedCount = comparisonResult.Count(x => (x.Statuses != null && x.Statuses.Contains("Centre Catch Removed")) || (x.Status ?? "").Contains("Centre Catch Removed"));
+                int nodalChangedCount = comparisonResult.Count(x => (x.Statuses != null && x.Statuses.Contains("Nodal Changed")) || (x.Status ?? "").Contains("Nodal Changed"));
+                int quantityChangedCount = comparisonResult.Count(x => (x.Statuses != null && x.Statuses.Contains("Centre Catch Quantity Changed")) || (x.Status ?? "").Contains("Centre Catch Quantity Changed") || (x.Status ?? "").Contains("Quantity Changed"));
+                int updatedCount = comparisonResult.Count(x => (x.Statuses != null && x.Statuses.Contains("Updated")) || x.Status == "Updated");
+                int centerCodeChangedCount = comparisonResult.Count(x => (x.Statuses != null && (x.Statuses.Contains("Center Code Changed") || x.Statuses.Contains("Center Changed"))) || (x.Status ?? "").Contains("Center Code Changed") || (x.Status ?? "").Contains("Center Changed"));
                 int totalDifferences = comparisonResult.Count;
 
                 // Filter by Status
                 if (!string.IsNullOrWhiteSpace(status))
                 {
+                    var filterStatus = status.Trim();
                     comparisonResult = comparisonResult
-                        .Where(x => (x.Status ?? "").Equals(status.Trim(), StringComparison.OrdinalIgnoreCase))
+                        .Where(x => (x.Status ?? "").Contains(filterStatus, StringComparison.OrdinalIgnoreCase) ||
+                                    (x.Statuses != null && x.Statuses.Any(s => s.Equals(filterStatus, StringComparison.OrdinalIgnoreCase))))
                         .ToList();
                 }
 
@@ -6861,8 +7277,63 @@ namespace Tools.Controllers
 
                 // Pagination
                 int filteredTotalCount = comparisonResult.Count;
-                int totalPages = (int)Math.Ceiling(filteredTotalCount / (double)pageSize);
-                var pagedResult = comparisonResult.Skip((pageNo - 1) * pageSize).Take(pageSize).ToList();
+                int totalPages = pageSize > 0 ? (int)Math.Ceiling(filteredTotalCount / (double)pageSize) : 1;
+                var pagedResult = (pageSize > 0)
+                    ? comparisonResult.Skip((pageNo - 1) * pageSize).Take(pageSize).ToList()
+                    : comparisonResult.ToList();
+
+                // --- Fetch Extras Data ---
+                var catchNosInPage = pagedResult
+                    .Select(x => x.CatchNo)
+                    .Where(x => !string.IsNullOrWhiteSpace(x))
+                    .Distinct()
+                    .ToList();
+
+                if (catchNosInPage.Any())
+                {
+                    var extrasData = await _context.ExtrasEnvelope
+                        .Where(e => e.ProjectId == projectId && catchNosInPage.Contains(e.CatchNo))
+                        .ToListAsync();
+
+                    var extraTypes = await _context.ExtraType
+                        .ToDictionaryAsync(e => e.ExtraTypeId, e => e.Type);
+
+                    var extrasByCatch = extrasData
+                        .GroupBy(e => (e.CatchNo ?? "").Trim().ToLower())
+                        .ToDictionary(g => g.Key, g => g.ToList());
+
+                    foreach (var record in pagedResult)
+                    {
+                        var normCatch = (record.CatchNo ?? "").Trim().ToLower();
+                        if (extrasByCatch.TryGetValue(normCatch, out var catchExtras))
+                        {
+                            var summedExtras = catchExtras
+                                .GroupBy(e => e.ExtraId)
+                                .Select(g => new { ExtraId = g.Key, Quantity = g.Sum(x => x.Quantity) })
+                                .ToList();
+
+                            var extraStrings = new List<string>();
+                            foreach (var extra in summedExtras)
+                            {
+                                if (extraTypes.TryGetValue(extra.ExtraId, out string? typeName) && !string.IsNullOrWhiteSpace(typeName))
+                                {
+                                    string lowerType = typeName.Trim().ToLower();
+                                    string prefix = lowerType == "university" ? "uni" :
+                                                    lowerType == "office copy" ? "offc" :
+                                                    lowerType == "nodal extra" ? "nodal" : typeName;
+                                    
+                                    extraStrings.Add($"{prefix}: {extra.Quantity}");
+                                }
+                            }
+                            
+                            if (extraStrings.Any())
+                            {
+                                record.Extras = string.Join(", ", extraStrings);
+                            }
+                        }
+                    }
+                }
+                // --- End Fetch Extras Data ---
 
                 return Ok(new
                 {
@@ -6889,9 +7360,10 @@ namespace Tools.Controllers
                         CenterCodeChanged = centerCodeChangedCount
                     },
                     // New: Counts for All Changes and Catch-Level Changes
-                    AllChangesCount = comparisonResult.Count(x => 
+                    AllChangesCount = comparisonResult.Count(x =>
                         x.Changes.Any(c => !c.IsUniqueField || (c.IsUniqueField && !c.IsConsistentCatchLevelChange)) ||
-                        x.Status == "Centre Catch Added" || x.Status == "Centre Catch Removed"),
+                        (x.Statuses != null && (x.Statuses.Contains("Centre Catch Added") || x.Statuses.Contains("Centre Catch Removed"))) ||
+                        (x.Status ?? "").Contains("Centre Catch Added") || (x.Status ?? "").Contains("Centre Catch Removed")),
                     CatchLevelChangesCount = comparisonResult
                         .Where(x => x.Changes.Any(c => c.IsConsistentCatchLevelChange))
                         .Select(x => x.CatchNo)
@@ -6917,9 +7389,12 @@ namespace Tools.Controllers
             public string? CatchNo { get; set; }
             public string? CenterCode { get; set; }
             public string? Status { get; set; }
+            public List<string> Statuses { get; set; } = new();
             public string? CatchLevelStatus { get; set; } = null; // Only set if this record has catch-level changes
+            public string? CatchLevelRecommendation { get; set; } = null;
             public List<ChangeDto> Changes { get; set; } = new();
             public string? Recommendation { get; set; }
+            public string? Extras { get; set; }
         }
 
         public class ChangeDto
@@ -7032,6 +7507,881 @@ namespace Tools.Controllers
             });
         }
 
+        [HttpPost("apply-comparison-changes")]
+        public async Task<IActionResult> ApplyComparisonChanges([FromBody] ApplyComparisonChangesDto model)
+        {
+            try
+            {
+                if (model == null || model.ProjectId <= 0 || model.CompareBatch <= 0)
+                {
+                    return BadRequest(new { message = "ProjectId and CompareBatch are required." });
+                }
+
+                int projectId = model.ProjectId;
+                int compareBatch = model.CompareBatch;
+                int lotNo = model.LotNo;
+                int processStep = model.ProcessStep;
+                string processName = "";
+
+                if (model.ProcessId.HasValue && model.ProcessId.Value > 0)
+                {
+                    var processObj = await _context.ProcessSteps.FirstOrDefaultAsync(p => p.ProcessId == model.ProcessId.Value);
+                    if (processObj != null)
+                    {
+                        if (processStep <= 0)
+                            processStep = processObj.Steps;
+                        processName = processObj.ProcessName ?? "";
+                    }
+                }
+
+                // Step 0: Fetch DuplicateCriteria from ProjectConfigs
+                var fieldsFromDb = await _context.Fields.ToListAsync();
+                var fieldDictionary = fieldsFromDb.ToDictionary(
+                    f => f.Name.Replace(" ", "").Replace("_", "").ToLowerInvariant(),
+                    f => f.IsUnique
+                );
+
+                Func<string, bool> IsFieldUnique = (fieldName) =>
+                {
+                    var fieldNameLower = (fieldName ?? "").Replace(" ", "").Replace("_", "").ToLowerInvariant();
+                    if (fieldNameLower is "coursename" or "subjectname" or "examdate" or "examtime" or "day" or "pages")
+                        return true;
+
+                    if (fieldDictionary.TryGetValue(fieldNameLower, out var isUnique))
+                    {
+                        return isUnique;
+                    }
+                    var match = fieldsFromDb.FirstOrDefault(f => f.Name.Replace(" ", "").Replace("_", "").Equals(fieldNameLower, StringComparison.OrdinalIgnoreCase));
+                    if (match != null) return match.IsUnique;
+                    return false;
+                };
+
+                Func<string?, string?, string?> MergeUniqueJsonFields = (targetJson, sourceJson) =>
+                {
+                    if (string.IsNullOrWhiteSpace(sourceJson))
+                        return targetJson;
+
+                    try
+                    {
+                        using var sourceDoc = System.Text.Json.JsonDocument.Parse(sourceJson);
+                        if (sourceDoc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Object)
+                            return targetJson;
+
+                        var dict = new Dictionary<string, object?>();
+                        if (!string.IsNullOrWhiteSpace(targetJson))
+                        {
+                            try
+                            {
+                                using var targetDoc = System.Text.Json.JsonDocument.Parse(targetJson);
+                                if (targetDoc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Object)
+                                {
+                                    foreach (var prop in targetDoc.RootElement.EnumerateObject())
+                                    {
+                                        dict[prop.Name] = prop.Value.Clone();
+                                    }
+                                }
+                            }
+                            catch { }
+                        }
+
+                        foreach (var prop in sourceDoc.RootElement.EnumerateObject())
+                        {
+                            if (IsFieldUnique(prop.Name))
+                            {
+                                dict[prop.Name] = prop.Value.Clone();
+                            }
+                        }
+
+                        return System.Text.Json.JsonSerializer.Serialize(dict);
+                    }
+                    catch
+                    {
+                        return targetJson;
+                    }
+                };
+
+                var projectConfig = await _context.ProjectConfigs.FirstOrDefaultAsync(c => c.ProjectId == projectId);
+                var duplicateCriteriaIds = projectConfig?.DuplicateCriteria ?? new List<int>();
+                var duplicateCriteriaFieldNames = fieldsFromDb
+                    .Where(f => duplicateCriteriaIds.Contains(f.FieldId))
+                    .Select(f => f.Name.Trim())
+                    .ToList();
+
+                if (!duplicateCriteriaFieldNames.Any())
+                {
+                    duplicateCriteriaFieldNames = new List<string> { "CatchNo", "CenterCode" };
+                }
+
+                Func<NRData, string, object?> GetFieldValue = (record, fieldName) =>
+                {
+                    if (record == null || string.IsNullOrWhiteSpace(fieldName))
+                        return null;
+
+                    var cleanName = fieldName.Trim();
+                    var normName = cleanName.Replace(" ", "").Replace("_", "").ToLowerInvariant();
+
+                    // 1. Direct match on standard NRData properties
+                    var standardValue = normName switch
+                    {
+                        "catchno" or "catch" or "catchnumber" => record.CatchNo,
+                        "centercode" or "centrecode" or "center" or "centre" => record.CenterCode,
+                        "nodalcode" or "nodal" or "nodalcenter" => record.NodalCode,
+                        "route" => record.Route,
+                        "nrquantity" or "nrqty" => (object?)record.NRQuantity,
+                        "quantity" or "qty" => (object?)record.Quantity,
+                        "subjectname" or "subject" => record.SubjectName,
+                        "coursename" or "course" => record.CourseName,
+                        "examdate" or "date" => record.ExamDate,
+                        "examtime" or "time" => record.ExamTime,
+                        "day" => record.Day,
+                        "pages" or "page" => (object?)record.Pages,
+                        "routesort" => (object?)record.RouteSort,
+                        "centersort" or "centresort" => (object?)record.CenterSort,
+                        "nodalsort" => (object?)record.NodalSort,
+                        "symbol" => record.Symbol,
+                        "district" => record.District,
+                        "districtsort" => (object?)record.DistrictSort,
+                        "lotno" or "lot" => (object?)record.LotNo,
+                        "envlotno" => (object?)record.EnvLotNo,
+                        "remark" => record.Remark,
+                        _ => null
+                    };
+
+                    if (standardValue != null)
+                        return standardValue;
+
+                    // 2. Reflection fallback on NRData properties
+                    var prop = typeof(NRData).GetProperties()
+                        .FirstOrDefault(p => p.Name.Replace(" ", "").Replace("_", "").Equals(normName, StringComparison.OrdinalIgnoreCase));
+                    if (prop != null)
+                    {
+                        var propVal = prop.GetValue(record);
+                        if (propVal != null)
+                            return propVal;
+                    }
+
+                    // 3. Check NRDatas JSON column
+                    if (string.IsNullOrWhiteSpace(record.NRDatas))
+                        return null;
+
+                    try
+                    {
+                        using var doc = System.Text.Json.JsonDocument.Parse(record.NRDatas);
+                        var root = doc.RootElement;
+                        if (root.ValueKind == System.Text.Json.JsonValueKind.Object)
+                        {
+                            if (root.TryGetProperty(cleanName, out var value))
+                            {
+                                return value.ValueKind == System.Text.Json.JsonValueKind.String
+                                    ? value.GetString()
+                                    : value.ToString();
+                            }
+
+                            foreach (var property in root.EnumerateObject())
+                            {
+                                var propNorm = property.Name.Replace(" ", "").Replace("_", "").ToLowerInvariant();
+                                if (propNorm == normName)
+                                {
+                                    return property.Value.ValueKind == System.Text.Json.JsonValueKind.String
+                                        ? property.Value.GetString()
+                                        : property.Value.ToString();
+                                }
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[ApplyComparisonChanges] Error parsing NRDatas JSON for field {fieldName}: {ex.Message}");
+                    }
+
+                    return null;
+                };
+
+                Func<NRData, string> BuildComparisonKey = (record) =>
+                {
+                    if (record == null) return string.Empty;
+                    var keyParts = duplicateCriteriaFieldNames
+                        .Select(fName => (GetFieldValue(record, fName)?.ToString() ?? "").Trim().ToLowerInvariant());
+                    return string.Join("|", keyParts);
+                };
+
+                DateTime? startDate = null;
+                DateTime? endDate = null;
+                ProjectLotRange? lotRange = null;
+
+                if (lotNo > 0)
+                {
+                    lotRange = await _context.ProjectLotRanges
+                        .Where(x => x.ProjectId == projectId && x.LotNo == lotNo)
+                        .FirstOrDefaultAsync();
+
+                    if (lotRange == null)
+                        return NotFound(new { message = $"Lot {lotNo} range not found for this project." });
+
+                    if (!DateTime.TryParseExact(lotRange.StartDate, "dd-MM-yyyy", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out DateTime parsedStartDate))
+                        return BadRequest(new { message = $"Invalid StartDate format in ProjectLotRange: {lotRange.StartDate}" });
+                    startDate = parsedStartDate;
+
+                    if (!DateTime.TryParseExact(lotRange.EndDate, "dd-MM-yyyy", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out DateTime parsedEndDate))
+                        return BadRequest(new { message = $"Invalid EndDate format in ProjectLotRange: {lotRange.EndDate}" });
+                    endDate = parsedEndDate;
+                }
+
+                // Fetch Base Batch (Batch 1)
+                var baseBatchQuery = _context.NRDatas
+                    .Where(x => x.ProjectId == projectId && x.Batch == 1 && x.Status);
+
+                if (lotNo > 0)
+                {
+                    baseBatchQuery = baseBatchQuery.Where(x => x.LotNo == lotNo);
+                }
+
+                var baseBatch = await baseBatchQuery.ToListAsync();
+
+                if (!baseBatch.Any())
+                {
+                    string msg = lotNo > 0 ? $"Base Batch (Batch 1) with Lot {lotNo} not found." : "Base Batch (Batch 1) not found for this project.";
+                    return NotFound(new { message = msg });
+                }
+
+                // Fetch Comparison Batch
+                var selectedBatchAllQuery = _context.NRDatas
+                    .Where(x => x.ProjectId == projectId && x.Batch == compareBatch && x.Status);
+
+                var selectedBatchAll = await selectedBatchAllQuery.ToListAsync();
+
+                if (!selectedBatchAll.Any())
+                {
+                    return NotFound(new { message = $"Comparison Batch {compareBatch} has no active records." });
+                }
+
+                var selectedBatch = new List<NRData>();
+                if (lotNo > 0)
+                {
+                    // Check if any records in comparison batch have ExamDate
+                    bool hasExamDates = selectedBatchAll.Any(x => !string.IsNullOrWhiteSpace(x.ExamDate) && x.ExamDate.Trim().ToLower() != "null");
+                    if (!hasExamDates)
+                    {
+                        return BadRequest(new { message = "No exam date in comparison NR, cannot update lot wise." });
+                    }
+
+                    foreach (var record in selectedBatchAll)
+                    {
+                        if (DateTime.TryParseExact(record.ExamDate, "dd-MM-yyyy", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out DateTime examDate))
+                        {
+                            if (examDate >= startDate && examDate <= endDate)
+                            {
+                                selectedBatch.Add(record);
+                            }
+                        }
+                    }
+
+                    if (!selectedBatch.Any())
+                    {
+                        return BadRequest(new { message = $"Cannot update lot-wise: Batch {compareBatch} doesn't have exam dates in the range {lotRange?.StartDate} to {lotRange?.EndDate}." });
+                    }
+                }
+                else
+                {
+                    selectedBatch = selectedBatchAll;
+                }
+
+                baseBatch = baseBatch.Where(x => x.Status).ToList();
+                selectedBatch = selectedBatch.Where(x => x.Status).ToList();
+
+                // Now apply updates based on processStep
+                if (processStep >= 0)
+                {
+                    int updatedCount = 0;
+                    int addedCount = 0;
+                    int removedCount = 0;
+                    bool hasNotFulfilledChanges = false;
+
+                    var affectedEnvLots = new HashSet<int>();
+                    var updatedCatchLevelData = new Dictionary<string, NRData>(StringComparer.OrdinalIgnoreCase);
+
+                    var selectedKeys = new HashSet<string>(
+                        (model.SelectedItems ?? new List<SelectedChangeItemDto>())
+                            .Where(s => !string.IsNullOrWhiteSpace(s.CenterCode))
+                            .Select(s => $"{(s.CatchNo ?? "").Trim().ToLower()}|{(s.CenterCode ?? "").Trim().ToLower()}")
+                    );
+
+                    var selectedCatchOnly = new HashSet<string>(
+                        (model.SelectedItems ?? new List<SelectedChangeItemDto>())
+                            .Where(s => string.IsNullOrWhiteSpace(s.CenterCode))
+                            .Select(s => (s.CatchNo ?? "").Trim().ToLower())
+                    );
+
+                    Func<NRData, bool> IsRecordSelected = (r) =>
+                    {
+                        if (model.SelectedItems == null || !model.SelectedItems.Any())
+                            return true; // Push all if no specific items specified
+
+                        string catchNoLower = (r.CatchNo ?? "").Trim().ToLower();
+                        string centerCodeLower = (r.CenterCode ?? "").Trim().ToLower();
+
+                        if (selectedCatchOnly.Contains(catchNoLower))
+                            return true;
+
+                        return selectedKeys.Contains($"{catchNoLower}|{centerCodeLower}");
+                    };
+
+                    if (model.SelectedItems == null || !model.SelectedItems.Any())
+                    {
+                        foreach (var rec in selectedBatch)
+                        {
+                            string cKey = (rec.CatchNo ?? "").Trim();
+                            if (!string.IsNullOrEmpty(cKey) && !updatedCatchLevelData.ContainsKey(cKey))
+                            {
+                                updatedCatchLevelData[cKey] = rec;
+                            }
+                        }
+                    }
+
+                    Action<NRData, NRData, bool> SyncRecordFields = (target, source, isNotFulfilled) =>
+                    {
+                        string cKey = (source.CatchNo ?? "").Trim();
+                        if (!string.IsNullOrEmpty(cKey) && !updatedCatchLevelData.ContainsKey(cKey))
+                        {
+                            updatedCatchLevelData[cKey] = source;
+                        }
+
+                        string sourceNodalCode = (source.NodalCode ?? GetFieldValue(source, "NodalCode")?.ToString() ?? "").Trim();
+                        string targetNodalCode = (target.NodalCode ?? GetFieldValue(target, "NodalCode")?.ToString() ?? "").Trim();
+
+                        string sourceCenterCode = (source.CenterCode ?? GetFieldValue(source, "CenterCode")?.ToString() ?? "").Trim();
+                        string targetCenterCode = (target.CenterCode ?? GetFieldValue(target, "CenterCode")?.ToString() ?? "").Trim();
+
+                        bool isCenterCodeChanged = string.Compare(
+                            targetCenterCode,
+                            sourceCenterCode,
+                            StringComparison.OrdinalIgnoreCase) != 0 ||
+                            target.CenterSort != source.CenterSort;
+
+                        bool isNodalCodeChanged = string.Compare(
+                            targetNodalCode,
+                            sourceNodalCode,
+                            StringComparison.OrdinalIgnoreCase) != 0 ||
+                            target.NodalSort != source.NodalSort;
+
+                        bool isCodeChanged = isCenterCodeChanged || isNodalCodeChanged;
+
+                        int newRecordStep;
+                        if (processStep >= 2)
+                        {
+                            if (isNotFulfilled)
+                            {
+                                // Whenever compare-batches shows "Reprocess from Enhancement" (Not Fulfilled), set Steps = 1
+                                newRecordStep = 1;
+                            }
+                            else if ((processStep == 5 || processStep == 6) && isCodeChanged)
+                            {
+                                // For step 5/6: Center Code / Nodal changed updates its step to 4 ("Reprocess from Envelope Serializing")
+                                newRecordStep = 4;
+                            }
+                            else if (processStep == 7 && isNotFulfilled)
+                            {
+                                newRecordStep = (target.Steps > processStep) ? processStep : target.Steps;
+                            }
+                            else
+                            {
+                                // Fulfilled: maintain at current step, but cap at processStep
+                                newRecordStep = (target.Steps > processStep) ? processStep : target.Steps;
+                            }
+                        }
+                        else
+                        {
+                            // Step 1 or 0: set Steps = 1
+                            newRecordStep = 1;
+                        }
+
+                        if (newRecordStep == 4 || newRecordStep == 1)
+                        {
+                            if (target.EnvLotNo > 0)
+                            {
+                                affectedEnvLots.Add(target.EnvLotNo);
+                            }
+                            if (source.EnvLotNo > 0)
+                            {
+                                affectedEnvLots.Add(source.EnvLotNo);
+                            }
+                        }
+
+                        if (isCodeChanged)
+                        {
+                            // 1. Deactivate previous row record (status = 0 / false)
+                            if (processStep != 7)
+                            {
+                                target.Status = false;
+                            }
+
+                            // 2. Add the center code changed row or nodal code changed row as new row with status = 1 (true)
+                            var newBaseRecord = new NRData
+                            {
+                                ProjectId = projectId,
+                                Batch = 1,
+                                Status = true,
+                                LotNo = lotNo > 0 ? lotNo : (source.LotNo > 0 ? source.LotNo : target.LotNo),
+                                CourseName = source.CourseName,
+                                SubjectName = source.SubjectName,
+                                CenterCode = !string.IsNullOrWhiteSpace(sourceCenterCode) ? sourceCenterCode : source.CenterCode,
+                                Quantity = (processStep == 1 || processStep == 0 || isNotFulfilled) ? source.Quantity : target.Quantity,
+                                NRQuantity = source.NRQuantity,
+                                CatchNo = source.CatchNo,
+                                ExamDate = source.ExamDate,
+                                ExamTime = source.ExamTime,
+                                Day = source.Day,
+                                NodalCode = !string.IsNullOrWhiteSpace(sourceNodalCode) ? sourceNodalCode : source.NodalCode,
+                                Pages = source.Pages,
+                                Route = source.Route,
+                                RouteSort = source.RouteSort,
+                                CenterSort = source.CenterSort,
+                                NodalSort = source.NodalSort,
+                                Symbol = source.Symbol,
+                                District = source.District,
+                                DistrictSort = source.DistrictSort,
+                                NRDatas = source.NRDatas,
+                                Steps = newRecordStep,
+                                EnvLotNo = (newRecordStep < 5) ? 0 : (source.EnvLotNo > 0 ? source.EnvLotNo : target.EnvLotNo),
+                                Remark = source.Remark
+                            };
+
+                            _context.NRDatas.Add(newBaseRecord);
+                            baseBatch.Add(newBaseRecord);
+                        }
+                        else
+                        {
+                            target.CourseName = source.CourseName;
+                            target.SubjectName = source.SubjectName;
+                            target.CenterCode = !string.IsNullOrWhiteSpace(sourceCenterCode) ? sourceCenterCode : source.CenterCode;
+                            if (processStep == 7 && isNotFulfilled)
+                            {
+                                target.NRQuantity = target.Quantity;
+                            }
+                            else
+                            {
+                                target.NRQuantity = source.NRQuantity;
+                            }
+                            target.CatchNo = source.CatchNo;
+                            target.ExamDate = source.ExamDate;
+                            target.ExamTime = source.ExamTime;
+                            target.Day = source.Day;
+                            target.NodalCode = !string.IsNullOrWhiteSpace(sourceNodalCode) ? sourceNodalCode : source.NodalCode;
+                            target.Pages = source.Pages;
+                            target.Route = source.Route;
+                            target.RouteSort = source.RouteSort;
+                            target.CenterSort = source.CenterSort;
+                            target.NodalSort = source.NodalSort;
+                            target.Symbol = source.Symbol;
+                            target.District = source.District;
+                            target.DistrictSort = source.DistrictSort;
+                            target.NRDatas = source.NRDatas;
+                            target.EnvLotNo = (newRecordStep < 5) ? 0 : source.EnvLotNo;
+                            target.Remark = source.Remark;
+                            if (lotNo > 0)
+                            {
+                                target.LotNo = lotNo;
+                            }
+
+                            if (processStep == 1 || processStep == 0 || isNotFulfilled)
+                            {
+                                target.Quantity = source.Quantity;
+                            }
+
+                            target.Steps = newRecordStep;
+
+                            if (processStep == 7 && isNotFulfilled)
+                            {
+                                var remainderRow = new NRData
+                                {
+                                    ProjectId = projectId,
+                                    Batch = 1,
+                                    Status = true,
+                                    LotNo = lotNo > 0 ? lotNo : target.LotNo,
+                                    CourseName = source.CourseName,
+                                    SubjectName = source.SubjectName,
+                                    CenterCode = !string.IsNullOrWhiteSpace(sourceCenterCode) ? sourceCenterCode : source.CenterCode,
+                                    Quantity = target.Quantity,
+                                    NRQuantity = source.NRQuantity - target.Quantity,
+                                    CatchNo = (source.CatchNo ?? "").Trim() + "-R",
+                                    ExamDate = source.ExamDate,
+                                    ExamTime = source.ExamTime,
+                                    Day = source.Day,
+                                    NodalCode = !string.IsNullOrWhiteSpace(sourceNodalCode) ? sourceNodalCode : source.NodalCode,
+                                    Pages = source.Pages,
+                                    Route = source.Route,
+                                    RouteSort = source.RouteSort,
+                                    CenterSort = source.CenterSort,
+                                    NodalSort = source.NodalSort,
+                                    Symbol = source.Symbol,
+                                    District = source.District,
+                                    DistrictSort = source.DistrictSort,
+                                    NRDatas = source.NRDatas,
+                                    Steps = 1,
+                                    EnvLotNo = 0,
+                                    Remark = source.Remark
+                                };
+                                _context.NRDatas.Add(remainderRow);
+                                baseBatch.Add(remainderRow);
+                            }
+                        }
+                    };
+
+                    var baseLookup = baseBatch
+                        .GroupBy(x => BuildComparisonKey(x))
+                        .ToDictionary(g => g.Key, g => g.ToList());
+
+                    var unmatchedSelectedBatch = new List<NRData>();
+
+                    Func<NRData, string?> GetImportRowNo = (rec) =>
+                    {
+                        if (rec == null || string.IsNullOrWhiteSpace(rec.NRDatas)) return null;
+                        try
+                        {
+                            using var doc = System.Text.Json.JsonDocument.Parse(rec.NRDatas);
+                            if (doc.RootElement.TryGetProperty("ImportRowNo", out var rowProp))
+                                return rowProp.GetString() ?? rowProp.ToString();
+                        }
+                        catch { }
+                        return null;
+                    };
+
+                    // Stage 1: Exact key matches
+                    foreach (var newRecord in selectedBatch)
+                    {
+                        var key = BuildComparisonKey(newRecord);
+
+                        if (baseLookup.TryGetValue(key, out var oldRecords) && oldRecords.Any())
+                        {
+                            var oldRecord = oldRecords.First();
+                            oldRecords.RemoveAt(0);
+
+                            if (!oldRecords.Any())
+                                baseLookup.Remove(key);
+
+                            if (IsRecordSelected(newRecord))
+                            {
+                                int baseNRQty = oldRecord.NRQuantity;
+                                int revisedNRQty = newRecord.NRQuantity;
+                                int baseQty = oldRecord.Quantity;
+
+                                bool isNotFulfilled = (revisedNRQty > baseQty);
+                                if (isNotFulfilled)
+                                {
+                                    hasNotFulfilledChanges = true;
+                                }
+
+                                // Push whatever has changed in comparison NR to Base Batch (Batch 1)
+                                SyncRecordFields(oldRecord, newRecord, isNotFulfilled);
+                                updatedCount++;
+                            }
+                        }
+                        else
+                        {
+                            unmatchedSelectedBatch.Add(newRecord);
+                        }
+                    }
+
+                    // Stage 2: Unmatched records grouped by catch
+                    var remainingBaseByCatch = baseLookup
+                        .SelectMany(x => x.Value)
+                        .Where(x => x.Status)
+                        .GroupBy(x => (GetFieldValue(x, "CatchNo")?.ToString() ?? x.CatchNo ?? "").Trim().ToLower())
+                        .ToDictionary(g => g.Key, g => g.ToList());
+
+                    var remainingNewByCatch = unmatchedSelectedBatch
+                        .Where(x => x.Status)
+                        .GroupBy(x => (GetFieldValue(x, "CatchNo")?.ToString() ?? x.CatchNo ?? "").Trim().ToLower())
+                        .ToDictionary(g => g.Key, g => g.ToList());
+
+                    var allCatchKeys = remainingBaseByCatch.Keys.Union(remainingNewByCatch.Keys).Distinct().ToList();
+
+                    foreach (var catchKey in allCatchKeys)
+                    {
+                        remainingBaseByCatch.TryGetValue(catchKey, out var catchBaseRecords);
+                        catchBaseRecords ??= new List<NRData>();
+
+                        remainingNewByCatch.TryGetValue(catchKey, out var catchNewRecords);
+                        catchNewRecords ??= new List<NRData>();
+
+                        var pairedNew = new HashSet<NRData>();
+                        var pairedBase = new HashSet<NRData>();
+
+                        // 1. Check NRDataId match
+                        foreach (var newRec in catchNewRecords)
+                        {
+                            if (newRec.NRDataId > 0)
+                            {
+                                var match = catchBaseRecords.FirstOrDefault(b => !pairedBase.Contains(b) && b.Id == newRec.NRDataId);
+                                if (match != null)
+                                {
+                                    pairedNew.Add(newRec);
+                                    pairedBase.Add(match);
+                                    if (IsRecordSelected(newRec))
+                                    {
+                                        int baseNRQty = match.NRQuantity;
+                                        int revisedNRQty = newRec.NRQuantity;
+                                        int baseQty = match.Quantity;
+
+                                        bool isNotFulfilled = (revisedNRQty > baseQty);
+                                        if (isNotFulfilled)
+                                        {
+                                            hasNotFulfilledChanges = true;
+                                        }
+
+                                        SyncRecordFields(match, newRec, isNotFulfilled);
+                                        updatedCount++;
+                                    }
+                                }
+                            }
+                        }
+
+                        // 2. Check ImportRowNo match
+                        foreach (var newRec in catchNewRecords.Where(n => !pairedNew.Contains(n)))
+                        {
+                            var rowNo = GetImportRowNo(newRec);
+                            if (!string.IsNullOrWhiteSpace(rowNo))
+                            {
+                                var match = catchBaseRecords.FirstOrDefault(b => !pairedBase.Contains(b) && GetImportRowNo(b) == rowNo);
+                                if (match != null)
+                                {
+                                    pairedNew.Add(newRec);
+                                    pairedBase.Add(match);
+                                    if (IsRecordSelected(newRec))
+                                    {
+                                        int baseNRQty = match.NRQuantity;
+                                        int revisedNRQty = newRec.NRQuantity;
+                                        int baseQty = match.Quantity;
+
+                                        bool isNotFulfilled = (revisedNRQty > baseQty);
+                                        if (isNotFulfilled)
+                                        {
+                                            hasNotFulfilledChanges = true;
+                                        }
+
+                                        SyncRecordFields(match, newRec, isNotFulfilled);
+                                        updatedCount++;
+                                    }
+                                }
+                            }
+                        }
+
+                        // 3. 1-to-1 match in catch
+                        var remainingCatchBase = catchBaseRecords.Where(b => !pairedBase.Contains(b)).ToList();
+                        var remainingCatchNew = catchNewRecords.Where(n => !pairedNew.Contains(n)).ToList();
+
+                        if (remainingCatchBase.Count == 1 && remainingCatchNew.Count == 1)
+                        {
+                            var match = remainingCatchBase[0];
+                            var newRec = remainingCatchNew[0];
+                            pairedNew.Add(newRec);
+                            pairedBase.Add(match);
+                            if (IsRecordSelected(newRec))
+                            {
+                                int baseNRQty = match.NRQuantity;
+                                int revisedNRQty = newRec.NRQuantity;
+                                int baseQty = match.Quantity;
+
+                                bool isNotFulfilled = (revisedNRQty > baseQty);
+                                if (isNotFulfilled)
+                                {
+                                    hasNotFulfilledChanges = true;
+                                }
+
+                                SyncRecordFields(match, newRec, isNotFulfilled);
+                                updatedCount++;
+                            }
+                        }
+
+                        // 4. Truly added centers in comparison NR
+                        foreach (var newRec in catchNewRecords.Where(n => !pairedNew.Contains(n)))
+                        {
+                            if (IsRecordSelected(newRec))
+                            {
+                                string cKey = (newRec.CatchNo ?? "").Trim();
+                                if (!string.IsNullOrEmpty(cKey) && !updatedCatchLevelData.ContainsKey(cKey))
+                                {
+                                    updatedCatchLevelData[cKey] = newRec;
+                                }
+
+                                hasNotFulfilledChanges = true;
+
+                                int addedStep = (processStep == 5 || processStep == 6) ? 4 : (processStep == 7 ? 7 : 1);
+                                if (addedStep == 4)
+                                {
+                                    if (newRec.EnvLotNo > 0)
+                                    {
+                                        affectedEnvLots.Add(newRec.EnvLotNo);
+                                    }
+                                    foreach (var bRec in catchBaseRecords.Where(b => b.EnvLotNo > 0))
+                                    {
+                                        affectedEnvLots.Add(bRec.EnvLotNo);
+                                    }
+                                }
+
+                                var addedRecord = new NRData
+                                {
+                                    ProjectId = projectId,
+                                    Batch = 1,
+                                    Status = true,
+                                    LotNo = lotNo > 0 ? lotNo : newRec.LotNo,
+                                    CourseName = newRec.CourseName,
+                                    SubjectName = newRec.SubjectName,
+                                    CenterCode = newRec.CenterCode,
+                                    Quantity = newRec.Quantity,
+                                    NRQuantity = newRec.NRQuantity,
+                                    CatchNo = newRec.CatchNo,
+                                    ExamDate = newRec.ExamDate,
+                                    ExamTime = newRec.ExamTime,
+                                    Day = newRec.Day,
+                                    NodalCode = newRec.NodalCode,
+                                    Pages = newRec.Pages,
+                                    Route = newRec.Route,
+                                    RouteSort = newRec.RouteSort,
+                                    CenterSort = newRec.CenterSort,
+                                    NodalSort = newRec.NodalSort,
+                                    Symbol = newRec.Symbol,
+                                    District = newRec.District,
+                                    DistrictSort = newRec.DistrictSort,
+                                    NRDatas = newRec.NRDatas,
+                                    Steps = addedStep,
+                                    EnvLotNo = (addedStep == 4) ? 0 : newRec.EnvLotNo,
+                                    Remark = newRec.Remark
+                                };
+                                _context.NRDatas.Add(addedRecord);
+                                addedCount++;
+                            }
+                        }
+
+                        // 5. Truly removed centers in comparison NR
+                        foreach (var oldRec in catchBaseRecords.Where(b => !pairedBase.Contains(b)))
+                        {
+                            if (IsRecordSelected(oldRec))
+                            {
+                                if (processStep != 7)
+                                {
+                                    oldRec.Status = false;
+                                }
+                                removedCount++;
+
+                                if ((processStep == 5 || processStep == 6) && oldRec.EnvLotNo > 0)
+                                {
+                                    affectedEnvLots.Add(oldRec.EnvLotNo);
+                                }
+                            }
+                        }
+                    }
+
+                    // Catch-level changes propagation:
+                    // Update unique / catch-level fields across ALL centers in baseBatch for affected catches
+                    foreach (var kvp in updatedCatchLevelData)
+                    {
+                        string catchKey = kvp.Key;
+                        var sourceRec = kvp.Value;
+
+                        var allBaseCentersForCatch = baseBatch
+                            .Where(b => b.Status && string.Equals((b.CatchNo ?? "").Trim(), catchKey, StringComparison.OrdinalIgnoreCase))
+                            .ToList();
+
+                        foreach (var baseCenterRec in allBaseCentersForCatch)
+                        {
+                            baseCenterRec.CourseName = sourceRec.CourseName;
+                            baseCenterRec.SubjectName = sourceRec.SubjectName;
+                            baseCenterRec.ExamDate = sourceRec.ExamDate;
+                            baseCenterRec.ExamTime = sourceRec.ExamTime;
+                            baseCenterRec.Day = sourceRec.Day;
+                            baseCenterRec.Pages = sourceRec.Pages;
+
+                            if (IsFieldUnique("Symbol") && !string.IsNullOrWhiteSpace(sourceRec.Symbol))
+                            {
+                                baseCenterRec.Symbol = sourceRec.Symbol;
+                            }
+
+                            if (IsFieldUnique("Remark") && !string.IsNullOrWhiteSpace(sourceRec.Remark))
+                            {
+                                baseCenterRec.Remark = sourceRec.Remark;
+                            }
+
+                            if (!string.IsNullOrWhiteSpace(sourceRec.NRDatas))
+                            {
+                                baseCenterRec.NRDatas = MergeUniqueJsonFields(baseCenterRec.NRDatas, sourceRec.NRDatas);
+                            }
+
+                            if (baseCenterRec.Steps > processStep)
+                            {
+                                baseCenterRec.Steps = processStep;
+                            }
+                        }
+                    }
+
+                    // For step 6 (and step 5): If any row's step is set to 4, check its EnvLotNo and reset EnvLotNo = 0
+                    // for ALL active records across the Base Batch that have that EnvLotNo
+                    if ((processStep == 6 || processStep == 5) && affectedEnvLots.Any())
+                    {
+                        var envLotsList = affectedEnvLots.Where(x => x > 0).Distinct().ToList();
+                        if (envLotsList.Any())
+                        {
+                            var affectedBaseRecords = await _context.NRDatas
+                                .Where(x => x.ProjectId == projectId && x.Batch == 1 && x.Status && envLotsList.Contains(x.EnvLotNo))
+                                .ToListAsync();
+
+                            foreach (var rec in affectedBaseRecords)
+                            {
+                                rec.EnvLotNo = 0;
+                            }
+
+                            foreach (var rec in baseBatch.Where(x => x.Status && envLotsList.Contains(x.EnvLotNo)))
+                            {
+                                rec.EnvLotNo = 0;
+                            }
+                        }
+                    }
+
+                    await _context.SaveChangesAsync();
+
+                    return Ok(new
+                    {
+                        success = true,
+                        message = "Changes successfully pushed to Base Batch (Batch 1).",
+                        projectId = projectId,
+                        compareBatch = compareBatch,
+                        lotNo = lotNo,
+                        processStep = processStep,
+                        updatedCount = updatedCount,
+                        addedCount = addedCount,
+                        removedCount = removedCount,
+                        totalChangesApplied = updatedCount + addedCount + removedCount
+                    });
+                }
+                else
+                {
+                    return BadRequest(new { message = $"Process step {processStep} is invalid." });
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[ApplyComparisonChanges] Exception: {ex}");
+                return StatusCode(500, new { message = "An error occurred while applying batch changes.", error = ex.Message });
+            }
+        }
 
     }
+
+    public class SelectedChangeItemDto
+    {
+        public string? CatchNo { get; set; }
+        public string? CenterCode { get; set; }
+    }
+
+    public class ApplyComparisonChangesDto
+    {
+        public int ProjectId { get; set; }
+        public int CompareBatch { get; set; }
+        public int LotNo { get; set; } = 0;
+        public int ProcessStep { get; set; } = 0;
+        public int? ProcessId { get; set; }
+        public string? AdditionalFields { get; set; }
+        public List<SelectedChangeItemDto>? SelectedItems { get; set; }
+    }
 }
+

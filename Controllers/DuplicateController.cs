@@ -331,11 +331,11 @@ namespace Tools.Controllers
             }
         }
         [HttpPost("Enhancement")]
-        public async Task<IActionResult> ApplyEnhancement(int ProjectId)
+        public async Task<IActionResult> ApplyEnhancement(int ProjectId, [FromQuery] int? batch = null)
         {
             try
             {
-                Console.WriteLine($"ApplyEnhancement API called for ProjectId: {ProjectId}");
+                Console.WriteLine($"ApplyEnhancement API called for ProjectId: {ProjectId}, batch: {batch}");
 
                 // Normalize NULL numeric fields to 0 to avoid materialization errors
                 await _context.Database.ExecuteSqlRawAsync(@"
@@ -352,9 +352,19 @@ WHERE ProjectId = {0};", ProjectId);
 
                 Console.WriteLine("[ApplyEnhancement] Database raw update completed.");
 
-                var data = await _context.NRDatas
-                    .Where(p => p.ProjectId == ProjectId && p.Status==true && p.Steps==Tools.Models.PipelineNavigator.STEP_DUP_PARTIAL)
-                    .ToListAsync();
+                IQueryable<NRData> query = _context.NRDatas
+                    .Where(p => p.ProjectId == ProjectId && p.Status == true);
+
+                if (batch.HasValue && batch.Value > 0)
+                {
+                    query = query.Where(p => p.Batch == batch.Value);
+                }
+                else
+                {
+                    query = query.Where(p => p.Batch == 1 || p.Steps == Tools.Models.PipelineNavigator.STEP_DUP_PARTIAL);
+                }
+
+                var data = await query.ToListAsync();
 
                 Console.WriteLine($"[ApplyEnhancement] Data loaded: {data.Count} records found.");
 
