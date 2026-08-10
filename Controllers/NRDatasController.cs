@@ -7282,6 +7282,59 @@ namespace Tools.Controllers
                     ? comparisonResult.Skip((pageNo - 1) * pageSize).Take(pageSize).ToList()
                     : comparisonResult.ToList();
 
+                // --- Fetch Extras Data ---
+                var catchNosInPage = pagedResult
+                    .Select(x => x.CatchNo)
+                    .Where(x => !string.IsNullOrWhiteSpace(x))
+                    .Distinct()
+                    .ToList();
+
+                if (catchNosInPage.Any())
+                {
+                    var extrasData = await _context.ExtrasEnvelope
+                        .Where(e => e.ProjectId == projectId && catchNosInPage.Contains(e.CatchNo))
+                        .ToListAsync();
+
+                    var extraTypes = await _context.ExtraType
+                        .ToDictionaryAsync(e => e.ExtraTypeId, e => e.Type);
+
+                    var extrasByCatch = extrasData
+                        .GroupBy(e => (e.CatchNo ?? "").Trim().ToLower())
+                        .ToDictionary(g => g.Key, g => g.ToList());
+
+                    foreach (var record in pagedResult)
+                    {
+                        var normCatch = (record.CatchNo ?? "").Trim().ToLower();
+                        if (extrasByCatch.TryGetValue(normCatch, out var catchExtras))
+                        {
+                            var summedExtras = catchExtras
+                                .GroupBy(e => e.ExtraId)
+                                .Select(g => new { ExtraId = g.Key, Quantity = g.Sum(x => x.Quantity) })
+                                .ToList();
+
+                            var extraStrings = new List<string>();
+                            foreach (var extra in summedExtras)
+                            {
+                                if (extraTypes.TryGetValue(extra.ExtraId, out string? typeName) && !string.IsNullOrWhiteSpace(typeName))
+                                {
+                                    string lowerType = typeName.Trim().ToLower();
+                                    string prefix = lowerType == "university" ? "uni" :
+                                                    lowerType == "office copy" ? "offc" :
+                                                    lowerType == "nodal extra" ? "nodal" : typeName;
+                                    
+                                    extraStrings.Add($"{prefix}: {extra.Quantity}");
+                                }
+                            }
+                            
+                            if (extraStrings.Any())
+                            {
+                                record.Extras = string.Join(", ", extraStrings);
+                            }
+                        }
+                    }
+                }
+                // --- End Fetch Extras Data ---
+
                 return Ok(new
                 {
                     ProjectId = projectId,
@@ -7341,6 +7394,7 @@ namespace Tools.Controllers
             public string? CatchLevelRecommendation { get; set; } = null;
             public List<ChangeDto> Changes { get; set; } = new();
             public string? Recommendation { get; set; }
+            public string? Extras { get; set; }
         }
 
         public class ChangeDto
@@ -7825,10 +7879,14 @@ namespace Tools.Controllers
                                 // For step 5/6: Center Code / Nodal changed updates its step to 4 ("Reprocess from Envelope Serializing")
                                 newRecordStep = 4;
                             }
+                            else if (processStep == 7 && isNotFulfilled)
+                            {
+                                newRecordStep = (target.Steps > processStep) ? processStep : target.Steps;
+                            }
                             else
                             {
-                                // Fulfilled: maintain at current step (e.g. 2, 3, 4, 5, 6...)
-                                newRecordStep = processStep;
+                                // Fulfilled: maintain at current step, but cap at processStep
+                                newRecordStep = (target.Steps > processStep) ? processStep : target.Steps;
                             }
                         }
                         else
@@ -7852,7 +7910,10 @@ namespace Tools.Controllers
                         if (isCodeChanged)
                         {
                             // 1. Deactivate previous row record (status = 0 / false)
-                            target.Status = false;
+                            if (processStep != 7)
+                            {
+                                target.Status = false;
+                            }
 
                             // 2. Add the center code changed row or nodal code changed row as new row with status = 1 (true)
                             var newBaseRecord = new NRData
@@ -7893,7 +7954,14 @@ namespace Tools.Controllers
                             target.CourseName = source.CourseName;
                             target.SubjectName = source.SubjectName;
                             target.CenterCode = !string.IsNullOrWhiteSpace(sourceCenterCode) ? sourceCenterCode : source.CenterCode;
-                            target.NRQuantity = source.NRQuantity;
+                            if (processStep == 7 && isNotFulfilled)
+                            {
+                                target.NRQuantity = target.Quantity;
+                            }
+                            else
+                            {
+                                target.NRQuantity = source.NRQuantity;
+                            }
                             target.CatchNo = source.CatchNo;
                             target.ExamDate = source.ExamDate;
                             target.ExamTime = source.ExamTime;
@@ -7921,6 +7989,41 @@ namespace Tools.Controllers
                             }
 
                             target.Steps = newRecordStep;
+
+                            if (processStep == 7 && isNotFulfilled)
+                            {
+                                var remainderRow = new NRData
+                                {
+                                    ProjectId = projectId,
+                                    Batch = 1,
+                                    Status = true,
+                                    LotNo = lotNo > 0 ? lotNo : target.LotNo,
+                                    CourseName = source.CourseName,
+                                    SubjectName = source.SubjectName,
+                                    CenterCode = !string.IsNullOrWhiteSpace(sourceCenterCode) ? sourceCenterCode : source.CenterCode,
+                                    Quantity = target.Quantity,
+                                    NRQuantity = source.NRQuantity - target.Quantity,
+                                    CatchNo = (source.CatchNo ?? "").Trim() + "-R",
+                                    ExamDate = source.ExamDate,
+                                    ExamTime = source.ExamTime,
+                                    Day = source.Day,
+                                    NodalCode = !string.IsNullOrWhiteSpace(sourceNodalCode) ? sourceNodalCode : source.NodalCode,
+                                    Pages = source.Pages,
+                                    Route = source.Route,
+                                    RouteSort = source.RouteSort,
+                                    CenterSort = source.CenterSort,
+                                    NodalSort = source.NodalSort,
+                                    Symbol = source.Symbol,
+                                    District = source.District,
+                                    DistrictSort = source.DistrictSort,
+                                    NRDatas = source.NRDatas,
+                                    Steps = 1,
+                                    EnvLotNo = 0,
+                                    Remark = source.Remark
+                                };
+                                _context.NRDatas.Add(remainderRow);
+                                baseBatch.Add(remainderRow);
+                            }
                         }
                     };
 
@@ -8103,7 +8206,7 @@ namespace Tools.Controllers
 
                                 hasNotFulfilledChanges = true;
 
-                                int addedStep = (processStep == 5 || processStep == 6) ? 4 : 1;
+                                int addedStep = (processStep == 5 || processStep == 6) ? 4 : (processStep == 7 ? 7 : 1);
                                 if (addedStep == 4)
                                 {
                                     if (newRec.EnvLotNo > 0)
@@ -8155,7 +8258,10 @@ namespace Tools.Controllers
                         {
                             if (IsRecordSelected(oldRec))
                             {
-                                oldRec.Status = false;
+                                if (processStep != 7)
+                                {
+                                    oldRec.Status = false;
+                                }
                                 removedCount++;
 
                                 if ((processStep == 5 || processStep == 6) && oldRec.EnvLotNo > 0)
@@ -8199,6 +8305,11 @@ namespace Tools.Controllers
                             if (!string.IsNullOrWhiteSpace(sourceRec.NRDatas))
                             {
                                 baseCenterRec.NRDatas = MergeUniqueJsonFields(baseCenterRec.NRDatas, sourceRec.NRDatas);
+                            }
+
+                            if (baseCenterRec.Steps > processStep)
+                            {
+                                baseCenterRec.Steps = processStep;
                             }
                         }
                     }
