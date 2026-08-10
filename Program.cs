@@ -13,6 +13,7 @@ using Microsoft.Extensions.Options;
 using Tools.Models;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
+using ToolsAPI.Models;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -21,9 +22,11 @@ builder.Services.AddDbContext<ERPToolsDbContext>(options =>
         ServerVersion.AutoDetect(builder.Configuration.GetConnectionString("ERPToolsDb"))));
 builder.Services.AddScoped<ILoggerService, LoggerService>();
 builder.Services.AddScoped<IAuthorizationService, AuthorizationService>();
+builder.Services.AddScoped<IMasterAuthService, MasterAuthService>();
 
 // Register API settings from configuration
 builder.Services.Configure<ApiSettings>(builder.Configuration.GetSection("ApiSettings"));
+builder.Services.Configure<MasterAuthSettings>(builder.Configuration.GetSection("MasterAuthSettings"));
 
 // Add JWT Auth
 
@@ -84,6 +87,17 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 
 // Add services to the container.
 builder.Services.AddHttpClient();
+
+// Add custom HttpClient that bypasses SSL verification for development (RPT Service)
+builder.Services.AddHttpClient("RptService")
+    .ConfigurePrimaryHttpMessageHandler(() =>
+    {
+        var handler = new HttpClientHandler();
+        // Bypass SSL certificate validation for development
+        handler.ServerCertificateCustomValidationCallback = (message, cert, chain, errors) => true;
+        return handler;
+    });
+
 builder.Services.AddHttpClient<IDispatchService, DispatchService>();
 builder.Services.AddControllers();
 builder.Services.Configure<FormOptions>(options =>

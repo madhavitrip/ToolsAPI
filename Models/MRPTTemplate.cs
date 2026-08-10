@@ -4,6 +4,7 @@ using System.ComponentModel.DataAnnotations.Schema;
 
 namespace Tools.Models
 {
+    [Table("mrpttemplates")]
     public class MRPTTemplate
     {
         [Key]
