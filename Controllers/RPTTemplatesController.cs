@@ -17,6 +17,7 @@ using System.Text.Json.Nodes;
 using System.Security.Cryptography;
 using Tools.Models;
 using Tools.Services;
+using Tools.Middleware;
 
 namespace Tools.Controllers
 {
@@ -564,13 +565,24 @@ namespace Tools.Controllers
             }
             else if (projectId.HasValue && groupId.HasValue)
             {
-                // Project template - all authorized roles allowed (1, 2, 3, 4)
-                if (userRoleId != 1 && userRoleId != 2 && userRoleId != 3 && userRoleId != 4)
+                // Project template - all authorized roles allowed (1, 2, 3, 4) OR if project is assigned to the user
+                bool isAssigned = false;
+                int userId = LogHelper.GetTriggeredBy(User, Request);
+                if (userId > 0)
+                {
+                    var project = await _context.Projects.FirstOrDefaultAsync(p => p.ProjectId == projectId.Value);
+                    if (project != null && project.UserAssigned != null && project.UserAssigned.Contains(userId))
+                    {
+                        isAssigned = true;
+                    }
+                }
+
+                if (!isAssigned && userRoleId != 1 && userRoleId != 2 && userRoleId != 3 && userRoleId != 4)
                 {
                     await _loggerService.LogEventAsync(
-                        $"AUTHORIZATION DENIED: User with RoleId {userRoleId} attempted to upload project template '{templateName}'",
+                        $"AUTHORIZATION DENIED: User {userId} (Role {userRoleId}) attempted to upload project template '{templateName}'",
                         "RPTTemplate",
-                        LogHelper.GetTriggeredBy(User),
+                        userId,
                         0
                     );
                     return StatusCode(403, new { message = "You are not authorized to upload RPT templates for this project." });
@@ -628,11 +640,16 @@ namespace Tools.Controllers
             Directory.CreateDirectory(folder);
             var fileName     = $"{templateName}_{scopeSlug}_v{lastVersion + 1}{ext}";
             var absolutePath = Path.Combine(folder, fileName);
-            var relativePath = Path.Combine(folderParts.Skip(1).ToArray());
-            relativePath = Path.Combine(relativePath, fileName);
+            var relativePath = string.Join("/", folderParts.Skip(1)) + "/" + fileName;
 
-            using (var stream = new FileStream(absolutePath, FileMode.Create))
-                await file.CopyToAsync(stream);
+            using (var readStream = file.OpenReadStream())
+            {
+                readStream.Position = 0;
+                using (var writeStream = new FileStream(absolutePath, FileMode.Create))
+                {
+                    await readStream.CopyToAsync(writeStream);
+                }
+            }
 
             var (parsedFields, parseError) = await ParseFieldsAsync(absolutePath, file.FileName);
             if (!string.IsNullOrWhiteSpace(parseError))
@@ -718,6 +735,7 @@ namespace Tools.Controllers
                 RPTFilePath  = relativePath,   // store relative path only
                 ParsedFieldsJson = parsedFieldsJson,
                 RequiredFieldsJson = requiredFieldsJson,
+                DesignSnapshotJson = await GetDesignSnapshotJson(absolutePath, file.FileName),
                 Version      = lastVersion + 1,
                 IsActive     = true,
                 CreatedDate  = DateTime.Now,
@@ -1190,59 +1208,106 @@ namespace Tools.Controllers
 
             var imported = new List<object>();
 
+            bool isMasterTarget = (req.TargetScope ?? "").ToLowerInvariant() == "master";
+
             foreach (var src in sourceTemplates)
             {
-                // Deactivate any existing for target group+type+name
-                var existing = await _context.RPTTemplates
-                    .Where(t => t.GroupId == targetGroupId && t.TypeId == targetTypeId
-                                && t.TemplateName == src.TemplateName
-                                && t.ProjectId == (targetProjectId.HasValue ? targetProjectId : null)
-                                && t.IsActive == true)
-                    .ToListAsync();
-                existing.ForEach(t => t.IsActive = false);
-
-                var lastVersion = await _context.RPTTemplates
-                    .Where(t => t.GroupId == targetGroupId && t.TypeId == targetTypeId
-                                && t.TemplateName == src.TemplateName
-                                && t.ProjectId == (targetProjectId.HasValue ? targetProjectId : null))
-                    .MaxAsync(t => (int?)t.Version) ?? 0;
-
-                var newTemplate = new RPTTemplate
+                if (isMasterTarget)
                 {
-                    GroupId = targetGroupId,
-                    TypeId = targetTypeId.Value,
-                    ProjectId = targetProjectId,
-                    UploadedByUserId = uploadedByUserId,
-                    ModuleIds = src.ModuleIds,
-                    TemplateName = src.TemplateName,
-                    RPTFilePath = src.RPTFilePath,   // reuse same file
-                    ParsedFieldsJson = src.ParsedFieldsJson,
-                    RequiredFieldsJson = src.RequiredFieldsJson,
-                    Version = lastVersion + 1,
-                    IsActive = true,
-                    CreatedDate = DateTime.Now,
-                    UpdatedDate = DateTime.Now
-                };
-                _context.RPTTemplates.Add(newTemplate);
-                await _context.SaveChangesAsync();
+                    // Deactivate any existing for target group+type+name
+                    var existing = await _context.MRPTTemplates
+                        .Where(t => t.GroupId == targetGroupId && t.TypeId == targetTypeId
+                                    && t.TemplateName == src.TemplateName
+                                    && t.IsActive == true)
+                        .ToListAsync();
+                    existing.ForEach(t => t.IsActive = false);
 
-                // Copy mapping if requested
-                if (req.CopyMappings)
-                {
-                    var srcMapping = await _context.RPTMappings
-                        .FirstOrDefaultAsync(m => m.TemplateId == src.TemplateId);
-                    if (srcMapping != null)
+                    var lastVersion = await _context.MRPTTemplates
+                        .Where(t => t.GroupId == targetGroupId && t.TypeId == targetTypeId
+                                    && t.TemplateName == src.TemplateName)
+                        .MaxAsync(t => (int?)t.Version) ?? 0;
+
+                    string mappingJson = null;
+                    if (req.CopyMappings)
                     {
-                        _context.RPTMappings.Add(new RPTMapping
-                        {
-                            TemplateId = newTemplate.TemplateId,
-                            MappingJson = srcMapping.MappingJson
-                        });
-                        await _context.SaveChangesAsync();
+                        var srcMapping = await _context.RPTMappings.FirstOrDefaultAsync(m => m.TemplateId == src.TemplateId);
+                        mappingJson = srcMapping?.MappingJson;
                     }
-                }
 
-                imported.Add(new { newTemplate.TemplateId, newTemplate.TemplateName, newTemplate.Version });
+                    var newTemplate = new MRPTTemplate
+                    {
+                        GroupId = targetGroupId,
+                        TypeId = targetTypeId.Value,
+                        UploadedByUserId = uploadedByUserId,
+                        ModuleIds = src.ModuleIds,
+                        TemplateName = src.TemplateName,
+                        RPTFilePath = src.RPTFilePath,
+                        ParsedFieldsJson = src.ParsedFieldsJson,
+                        RequiredFieldsJson = src.RequiredFieldsJson,
+                        MappingJson = mappingJson,
+                        Version = lastVersion + 1,
+                        IsActive = true,
+                        CreatedDate = DateTime.Now,
+                        UpdatedDate = DateTime.Now
+                    };
+                    _context.MRPTTemplates.Add(newTemplate);
+                    await _context.SaveChangesAsync();
+                    imported.Add(new { newTemplate.TemplateId, newTemplate.TemplateName, newTemplate.Version });
+                }
+                else
+                {
+                    // Deactivate any existing for target group+type+name
+                    var existing = await _context.RPTTemplates
+                        .Where(t => t.GroupId == targetGroupId && t.TypeId == targetTypeId
+                                    && t.TemplateName == src.TemplateName
+                                    && t.ProjectId == (targetProjectId.HasValue ? targetProjectId : null)
+                                    && t.IsActive == true)
+                        .ToListAsync();
+                    existing.ForEach(t => t.IsActive = false);
+
+                    var lastVersion = await _context.RPTTemplates
+                        .Where(t => t.GroupId == targetGroupId && t.TypeId == targetTypeId
+                                    && t.TemplateName == src.TemplateName
+                                    && t.ProjectId == (targetProjectId.HasValue ? targetProjectId : null))
+                        .MaxAsync(t => (int?)t.Version) ?? 0;
+
+                    var newTemplate = new RPTTemplate
+                    {
+                        GroupId = targetGroupId,
+                        TypeId = targetTypeId.Value,
+                        ProjectId = targetProjectId,
+                        UploadedByUserId = uploadedByUserId,
+                        ModuleIds = src.ModuleIds,
+                        TemplateName = src.TemplateName,
+                        RPTFilePath = src.RPTFilePath,   // reuse same file
+                        ParsedFieldsJson = src.ParsedFieldsJson,
+                        RequiredFieldsJson = src.RequiredFieldsJson,
+                        Version = lastVersion + 1,
+                        IsActive = true,
+                        CreatedDate = DateTime.Now,
+                        UpdatedDate = DateTime.Now
+                    };
+                    _context.RPTTemplates.Add(newTemplate);
+                    await _context.SaveChangesAsync();
+
+                    // Copy mapping if requested
+                    if (req.CopyMappings)
+                    {
+                        var srcMapping = await _context.RPTMappings
+                            .FirstOrDefaultAsync(m => m.TemplateId == src.TemplateId);
+                        if (srcMapping != null)
+                        {
+                            _context.RPTMappings.Add(new RPTMapping
+                            {
+                                TemplateId = newTemplate.TemplateId,
+                                MappingJson = srcMapping.MappingJson
+                            });
+                            await _context.SaveChangesAsync();
+                        }
+                    }
+
+                    imported.Add(new { newTemplate.TemplateId, newTemplate.TemplateName, newTemplate.Version });
+                }
             }
 
             await _loggerService.LogEventAsync($"Imported {imported.Count} template(s) from group {req.SourceGroupId} to group {targetGroupId}", "RPTTemplate", LogHelper.GetTriggeredBy(User), 0);
@@ -1256,6 +1321,7 @@ namespace Tools.Controllers
         }
 
         [Authorize]
+        [RequireMasterAuth(Module = "Master Templates", Operation = "SAVE MASTER")]
         [HttpPost("promote-to-group-master")]
         public async Task<ActionResult> PromoteToGroupMaster([FromBody] PromoteToMasterRequest req)
         {
@@ -1575,6 +1641,18 @@ namespace Tools.Controllers
                     warning = parseError
                 });
             }
+
+            if (parsedFields.Count == 0)
+            {
+                // Return a debug warning so we know why it's empty
+                return Ok(new 
+                { 
+                    templateId = id, 
+                    parsedFields = new List<object>(), 
+                    warning = $"Parser returned 0 fields. File size: {new FileInfo(absolutePath).Length} bytes." 
+                });
+            }
+
             t.ParsedFieldsJson = parsedFields.Count > 0
                 ? System.Text.Json.JsonSerializer.Serialize(parsedFields, new System.Text.Json.JsonSerializerOptions { PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase })
                 : null;
@@ -1651,7 +1729,23 @@ namespace Tools.Controllers
 
                 if (templateId.HasValue && templateId.Value > 0)
                 {
-                    using var client = new HttpClient();
+                    // Create HttpClient with SSL bypass for local RPT service
+                    HttpClient client;
+                    var rptUri = new Uri(_apiSettings.RptServiceUrl);
+                    if (rptUri.Scheme == "https" && (rptUri.Host == "localhost" || rptUri.IsLoopback))
+                    {
+                        var handler = new HttpClientHandler
+                        {
+                            ServerCertificateCustomValidationCallback =
+                                HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
+                        };
+                        client = new HttpClient(handler);
+                    }
+                    else
+                    {
+                        client = new HttpClient();
+                    }
+
                     using var content = new MultipartFormDataContent();
                     using var fs = new FileStream(tempPath, FileMode.Open, FileAccess.Read);
 
@@ -1759,16 +1853,35 @@ namespace Tools.Controllers
                 await _context.SaveChangesAsync();
 
                 // ✅ FINAL MICROCALL
-                using (var client = new HttpClient())
-                using (var content = new MultipartFormDataContent())
-                using (var fs = new FileStream(finalPath, FileMode.Open, FileAccess.Read))
                 {
-                    content.Add(new StreamContent(fs), "file", file.FileName);
+                    // Create HttpClient with SSL bypass for local RPT service
+                    HttpClient client;
+                    var rptUri = new Uri(_apiSettings.RptServiceUrl);
+                    if (rptUri.Scheme == "https" && (rptUri.Host == "localhost" || rptUri.IsLoopback))
+                    {
+                        var handler = new HttpClientHandler
+                        {
+                            ServerCertificateCustomValidationCallback =
+                                HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
+                        };
+                        client = new HttpClient(handler);
+                    }
+                    else
+                    {
+                        client = new HttpClient();
+                    }
 
-                    await client.PostAsync(
-                        $"{_apiSettings.RptServiceUrl}/final-upload",
-                        content
-                    );
+                    using (client)
+                    using (var content = new MultipartFormDataContent())
+                    using (var fs = new FileStream(finalPath, FileMode.Open, FileAccess.Read))
+                    {
+                        content.Add(new StreamContent(fs), "file", file.FileName);
+
+                        await client.PostAsync(
+                            $"{_apiSettings.RptServiceUrl}/final-upload",
+                            content
+                        );
+                    }
                 }
 
                 // ✅ CLEANUP
@@ -1850,7 +1963,8 @@ namespace Tools.Controllers
                 using var content = new MultipartFormDataContent();
                 var fileContent = new StreamContent(stream);
                 fileContent.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
-                content.Add(fileContent, "file", originalFileName);
+                // Always pass a simple, safe filename to the external Crystal Reports parser to avoid COM limitations with long paths or special characters
+                content.Add(fileContent, "file", "template.rpt");
 
                 var response = await client.PostAsync(_apiSettings.RptParserUrl, content);
                 var json = await response.Content.ReadAsStringAsync();
@@ -1882,10 +1996,11 @@ namespace Tools.Controllers
                             if (!string.IsNullOrWhiteSpace(f.Name)) fields.Add(f);
                         }
                     }
+                    if (fields.Count == 0) return (fields, $"Debug: Parser returned 0 fields. File size: {new System.IO.FileInfo(absolutePath).Length} bytes. Raw JSON: {json}");
                     return (fields, "");
                 }
 
-                return (new List<FieldDto>(), "Parser data was not an array.");
+                return (new List<FieldDto>(), $"Parser data was not an array. Raw JSON: {json}");
             }
             catch (Exception ex)
             {
@@ -1895,7 +2010,24 @@ namespace Tools.Controllers
 
         private async Task<string> GetDesignSnapshotJson(string filePath, string fileName)
         {
-            using var client = _httpClientFactory.CreateClient();
+            HttpClient client;
+            
+            // Use named client with SSL bypass for RPT service
+            var rptUri = new Uri(_apiSettings.RptServiceUrl);
+            if (rptUri.Scheme == "https" && (rptUri.Host == "localhost" || rptUri.IsLoopback))
+            {
+                // Allow self-signed certs for local RPT service (dev only)
+                var handler = new HttpClientHandler
+                {
+                    ServerCertificateCustomValidationCallback =
+                        HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
+                };
+                client = new HttpClient(handler);
+            }
+            else
+            {
+                client = _httpClientFactory.CreateClient();
+            }
 
             using var stream = System.IO.File.OpenRead(filePath);
             using var content = new MultipartFormDataContent();
@@ -1917,7 +2049,24 @@ namespace Tools.Controllers
 
         private async Task<dynamic> CheckDesignChanges(string filePath, string fileName, int templateId)
         {
-            using var client = _httpClientFactory.CreateClient();
+            HttpClient client;
+            
+            // Use SSL bypass for RPT service on localhost
+            var rptUri = new Uri(_apiSettings.RptServiceUrl);
+            if (rptUri.Scheme == "https" && (rptUri.Host == "localhost" || rptUri.IsLoopback))
+            {
+                // Allow self-signed certs for local RPT service (dev only)
+                var handler = new HttpClientHandler
+                {
+                    ServerCertificateCustomValidationCallback =
+                        HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
+                };
+                client = new HttpClient(handler);
+            }
+            else
+            {
+                client = _httpClientFactory.CreateClient();
+            }
 
             using var stream = System.IO.File.OpenRead(filePath);
             using var content = new MultipartFormDataContent();
@@ -2084,6 +2233,7 @@ namespace Tools.Controllers
         public int? TargetProjectId { get; set; }
         public int? SourceProjectId { get; set; }
         public string? SourceScope { get; set; }
+        public string? TargetScope { get; set; }
         public bool CopyMappings { get; set; } = true;
         public bool IncludeStandard { get; set; } = true;
         public List<int>? SelectedTemplateIds { get; set; }

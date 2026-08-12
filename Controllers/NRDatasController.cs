@@ -2699,29 +2699,23 @@ namespace Tools.Controllers
             var extraPending = await activeQuery.AnyAsync(n => n.Steps <= 3);
             var envelopePending = await activeQuery.AnyAsync(n => n.Steps <= 4);
 
-            var catchNos = await (
-     from b in _context.BoxBreakingResults.AsNoTracking()
-     join e in _context.EnvelopeBreakingResults.AsNoTracking()
-         on b.EnvelopeBreakingResultId equals e.Id
-     where b.ProjectId == ProjectId
-           && b.Status == true
-           && e.Status  == true
-     select e.CatchNo
- )
- .Distinct()
- .ToListAsync();
-
-            var pendingBoxLots = await _context.NRDatas
-                .AsNoTracking()
-                .Where(n =>
-                    n.ProjectId == ProjectId &&
-                    n.Status == true &&
-                    n.Steps <= 5 &&
-                    catchNos.Contains(n.CatchNo))
-                .Select(n => n.LotNo)
-                .Distinct()
-                .OrderBy(x => x)
+            var lotStats = await activeQuery
+                .GroupBy(n => n.LotNo)
+                .Select(g => new
+                {
+                    LotNo = g.Key,
+                    IsPending = g.Any(n => n.Steps <= 5)
+                })
                 .ToListAsync();
+
+            var boxTotalLots = lotStats.Count;
+            var boxCompletedLots = lotStats.Count(l => !l.IsPending);
+            var boxPendingLots = lotStats.Count(l => l.IsPending);
+            var pendingBoxLots = lotStats
+                .Where(l => l.IsPending)
+                .Select(l => l.LotNo)
+                .OrderBy(x => x)
+                .ToList();
 
             return Ok(new
             {
@@ -2734,6 +2728,9 @@ namespace Tools.Controllers
                 extraPending,
                 envelopePending,
                 boxPending = pendingBoxLots.Any(),
+                boxTotalLots,
+                boxCompletedLots,
+                boxPendingLots,
                 pendingBoxLots
             });
         }
