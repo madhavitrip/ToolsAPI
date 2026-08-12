@@ -6354,6 +6354,23 @@ namespace Tools.Controllers
                     return BadRequest(new { message = message });
                 }
 
+                // Pre-process baseBatch: Consolidate -R records back into their base records for comparison purposes
+                var remainderRecords = baseBatch.Where(x => (x.CatchNo ?? "").Trim().EndsWith("-R", StringComparison.OrdinalIgnoreCase)).ToList();
+                foreach (var rRecord in remainderRecords)
+                {
+                    var baseCatchNo = rRecord.CatchNo!.Substring(0, rRecord.CatchNo.Length - 2).Trim();
+                    var matchingBase = baseBatch.FirstOrDefault(b => 
+                        (b.CatchNo ?? "").Trim().Equals(baseCatchNo, StringComparison.OrdinalIgnoreCase) && 
+                        (b.CenterCode ?? "").Trim().Equals((rRecord.CenterCode ?? "").Trim(), StringComparison.OrdinalIgnoreCase) &&
+                        (b.NodalCode ?? "").Trim().Equals((rRecord.NodalCode ?? "").Trim(), StringComparison.OrdinalIgnoreCase));
+
+                    if (matchingBase != null)
+                    {
+                        matchingBase.NRQuantity += rRecord.NRQuantity;
+                        baseBatch.Remove(rRecord);
+                    }
+                }
+
                 Console.WriteLine($"[CompareBatches] BaseBatch records: {baseBatch.Count}, SelectedBatch records: {selectedBatch.Count}");
 
                 // Helper function to check if a field is unique
@@ -6566,6 +6583,10 @@ namespace Tools.Controllers
                     int revisedNRQty = newRec.NRQuantity;
                     int baseQty = oldRec?.Quantity ?? 0;
                     bool isNotFulfilled = (revisedNRQty > baseQty);
+                    if (baseQty == 0 && baseNRQty > revisedNRQty)
+                    {
+                        isNotFulfilled = false;
+                    }
 
                     if (processStep == 7)
                     {
@@ -6590,7 +6611,7 @@ namespace Tools.Controllers
                         {
                             if (processStep == 10)
                             {
-                                return "Treat as New and Reprocess from Box Breaking";
+                                return "Treat as New";
                             }
 
                             string examDateStr = newRec.ExamDate ?? oldRec?.ExamDate ?? "";
@@ -6733,6 +6754,10 @@ namespace Tools.Controllers
                         int baseQty = oldRecord.Quantity;
 
                         string fulfilment = (revisedNRQty > baseQty) ? "Not Fulfilled" : "Fulfilled";
+                        if (baseQty == 0 && baseNRQty > revisedNRQty)
+                        {
+                            fulfilment = "Fulfilled";
+                        }
 
                         int difference = revisedNRQty - baseNRQty;
 
@@ -6744,7 +6769,7 @@ namespace Tools.Controllers
                                 baseNR = baseNRQty,
                                 baseQty = baseQty,
                                 fulfilment = fulfilment,
-                                remaining = fulfilment == "Not Fulfilled" ? (int?)(revisedNRQty - baseQty) : null
+                                remaining = baseQty == 0 ? (int?)(revisedNRQty - baseNRQty) : (fulfilment == "Not Fulfilled" ? (int?)(revisedNRQty - baseQty) : null)
                             };
 
                             changes.Add(new ChangeDto
@@ -6827,6 +6852,10 @@ namespace Tools.Controllers
                     int baseQty = oldRecord.Quantity;
 
                     string fulfilment = (revisedNRQty > baseQty) ? "Not Fulfilled" : "Fulfilled";
+                    if (baseQty == 0 && baseNRQty > revisedNRQty)
+                    {
+                        fulfilment = "Fulfilled";
+                    }
                     int difference = revisedNRQty - baseNRQty;
                     if (difference != 0)
                     {
@@ -6836,7 +6865,7 @@ namespace Tools.Controllers
                             baseNR = baseNRQty,
                             baseQty = baseQty,
                             fulfilment = fulfilment,
-                            remaining = fulfilment == "Not Fulfilled" ? (int?)(revisedNRQty - baseQty) : null
+                            remaining = baseQty == 0 ? (int?)(revisedNRQty - baseNRQty) : (fulfilment == "Not Fulfilled" ? (int?)(revisedNRQty - baseQty) : null)
                         };
 
                         changes.Add(new ChangeDto
@@ -7173,7 +7202,7 @@ namespace Tools.Controllers
                         {
                             if (processStep == 10)
                             {
-                                record.Recommendation = "Treat as New and Reprocess from Box Breaking";
+                                record.Recommendation = "Treat as New";
                             }
                             else if (string.IsNullOrEmpty(record.Recommendation) || !record.Recommendation.Contains("Reprocess from Box Breaking for Lot "))
                             {
@@ -7315,7 +7344,7 @@ namespace Tools.Controllers
                                 if (extraTypes.TryGetValue(extra.ExtraId, out string? typeName) && !string.IsNullOrWhiteSpace(typeName))
                                 {
                                     string lowerType = typeName.Trim().ToLower();
-                                    string prefix = lowerType == "university" ? "uni" :
+                                    string prefix = lowerType == "university" ? "univ" :
                                                     lowerType == "office copy" ? "offc" :
                                                     lowerType == "nodal extra" ? "nodal" : typeName;
                                     
@@ -7795,6 +7824,7 @@ namespace Tools.Controllers
                     bool hasNotFulfilledChanges = false;
 
                     var affectedEnvLots = new HashSet<int>();
+                    var affectedLotNos = new HashSet<int>();
                     var updatedCatchLevelData = new Dictionary<string, NRData>(StringComparer.OrdinalIgnoreCase);
 
                     var selectedKeys = new HashSet<string>(
@@ -7820,7 +7850,17 @@ namespace Tools.Controllers
                         if (selectedCatchOnly.Contains(catchNoLower))
                             return true;
 
-                        return selectedKeys.Contains($"{catchNoLower}|{centerCodeLower}");
+                        if (selectedKeys.Contains($"{catchNoLower}|{centerCodeLower}"))
+                            return true;
+
+                        if (catchNoLower.EndsWith("-r"))
+                        {
+                            string parentCatchNo = catchNoLower.Substring(0, catchNoLower.Length - 2);
+                            if (selectedCatchOnly.Contains(parentCatchNo) || selectedKeys.Contains($"{parentCatchNo}|{centerCodeLower}"))
+                                return true;
+                        }
+
+                        return false;
                     };
 
                     if (model.SelectedItems == null || !model.SelectedItems.Any())
@@ -7837,6 +7877,12 @@ namespace Tools.Controllers
 
                     Action<NRData, NRData, bool> SyncRecordFields = (target, source, isNotFulfilled) =>
                     {
+                        int consolidatedBaseNRQty = target.NRQuantity;
+                        var associatedRRecords = baseBatch.Where(r => 
+                            (r.CatchNo ?? "").Trim().Equals((target.CatchNo ?? "").Trim() + "-R", StringComparison.OrdinalIgnoreCase) &&
+                            (r.CenterCode ?? "").Trim().Equals((target.CenterCode ?? "").Trim(), StringComparison.OrdinalIgnoreCase)).ToList();
+                        consolidatedBaseNRQty += associatedRRecords.Sum(r => r.NRQuantity);
+
                         string cKey = (source.CatchNo ?? "").Trim();
                         if (!string.IsNullOrEmpty(cKey) && !updatedCatchLevelData.ContainsKey(cKey))
                         {
@@ -7853,36 +7899,51 @@ namespace Tools.Controllers
                             targetCenterCode,
                             sourceCenterCode,
                             StringComparison.OrdinalIgnoreCase) != 0 ||
-                            target.CenterSort != source.CenterSort;
+                            target.CenterSort != source.CenterSort ||
+                            target.CenterCode != source.CenterCode;
 
                         bool isNodalCodeChanged = string.Compare(
                             targetNodalCode,
                             sourceNodalCode,
                             StringComparison.OrdinalIgnoreCase) != 0 ||
-                            target.NodalSort != source.NodalSort;
+                            target.NodalSort != source.NodalSort ||
+                            target.NodalCode != source.NodalCode;
 
                         bool isCodeChanged = isCenterCodeChanged || isNodalCodeChanged;
 
                         int newRecordStep;
                         if (processStep >= 2)
                         {
-                            if (isNotFulfilled)
+                            if (processStep == 10 && isCodeChanged)
                             {
-                                // Whenever compare-batches shows "Reprocess from Enhancement" (Not Fulfilled), set Steps = 1
                                 newRecordStep = 1;
                             }
-                            else if ((processStep == 5 || processStep == 6) && isCodeChanged)
+                            else if (processStep == 2 && isCodeChanged)
                             {
-                                // For step 5/6: Center Code / Nodal changed updates its step to 4 ("Reprocess from Envelope Serializing")
+                                newRecordStep = 1;
+                            }
+                            else if (isCodeChanged)
+                            {
+                                // Center Code / Nodal changed updates its step to 4 ("Reprocess from Envelope Serializing")
                                 newRecordStep = 4;
                             }
-                            else if (processStep == 7 && isNotFulfilled)
+                            else if ((processStep == 7 || processStep == 8 || processStep == 10) && isNotFulfilled)
                             {
-                                newRecordStep = (target.Steps > processStep) ? processStep : target.Steps;
+                                if (processStep == 8) {
+                                    newRecordStep = 7;
+                                } else if (processStep == 10) {
+                                    newRecordStep = target.Steps; // Original row keeps its step
+                                } else {
+                                    newRecordStep = (target.Steps > processStep) ? processStep : target.Steps;
+                                }
+                            }
+                            else if ((processStep == 2 || processStep == 3 || processStep == 4 || processStep == 5) && isNotFulfilled)
+                            {
+                                newRecordStep = 1;
                             }
                             else
                             {
-                                // Fulfilled: maintain at current step, but cap at processStep
+                                // Fulfilled or Not Fulfilled (other steps): maintain at current step, but cap at processStep
                                 newRecordStep = (target.Steps > processStep) ? processStep : target.Steps;
                             }
                         }
@@ -7904,15 +7965,61 @@ namespace Tools.Controllers
                             }
                         }
 
-                        if (isCodeChanged)
+                        if (processStep == 8 && isNotFulfilled)
+                        {
+                            if (target.LotNo > 0) affectedLotNos.Add(target.LotNo);
+                            else if (lotNo > 0) affectedLotNos.Add(lotNo);
+                            else if (source.LotNo > 0) affectedLotNos.Add(source.LotNo);
+                        }
+
+                        bool isDataFieldChanged = isCodeChanged || 
+                            target.CourseName != source.CourseName ||
+                            target.SubjectName != source.SubjectName ||
+                            target.CatchNo != source.CatchNo ||
+                            target.ExamDate != source.ExamDate ||
+                            target.ExamTime != source.ExamTime ||
+                            target.Day != source.Day ||
+                            target.Pages != source.Pages ||
+                            target.Route != source.Route ||
+                            target.RouteSort != source.RouteSort ||
+                            target.Symbol != source.Symbol ||
+                            target.District != source.District ||
+                            target.DistrictSort != source.DistrictSort ||
+                            target.NRDatas != source.NRDatas ||
+                            target.Remark != source.Remark;
+
+                        bool isQuantityUpdated = false;
+                        if (consolidatedBaseNRQty != source.NRQuantity)
+                        {
+                            if ((processStep == 7 || processStep == 8 || processStep == 10) && isNotFulfilled)
+                            {
+                                // Leave target.NRQuantity unchanged
+                            }
+                            else if (target.Quantity > source.NRQuantity)
+                            {
+                                // No changes
+                            }
+                            else
+                            {
+                                isQuantityUpdated = true;
+                            }
+                        }
+
+                        bool forceNewRow = isDataFieldChanged || isQuantityUpdated;
+
+                        if (forceNewRow)
                         {
                             // 1. Deactivate previous row record (status = 0 / false)
-                            if (processStep != 7)
+                            if (processStep != 7 && processStep != 8 && processStep != 10)
                             {
                                 target.Status = false;
+                                foreach (var r in associatedRRecords)
+                                {
+                                    r.Status = false;
+                                }
                             }
 
-                            // 2. Add the center code changed row or nodal code changed row as new row with status = 1 (true)
+                            // 2. Add the updated row as new row with status = 1 (true)
                             var newBaseRecord = new NRData
                             {
                                 ProjectId = projectId,
@@ -7922,8 +8029,8 @@ namespace Tools.Controllers
                                 CourseName = source.CourseName,
                                 SubjectName = source.SubjectName,
                                 CenterCode = !string.IsNullOrWhiteSpace(sourceCenterCode) ? sourceCenterCode : source.CenterCode,
-                                Quantity = (processStep == 1 || processStep == 0 || isNotFulfilled) ? source.Quantity : target.Quantity,
-                                NRQuantity = source.NRQuantity,
+                                Quantity = target.Quantity, // Preserve baseBatch Quantity
+                                NRQuantity = ((processStep == 7 || processStep == 8 || processStep == 10) && isNotFulfilled) ? consolidatedBaseNRQty : (target.Quantity > source.NRQuantity ? consolidatedBaseNRQty : source.NRQuantity),
                                 CatchNo = source.CatchNo,
                                 ExamDate = source.ExamDate,
                                 ExamTime = source.ExamTime,
@@ -7939,88 +8046,58 @@ namespace Tools.Controllers
                                 DistrictSort = source.DistrictSort,
                                 NRDatas = source.NRDatas,
                                 Steps = newRecordStep,
-                                EnvLotNo = (newRecordStep < 5) ? 0 : (source.EnvLotNo > 0 ? source.EnvLotNo : target.EnvLotNo),
+                                EnvLotNo = target.EnvLotNo,
+                                VerificationStatus = target.VerificationStatus,
+                                VerifiedBy = target.VerifiedBy,
+                                VerifiedOn = target.VerifiedOn,
+                                UploadList = target.UploadList,
+                                NRDataId = target.NRDataId,
                                 Remark = source.Remark
                             };
 
                             _context.NRDatas.Add(newBaseRecord);
                             baseBatch.Add(newBaseRecord);
                         }
-                        else
+
+                        // 3. Remainder Row Logic for Not Fulfilled cases
+                        if ((processStep == 7 || processStep == 8 || processStep == 10) && isNotFulfilled)
                         {
-                            target.CourseName = source.CourseName;
-                            target.SubjectName = source.SubjectName;
-                            target.CenterCode = !string.IsNullOrWhiteSpace(sourceCenterCode) ? sourceCenterCode : source.CenterCode;
-                            if (processStep == 7 && isNotFulfilled)
+                            var remainderRow = new NRData
                             {
-                                target.NRQuantity = target.Quantity;
-                            }
-                            else
-                            {
-                                target.NRQuantity = source.NRQuantity;
-                            }
-                            target.CatchNo = source.CatchNo;
-                            target.ExamDate = source.ExamDate;
-                            target.ExamTime = source.ExamTime;
-                            target.Day = source.Day;
-                            target.NodalCode = !string.IsNullOrWhiteSpace(sourceNodalCode) ? sourceNodalCode : source.NodalCode;
-                            target.Pages = source.Pages;
-                            target.Route = source.Route;
-                            target.RouteSort = source.RouteSort;
-                            target.CenterSort = source.CenterSort;
-                            target.NodalSort = source.NodalSort;
-                            target.Symbol = source.Symbol;
-                            target.District = source.District;
-                            target.DistrictSort = source.DistrictSort;
-                            target.NRDatas = source.NRDatas;
-                            target.EnvLotNo = (newRecordStep < 5) ? 0 : source.EnvLotNo;
-                            target.Remark = source.Remark;
-                            if (lotNo > 0)
-                            {
-                                target.LotNo = lotNo;
-                            }
-
-                            if (processStep == 1 || processStep == 0 || isNotFulfilled)
-                            {
-                                target.Quantity = source.Quantity;
-                            }
-
-                            target.Steps = newRecordStep;
-
-                            if (processStep == 7 && isNotFulfilled)
-                            {
-                                var remainderRow = new NRData
-                                {
-                                    ProjectId = projectId,
-                                    Batch = 1,
-                                    Status = true,
-                                    LotNo = lotNo > 0 ? lotNo : target.LotNo,
-                                    CourseName = source.CourseName,
-                                    SubjectName = source.SubjectName,
-                                    CenterCode = !string.IsNullOrWhiteSpace(sourceCenterCode) ? sourceCenterCode : source.CenterCode,
-                                    Quantity = target.Quantity,
-                                    NRQuantity = source.NRQuantity - target.Quantity,
-                                    CatchNo = (source.CatchNo ?? "").Trim() + "-R",
-                                    ExamDate = source.ExamDate,
-                                    ExamTime = source.ExamTime,
-                                    Day = source.Day,
-                                    NodalCode = !string.IsNullOrWhiteSpace(sourceNodalCode) ? sourceNodalCode : source.NodalCode,
-                                    Pages = source.Pages,
-                                    Route = source.Route,
-                                    RouteSort = source.RouteSort,
-                                    CenterSort = source.CenterSort,
-                                    NodalSort = source.NodalSort,
-                                    Symbol = source.Symbol,
-                                    District = source.District,
-                                    DistrictSort = source.DistrictSort,
-                                    NRDatas = source.NRDatas,
-                                    Steps = 1,
-                                    EnvLotNo = 0,
-                                    Remark = source.Remark
-                                };
-                                _context.NRDatas.Add(remainderRow);
-                                baseBatch.Add(remainderRow);
-                            }
+                                ProjectId = projectId,
+                                Batch = 1,
+                                Status = true,
+                                LotNo = lotNo > 0 ? lotNo : target.LotNo,
+                                CourseName = source.CourseName,
+                                SubjectName = source.SubjectName,
+                                CenterCode = !string.IsNullOrWhiteSpace(sourceCenterCode) ? sourceCenterCode : source.CenterCode,
+                                Quantity = target.Quantity,
+                                NRQuantity = source.NRQuantity - target.Quantity,
+                                CatchNo = (source.CatchNo ?? "").Trim() + "-R",
+                                ExamDate = source.ExamDate,
+                                ExamTime = source.ExamTime,
+                                Day = source.Day,
+                                NodalCode = !string.IsNullOrWhiteSpace(sourceNodalCode) ? sourceNodalCode : source.NodalCode,
+                                Pages = source.Pages,
+                                Route = source.Route,
+                                RouteSort = source.RouteSort,
+                                CenterSort = source.CenterSort,
+                                NodalSort = source.NodalSort,
+                                Symbol = source.Symbol,
+                                District = source.District,
+                                DistrictSort = source.DistrictSort,
+                                NRDatas = source.NRDatas,
+                                Steps = 1,
+                                EnvLotNo = target.EnvLotNo,
+                                VerificationStatus = target.VerificationStatus,
+                                VerifiedBy = target.VerifiedBy,
+                                VerifiedOn = target.VerifiedOn,
+                                UploadList = target.UploadList,
+                                NRDataId = target.NRDataId,
+                                Remark = source.Remark
+                            };
+                            _context.NRDatas.Add(remainderRow);
+                            baseBatch.Add(remainderRow);
                         }
                     };
 
@@ -8063,6 +8140,10 @@ namespace Tools.Controllers
                                 int baseQty = oldRecord.Quantity;
 
                                 bool isNotFulfilled = (revisedNRQty > baseQty);
+                                if (baseQty == 0 && baseNRQty > revisedNRQty)
+                                {
+                                    isNotFulfilled = false;
+                                }
                                 if (isNotFulfilled)
                                 {
                                     hasNotFulfilledChanges = true;
@@ -8121,6 +8202,10 @@ namespace Tools.Controllers
                                         int baseQty = match.Quantity;
 
                                         bool isNotFulfilled = (revisedNRQty > baseQty);
+                                        if (baseQty == 0 && baseNRQty > revisedNRQty)
+                                        {
+                                            isNotFulfilled = false;
+                                        }
                                         if (isNotFulfilled)
                                         {
                                             hasNotFulfilledChanges = true;
@@ -8151,6 +8236,10 @@ namespace Tools.Controllers
                                         int baseQty = match.Quantity;
 
                                         bool isNotFulfilled = (revisedNRQty > baseQty);
+                                        if (baseQty == 0 && baseNRQty > revisedNRQty)
+                                        {
+                                            isNotFulfilled = false;
+                                        }
                                         if (isNotFulfilled)
                                         {
                                             hasNotFulfilledChanges = true;
@@ -8180,6 +8269,10 @@ namespace Tools.Controllers
                                 int baseQty = match.Quantity;
 
                                 bool isNotFulfilled = (revisedNRQty > baseQty);
+                                if (baseQty == 0 && baseNRQty > revisedNRQty)
+                                {
+                                    isNotFulfilled = false;
+                                }
                                 if (isNotFulfilled)
                                 {
                                     hasNotFulfilledChanges = true;
@@ -8203,7 +8296,7 @@ namespace Tools.Controllers
 
                                 hasNotFulfilledChanges = true;
 
-                                int addedStep = (processStep == 5 || processStep == 6) ? 4 : (processStep == 7 ? 7 : 1);
+                                int addedStep = (processStep == 5 || processStep == 6) ? 4 : ((processStep == 7 || processStep == 8) ? 7 : 1);
                                 if (addedStep == 4)
                                 {
                                     if (newRec.EnvLotNo > 0)
@@ -8255,7 +8348,7 @@ namespace Tools.Controllers
                         {
                             if (IsRecordSelected(oldRec))
                             {
-                                if (processStep != 7)
+                                if (processStep != 7 && processStep != 8 && processStep != 10)
                                 {
                                     oldRec.Status = false;
                                 }
@@ -8332,6 +8425,43 @@ namespace Tools.Controllers
                                 rec.EnvLotNo = 0;
                             }
                         }
+                    }
+
+                    if (processStep == 8 && affectedLotNos.Any())
+                    {
+                        var lotList = affectedLotNos.Where(x => x > 0).Distinct().ToList();
+                        if (lotList.Any())
+                        {
+                            var affectedBaseRecords = await _context.NRDatas
+                                .Where(x => x.ProjectId == projectId && x.Batch == 1 && x.Status && lotList.Contains(x.LotNo))
+                                .ToListAsync();
+
+                            foreach (var rec in affectedBaseRecords.Where(x => !(x.CatchNo ?? "").Trim().EndsWith("-R", StringComparison.OrdinalIgnoreCase)))
+                            {
+                                rec.Steps = 5;
+                            }
+
+                            foreach (var rec in baseBatch.Where(x => x.Status && lotList.Contains(x.LotNo) && !(x.CatchNo ?? "").Trim().EndsWith("-R", StringComparison.OrdinalIgnoreCase)))
+                            {
+                                rec.Steps = 5;
+                            }
+
+                            // Update EnvelopeLotReports status
+                            var affectedBoxLabels = await _context.EnvelopeLotReports
+                                .Where(x => x.ProjectId == projectId && x.LotNo.HasValue && lotList.Contains(x.LotNo.Value) && x.TemplateName == "Box Label")
+                                .ToListAsync();
+
+                            foreach (var report in affectedBoxLabels)
+                            {
+                                report.Status = false;
+                            }
+                        }
+                    }
+
+                    // Global Step Clamping: Ensure no active record in the base batch has a step > processStep
+                    foreach (var record in baseBatch.Where(x => x.Status && x.Steps > processStep))
+                    {
+                        record.Steps = processStep;
                     }
 
                     await _context.SaveChangesAsync();
