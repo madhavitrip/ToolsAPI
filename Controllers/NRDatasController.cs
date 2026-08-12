@@ -6583,6 +6583,10 @@ namespace Tools.Controllers
                     int revisedNRQty = newRec.NRQuantity;
                     int baseQty = oldRec?.Quantity ?? 0;
                     bool isNotFulfilled = (revisedNRQty > baseQty);
+                    if (baseQty == 0 && baseNRQty > revisedNRQty)
+                    {
+                        isNotFulfilled = false;
+                    }
 
                     if (processStep == 7)
                     {
@@ -6750,6 +6754,10 @@ namespace Tools.Controllers
                         int baseQty = oldRecord.Quantity;
 
                         string fulfilment = (revisedNRQty > baseQty) ? "Not Fulfilled" : "Fulfilled";
+                        if (baseQty == 0 && baseNRQty > revisedNRQty)
+                        {
+                            fulfilment = "Fulfilled";
+                        }
 
                         int difference = revisedNRQty - baseNRQty;
 
@@ -6761,7 +6769,7 @@ namespace Tools.Controllers
                                 baseNR = baseNRQty,
                                 baseQty = baseQty,
                                 fulfilment = fulfilment,
-                                remaining = fulfilment == "Not Fulfilled" ? (int?)(revisedNRQty - baseQty) : null
+                                remaining = baseQty == 0 ? (int?)(revisedNRQty - baseNRQty) : (fulfilment == "Not Fulfilled" ? (int?)(revisedNRQty - baseQty) : null)
                             };
 
                             changes.Add(new ChangeDto
@@ -6844,6 +6852,10 @@ namespace Tools.Controllers
                     int baseQty = oldRecord.Quantity;
 
                     string fulfilment = (revisedNRQty > baseQty) ? "Not Fulfilled" : "Fulfilled";
+                    if (baseQty == 0 && baseNRQty > revisedNRQty)
+                    {
+                        fulfilment = "Fulfilled";
+                    }
                     int difference = revisedNRQty - baseNRQty;
                     if (difference != 0)
                     {
@@ -6853,7 +6865,7 @@ namespace Tools.Controllers
                             baseNR = baseNRQty,
                             baseQty = baseQty,
                             fulfilment = fulfilment,
-                            remaining = fulfilment == "Not Fulfilled" ? (int?)(revisedNRQty - baseQty) : null
+                            remaining = baseQty == 0 ? (int?)(revisedNRQty - baseNRQty) : (fulfilment == "Not Fulfilled" ? (int?)(revisedNRQty - baseQty) : null)
                         };
 
                         changes.Add(new ChangeDto
@@ -7906,6 +7918,10 @@ namespace Tools.Controllers
                             {
                                 newRecordStep = 1;
                             }
+                            else if (processStep == 2 && isCodeChanged)
+                            {
+                                newRecordStep = 1;
+                            }
                             else if (isCodeChanged)
                             {
                                 // Center Code / Nodal changed updates its step to 4 ("Reprocess from Envelope Serializing")
@@ -8124,6 +8140,10 @@ namespace Tools.Controllers
                                 int baseQty = oldRecord.Quantity;
 
                                 bool isNotFulfilled = (revisedNRQty > baseQty);
+                                if (baseQty == 0 && baseNRQty > revisedNRQty)
+                                {
+                                    isNotFulfilled = false;
+                                }
                                 if (isNotFulfilled)
                                 {
                                     hasNotFulfilledChanges = true;
@@ -8182,6 +8202,10 @@ namespace Tools.Controllers
                                         int baseQty = match.Quantity;
 
                                         bool isNotFulfilled = (revisedNRQty > baseQty);
+                                        if (baseQty == 0 && baseNRQty > revisedNRQty)
+                                        {
+                                            isNotFulfilled = false;
+                                        }
                                         if (isNotFulfilled)
                                         {
                                             hasNotFulfilledChanges = true;
@@ -8212,6 +8236,10 @@ namespace Tools.Controllers
                                         int baseQty = match.Quantity;
 
                                         bool isNotFulfilled = (revisedNRQty > baseQty);
+                                        if (baseQty == 0 && baseNRQty > revisedNRQty)
+                                        {
+                                            isNotFulfilled = false;
+                                        }
                                         if (isNotFulfilled)
                                         {
                                             hasNotFulfilledChanges = true;
@@ -8241,6 +8269,10 @@ namespace Tools.Controllers
                                 int baseQty = match.Quantity;
 
                                 bool isNotFulfilled = (revisedNRQty > baseQty);
+                                if (baseQty == 0 && baseNRQty > revisedNRQty)
+                                {
+                                    isNotFulfilled = false;
+                                }
                                 if (isNotFulfilled)
                                 {
                                     hasNotFulfilledChanges = true;
