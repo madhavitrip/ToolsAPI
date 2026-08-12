@@ -7930,7 +7930,7 @@ namespace Tools.Controllers
                             else if ((processStep == 7 || processStep == 8 || processStep == 10) && isNotFulfilled)
                             {
                                 if (processStep == 8) {
-                                    newRecordStep = 7;
+                                    newRecordStep = 5;
                                 } else if (processStep == 10) {
                                     newRecordStep = target.Steps; // Original row keeps its step
                                 } else {
