@@ -39,6 +39,8 @@ namespace ToolsAPI.Models
 
         public DateTime? DownloadedAt { get; set; } // Track when the report was last downloaded
 
+        public bool? Status { get; set; } // Status of the report
+
         // Navigation properties
         [ForeignKey("ProjectId")]
         public virtual Project? Project { get; set; }
