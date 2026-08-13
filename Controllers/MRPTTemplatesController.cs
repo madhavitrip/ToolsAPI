@@ -12,6 +12,7 @@ using Tools.Models;
 using Tools.Services;
 using ERPToolsAPI.Models;
 using System.Text.Json;
+using Tools.Middleware;
 
 namespace Tools.Controllers
 {
@@ -97,6 +98,7 @@ namespace Tools.Controllers
         }
 
         [Authorize]
+        [RequireMasterAuth(Module = "Master Templates", Operation = "SAVE MASTER")]
         [HttpPost("upload")]
         public async Task<ActionResult> Upload([FromForm] IFormFile file, [FromForm] int typeId, [FromForm] int? groupId, [FromForm] string templateName, [FromForm] string? subName)
         {

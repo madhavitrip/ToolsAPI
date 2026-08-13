@@ -47,10 +47,15 @@ namespace ERPToolsAPI.Data
 
         public DbSet<ProjectLotRange> ProjectLotRanges { get; set; }
         public DbSet<EnvelopeLotReport> EnvelopeLotReports { get; set; }
+        public DbSet<MasterAuthAuditLog> MasterAuthAuditLogs { get; set; }
+        public DbSet<GroupMasterAuthPasscode> GroupMasterAuthPasscodes { get; set; }
         //public DbSet<UserAssignment> UserAssignments { get; set; }
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);
+
+            modelBuilder.Entity<MRPTTemplate>()
+                .ToTable("mrpttemplates");
 
             modelBuilder.Entity<ExtraEnvelopes>()
                 .HasIndex(e => new { e.NodalCode, e.ExtraId, e.ProjectId})

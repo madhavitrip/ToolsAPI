@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Tools.Models;
 using Tools.Services;
+using Tools.Middleware;
 
 namespace Tools.Controllers
 {
@@ -21,6 +22,7 @@ namespace Tools.Controllers
 
         // POST: api/MProjectConfigs
         [HttpPost]
+        [RequireMasterAuth(Module = "MProjectConfigs", Operation = "SAVE MASTER")]
         public async Task<ActionResult<MProjectConfigs>> PostMProjectConfig(MProjectConfigs projectConfig)
         {
             try
