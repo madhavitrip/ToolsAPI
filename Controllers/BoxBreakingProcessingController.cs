@@ -305,7 +305,7 @@ namespace Tools.Controllers
                         rowDict["CourseName"] = nr.CourseName ?? "";
                         rowDict["BookletSerial"] = "";
                         rowDict["OmrSerial"] = 0;
-                        rowDict["EnvelopeBreakingResultId"] = null;
+                        rowDict["EnvelopeBreakingResultId"] = 0;
                         rowDict["NrDataId"] = nr.Id;
                         rowDict["DistrictSort"] = nr.DistrictSort;
                         rowDict["District"] = nr.District ?? "";
@@ -801,7 +801,7 @@ namespace Tools.Controllers
                     {
                         ProjectId = ProjectId,
                         EnvelopeBreakingResultId = itemDict.ContainsKey("EnvelopeBreakingResultId") && itemDict["EnvelopeBreakingResultId"] != null
-                            ? (int?)itemDict["EnvelopeBreakingResultId"] : null,
+                            ? (int?)itemDict["EnvelopeBreakingResultId"] : 0,
                         Start = (int)itemDict["Start"],
                         End = (int)itemDict["End"],
                         Serial = itemDict["Serial"]?.ToString(),
