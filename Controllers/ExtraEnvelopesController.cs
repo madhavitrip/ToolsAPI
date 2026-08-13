@@ -155,7 +155,7 @@ namespace Tools.Controllers
         // POST: api/ExtraEnvelopes
         // To protect from overposting attacks, see https://go.microsoft.com/fwlink/?linkid=2123754
         [HttpPost]
-        public async Task<ActionResult> PostExtraEnvelopes(int ProjectId, int? uploadId = null)
+        public async Task<ActionResult> PostExtraEnvelopes(int ProjectId, int? uploadId = null, [FromQuery] int? batchNo = null)
         {
             try
             {
@@ -168,12 +168,12 @@ namespace Tools.Controllers
                 if (uploadId.HasValue)
                 {
                     var all = await _context.NRDatas.Where(p => p.ProjectId == ProjectId).ToListAsync();
-                    nrDataList = all.Where(x => x.UploadList != null && x.UploadList.Contains(uploadId.Value)).ToList();
+                    nrDataList = all.Where(x => x.UploadList != null && x.UploadList.Contains(uploadId.Value) && x.Batch == (batchNo ?? 1)).ToList();
                 }
                 else
                 {
                     nrDataList = await _context.NRDatas
-                        .Where(d => d.ProjectId == ProjectId && d.Status == true && eligibleSteps.Contains(d.Steps))
+                        .Where(d => d.ProjectId == ProjectId && d.Status == true && eligibleSteps.Contains(d.Steps) && d.Batch == (batchNo ?? 1))
                         .ToListAsync();
                 }
 
