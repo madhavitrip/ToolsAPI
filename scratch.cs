@@ -3,7 +3,7 @@ using System.IO;
 using System.Linq;
 using Microsoft.EntityFrameworkCore;
 using Tools.Models;
-using Tools.Data;
+
 
 namespace CheckSchema
 {
