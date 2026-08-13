@@ -80,12 +80,21 @@ namespace Tools.Controllers
             string? sortField = null,
             string? sortOrder = null,
             string? filters = null,
-            [FromQuery] int? lotNo = null)
+            [FromQuery] int? lotNo = null,
+            [FromQuery] int? batchNo = null)
         {
             IQueryable<NRData> query = _context.NRDatas
-     .Where(d => d.ProjectId == projectId
-              && d.Status == true
-              && d.Batch == 1);
+                .Where(d => d.ProjectId == projectId
+                         && d.Status == true);
+
+            if (batchNo.HasValue)
+            {
+                query = query.Where(d => d.Batch == batchNo.Value);
+            }
+            else
+            {
+                query = query.Where(d => d.Batch == 1);
+            }
 
             if (lotNo.HasValue)
             {
@@ -254,6 +263,7 @@ namespace Tools.Controllers
                     d.Symbol,
                     d.LotNo,
                     d.EnvLotNo,
+                    d.Batch,
                     d.NRDatas,
                     d.Day
 
@@ -8491,6 +8501,82 @@ namespace Tools.Controllers
             {
                 Console.WriteLine($"[ApplyComparisonChanges] Exception: {ex}");
                 return StatusCode(500, new { message = "An error occurred while applying batch changes.", error = ex.Message });
+            }
+        }
+
+        [HttpGet("batch-wise-data/{projectId}")]
+        public async Task<IActionResult> GetBatchWiseData(
+            int projectId,
+            [FromQuery] int? batchNo = null,
+            [FromQuery] int pageNo = 1,
+            [FromQuery] int pageSize = 10,
+            [FromQuery] string? search = null,
+            [FromQuery] string? sortBy = null,
+            [FromQuery] string? sortOrder = null)
+        {
+            try
+            {
+                if (projectId <= 0)
+                {
+                    return BadRequest("Invalid Project ID.");
+                }
+
+                var query = _context.NRDatas
+                    .Where(x => x.ProjectId == projectId && x.Status == true);
+
+                if (batchNo.HasValue)
+                {
+                    query = query.Where(x => x.Batch == batchNo.Value);
+                }
+
+                if (!string.IsNullOrWhiteSpace(search))
+                {
+                    search = search.Trim().ToLower();
+                    query = query.Where(x =>
+                        (x.CatchNo != null && x.CatchNo.ToLower().Contains(search)) ||
+                        (x.CenterCode != null && x.CenterCode.ToLower().Contains(search)) ||
+                        (x.SubjectName != null && x.SubjectName.ToLower().Contains(search)) ||
+                        (x.CourseName != null && x.CourseName.ToLower().Contains(search)) ||
+                        (x.NodalCode != null && x.NodalCode.ToLower().Contains(search))
+                    );
+                }
+
+                bool isAscending = string.IsNullOrWhiteSpace(sortOrder) || sortOrder.ToLower() != "desc";
+                var sortByField = sortBy?.Trim().ToLower();
+
+                query = sortByField switch
+                {
+                    "catchno" => isAscending ? query.OrderBy(x => x.CatchNo) : query.OrderByDescending(x => x.CatchNo),
+                    "centercode" => isAscending ? query.OrderBy(x => x.CenterCode) : query.OrderByDescending(x => x.CenterCode),
+                    "subjectname" => isAscending ? query.OrderBy(x => x.SubjectName) : query.OrderByDescending(x => x.SubjectName),
+                    "coursename" => isAscending ? query.OrderBy(x => x.CourseName) : query.OrderByDescending(x => x.CourseName),
+                    "nodalcode" => isAscending ? query.OrderBy(x => x.NodalCode) : query.OrderByDescending(x => x.NodalCode),
+                    "quantity" => isAscending ? query.OrderBy(x => x.Quantity) : query.OrderByDescending(x => x.Quantity),
+                    "examdate" => isAscending ? query.OrderBy(x => x.ExamDate) : query.OrderByDescending(x => x.ExamDate),
+                    "lotno" => isAscending ? query.OrderBy(x => x.LotNo) : query.OrderByDescending(x => x.LotNo),
+                    _ => query.OrderBy(x => x.Id)
+                };
+
+                int totalCount = await query.CountAsync();
+                int totalPages = pageSize > 0 ? (int)Math.Ceiling(totalCount / (double)pageSize) : 1;
+
+                var data = await (pageSize > 0
+                    ? query.Skip((pageNo - 1) * pageSize).Take(pageSize).ToListAsync()
+                    : query.ToListAsync());
+
+                return Ok(new
+                {
+                    PageNo = pageNo,
+                    PageSize = pageSize,
+                    TotalCount = totalCount,
+                    TotalPages = totalPages,
+                    Data = data
+                });
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[GetBatchWiseData] Exception: {ex}");
+                return StatusCode(500, new { message = "An error occurred while fetching batch wise data.", error = ex.Message });
             }
         }
 
