@@ -28,7 +28,7 @@ namespace Tools.Controllers
         }
 
         [HttpPost("ProcessBoxBreaking")]
-        public async Task<IActionResult> ProcessBoxBreaking(int ProjectId, [FromQuery]List<int> LotNo, [FromQuery] bool skipReset = false, [FromQuery] bool bypassDispatch = false, [FromQuery] bool runBoth = false)
+        public async Task<IActionResult> ProcessBoxBreaking(int ProjectId, [FromQuery]List<int> LotNo, [FromQuery] bool skipReset = false, [FromQuery] bool bypassDispatch = false, [FromQuery] bool runBoth = false, [FromQuery] int? batchNo = null)
         {
             var sw = System.Diagnostics.Stopwatch.StartNew();
             try
@@ -74,8 +74,9 @@ namespace Tools.Controllers
                 var eligibleSteps = Tools.Models.PipelineNavigator.GetEligiblePickupSteps(Tools.Models.PipelineNavigator.STEP_AWAITING_BOX);
 
                 var nrData = await _context.NRDatas
-                    .Where(p => p.ProjectId == ProjectId && p.Status == true && eligibleSteps.Contains(p.Steps) && LotNo.Contains(p.LotNo))
+                    .Where(p => p.ProjectId == ProjectId && p.Status == true && eligibleSteps.Contains(p.Steps) && LotNo.Contains(p.LotNo) && p.Batch == (batchNo ?? 1))
                     .ToListAsync();
+
 
                 await _loggerService.LogEventAsync($"Loaded {nrData.Count} NRData records in {sw.ElapsedMilliseconds}ms", "BoxBreakingProcessing", 0, ProjectId);
 
