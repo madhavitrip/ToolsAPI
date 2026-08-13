@@ -4000,12 +4000,14 @@ namespace Tools.Controllers
 
                 var modelProperties = typeof(NRData)
                     .GetProperties()
-                    .Where(p => p.Name != nameof(NRData.NRDatas))
+                    .Where(p => p.Name != nameof(NRData.NRDatas) && !p.Name.Equals(nameof(NRData.Id), StringComparison.OrdinalIgnoreCase))
                     .ToDictionary(p => p.Name.ToLower(), p => p);
 
                 int updatedCatchCount = 0;
                 int updatedRowCount = 0;
 
+
+//Comment
                 foreach (var item in effectiveRows)
                 {
                     List<NRData> matchingRows = new();
