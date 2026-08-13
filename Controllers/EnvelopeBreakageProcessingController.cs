@@ -36,7 +36,7 @@ namespace Tools.Controllers
 
 
         [HttpPost("ProcessEnvelopeBreaking")]
-        public async Task<IActionResult> ProcessEnvelopeBreaking(int ProjectId, int triggeredBy = 0, [FromQuery] bool skipReset = false, [FromQuery] int? lotNo = null, [FromQuery] string? catchNo = null, [FromQuery] bool bypassDispatch = false)
+        public async Task<IActionResult> ProcessEnvelopeBreaking(int ProjectId, int triggeredBy = 0, [FromQuery] bool skipReset = false, [FromQuery] int? lotNo = null, [FromQuery] string? catchNo = null, [FromQuery] bool bypassDispatch = false, [FromQuery] int? batchNo = null)
         {
             try
             {
@@ -58,7 +58,7 @@ namespace Tools.Controllers
                     else if (!string.IsNullOrEmpty(catchNo))
                     {
                         var lot = await _context.NRDatas
-                            .Where(p => p.ProjectId == ProjectId && p.CatchNo == catchNo)
+                            .Where(p => p.ProjectId == ProjectId && p.CatchNo == catchNo && p.Batch == (batchNo ?? 1))
                             .Select(p => p.LotNo)
                             .FirstOrDefaultAsync();
                         if (lot != 0) lotsToCheck.Add(lot);
@@ -66,7 +66,7 @@ namespace Tools.Controllers
                     else
                     {
                         lotsToCheck = await _context.NRDatas
-                            .Where(p => p.ProjectId == ProjectId && p.Status == true)
+                            .Where(p => p.ProjectId == ProjectId && p.Status == true && p.Batch == (batchNo ?? 1))
                             .Select(p => p.LotNo)
                             .Distinct()
                             .ToListAsync();
@@ -99,7 +99,7 @@ namespace Tools.Controllers
                 var eligibleSteps = Tools.Models.PipelineNavigator.GetEligiblePickupSteps(Tools.Models.PipelineNavigator.STEP_AWAITING_ENV);
 
                 var nrQuery = _context.NRDatas
-                    .Where(p => p.ProjectId == ProjectId && p.Status == true && eligibleSteps.Contains(p.Steps));
+                    .Where(p => p.ProjectId == ProjectId && p.Status == true && eligibleSteps.Contains(p.Steps) && p.Batch == (batchNo ?? 1));
 
                 if (lotNo.HasValue) nrQuery = nrQuery.Where(p => p.LotNo == lotNo.Value);
                 if (!string.IsNullOrEmpty(catchNo)) nrQuery = nrQuery.Where(p => p.CatchNo == catchNo);
