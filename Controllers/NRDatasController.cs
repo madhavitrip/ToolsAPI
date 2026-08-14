@@ -7936,8 +7936,8 @@ namespace Tools.Controllers
                             }
                             else if (isCodeChanged)
                             {
-                                // Center Code / Nodal changed updates its step to 4 ("Reprocess from Envelope Serializing")
-                                newRecordStep = 4;
+                                // Center Code / Nodal changed updates its step to 1
+                                newRecordStep = 1;
                             }
                             else if ((processStep == 7 || processStep == 8 || processStep == 10) && isNotFulfilled)
                             {
@@ -8308,7 +8308,7 @@ namespace Tools.Controllers
 
                                 hasNotFulfilledChanges = true;
 
-                                int addedStep = (processStep == 5 || processStep == 6) ? 4 : ((processStep == 7 || processStep == 8) ? 7 : 1);
+                                int addedStep = (processStep == 5 || processStep == 6) ? 4 : 1;
                                 if (addedStep == 4)
                                 {
                                     if (newRec.EnvLotNo > 0)
