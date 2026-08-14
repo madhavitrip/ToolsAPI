@@ -2670,11 +2670,11 @@ namespace Tools.Controllers
 
 
         [HttpGet("PipelineRerunStatus")]
-        public async Task<ActionResult> GetPipelineRerunStatus(int ProjectId)
+        public async Task<ActionResult> GetPipelineRerunStatus(int ProjectId, int batch)
         {
             var activeQuery = _context.NRDatas
                  .AsNoTracking()
-                .Where(n => n.ProjectId == ProjectId && n.Status==true);
+                .Where(n => n.ProjectId == ProjectId && n.Status==true && n.Batch==batch);
 
             var totalActive = await activeQuery.CountAsync();
 
@@ -2736,11 +2736,11 @@ namespace Tools.Controllers
         }
 
         [HttpGet("DuplicateRerunStatus")]
-        public async Task<ActionResult> GetDuplicateRerunStatus(int ProjectId)
+        public async Task<ActionResult> GetDuplicateRerunStatus(int ProjectId, int Batch)
         {
             var requiresDuplicateRerun = await _context.NRDatas
                 .AnyAsync(p =>
-                    p.ProjectId == ProjectId &&
+                    p.ProjectId == ProjectId && p.Batch == Batch &&
                     p.Status == true &&
                     p.Steps == Tools.Models.PipelineNavigator.STEP_UPLOADED);
 
