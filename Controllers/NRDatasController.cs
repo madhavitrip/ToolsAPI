@@ -2019,6 +2019,12 @@ namespace Tools.Controllers
                 int projectId = inputData.GetProperty("projectId").GetInt32();
                 var incomingData = inputData.GetProperty("data");
 
+                bool isChangedNR = false;
+                if (inputData.TryGetProperty("isChangedNR", out JsonElement isChangedNRElem) && isChangedNRElem.ValueKind == JsonValueKind.True)
+                {
+                    isChangedNR = true;
+                }
+
                 // 1. Fetch project-specific configurations & fields
                 var projectConfig = await _context.ProjectConfigs
                     .FirstOrDefaultAsync(x => x.ProjectId == projectId);
@@ -2057,7 +2063,7 @@ namespace Tools.Controllers
                 // =========================================================
                 // FIRST UPLOAD => SIMPLE DIRECT INSERT (Batch = 1)
                 // =========================================================
-                if (!existingNRDataList.Any())
+                if (!existingNRDataList.Any() || !isChangedNR)
                 {
                     var nrDatasToAdd = new List<NRData>();
                     var extraEnvelopesToAdd = new List<ExtraEnvelopes>();
