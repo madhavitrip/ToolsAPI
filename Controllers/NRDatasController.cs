@@ -80,12 +80,21 @@ namespace Tools.Controllers
             string? sortField = null,
             string? sortOrder = null,
             string? filters = null,
-            [FromQuery] int? lotNo = null)
+            [FromQuery] int? lotNo = null,
+            [FromQuery] int? batchNo = null)
         {
             IQueryable<NRData> query = _context.NRDatas
-     .Where(d => d.ProjectId == projectId
-              && d.Status == true
-              && d.Batch == 1);
+                .Where(d => d.ProjectId == projectId
+                         && d.Status == true);
+
+            if (batchNo.HasValue)
+            {
+                query = query.Where(d => d.Batch == batchNo.Value);
+            }
+            else
+            {
+                query = query.Where(d => d.Batch == 1);
+            }
 
             if (lotNo.HasValue)
             {
@@ -254,6 +263,7 @@ namespace Tools.Controllers
                     d.Symbol,
                     d.LotNo,
                     d.EnvLotNo,
+                    d.Batch,
                     d.NRDatas,
                     d.Day
 
@@ -1523,25 +1533,33 @@ namespace Tools.Controllers
                 }
                 else
                 {
-                    // Nodal change overrides everything
                     if (nodalChanged)
                     {
-                        existingRecord.Steps =
-                            Tools.Models.PipelineNavigator.STEP_ENHANCEMENT;
+                        if (existingRecord.Steps > Tools.Models.PipelineNavigator.STEP_ENHANCEMENT)
+                        {
+                            existingRecord.Steps = Tools.Models.PipelineNavigator.STEP_ENHANCEMENT;
+                        }
                     }
                     else if (shouldResetToStepEnvBreaking)
                     {
-                        existingRecord.Steps = 4; // Tools.Models.PipelineNavigator.STEP_AWAITING_EXTRA
+                        if (existingRecord.Steps > 4)
+                        {
+                            existingRecord.Steps = 4; // Tools.Models.PipelineNavigator.STEP_AWAITING_EXTRA
+                        }
                     }
                     else if (shouldResetToStepAwaitingEnv)
                     {
-                        existingRecord.Steps =
-                            Tools.Models.PipelineNavigator.STEP_AWAITING_ENV;
+                        if (existingRecord.Steps > Tools.Models.PipelineNavigator.STEP_AWAITING_ENV)
+                        {
+                            existingRecord.Steps = Tools.Models.PipelineNavigator.STEP_AWAITING_ENV;
+                        }
                     }
                     else if (shouldResetToStepAwaitingBox)
                     {
-                        existingRecord.Steps =
-                            Tools.Models.PipelineNavigator.STEP_AWAITING_BOX;
+                        if (existingRecord.Steps > Tools.Models.PipelineNavigator.STEP_AWAITING_BOX)
+                        {
+                            existingRecord.Steps = Tools.Models.PipelineNavigator.STEP_AWAITING_BOX;
+                        }
                     }
 
                     // =========================================================
@@ -1593,8 +1611,11 @@ namespace Tools.Controllers
                                     }
                                 }
 
-                                row.Steps = 4;
-                                rowChanged = true;
+                                if (row.Steps > 4)
+                                {
+                                    row.Steps = 4;
+                                    rowChanged = true;
+                                }
 
                                 if (rowChanged)
                                 {
@@ -1673,8 +1694,11 @@ namespace Tools.Controllers
                             if (nodalChanged || shouldResetToStepEnvBreaking || shouldResetToStepAwaitingEnv || shouldResetToStepAwaitingBox)
                             {
                                 // Reset related catch rows' steps to match the edited record's step
-                                row.Steps = existingRecord.Steps;
-                                rowChanged = true;
+                                if (row.Steps > existingRecord.Steps)
+                                {
+                                    row.Steps = existingRecord.Steps;
+                                    rowChanged = true;
+                                }
                             }
 
                             if (rowChanged)
@@ -1933,7 +1957,10 @@ namespace Tools.Controllers
                 {
                     int targetStep = envelopeFieldAffected ? 4 : resetStep;
 
-                    existingRecord.Steps = targetStep;
+                    if (existingRecord.Steps > targetStep)
+                    {
+                        existingRecord.Steps = targetStep;
+                    }
 
                     if (!string.IsNullOrWhiteSpace(catchNo))
                     {
@@ -1943,8 +1970,11 @@ namespace Tools.Controllers
 
                         foreach (var row in sameCatchRows)
                         {
-                            row.Steps = targetStep;
-                            _context.NRDatas.Update(row);
+                            if (row.Steps > targetStep)
+                            {
+                                row.Steps = targetStep;
+                                _context.NRDatas.Update(row);
+                            }
                         }
                     }
 
@@ -1956,18 +1986,21 @@ namespace Tools.Controllers
                     }
                 }
 
-                // If page count has been changed, reset the steps of the entire lot to 5
+                // If page count has been changed, reset the steps of the entire lot to 5 ONLY if step is 6
                 bool pagesChanged = changedFields.Contains("pages");
                 if (pagesChanged && existingRecord.LotNo > 0)
                 {
                     await _context.NRDatas
-                        .Where(x => x.ProjectId == projectId && x.LotNo == existingRecord.LotNo && x.Status)
+                        .Where(x => x.ProjectId == projectId && x.LotNo == existingRecord.LotNo && x.Status && x.Steps == 6)
                         .ExecuteUpdateAsync(s => s.SetProperty(x => x.Steps, 5));
                     
                     // MUST update tracked entities to prevent SaveChangesAsync from overwriting with old values
                     foreach (var record in records)
                     {
-                        record.Steps = 5;
+                        if (record.Steps == 6)
+                        {
+                            record.Steps = 5;
+                        }
                     }
                 }
 
@@ -7926,8 +7959,8 @@ namespace Tools.Controllers
                             }
                             else if (isCodeChanged)
                             {
-                                // Center Code / Nodal changed updates its step to 4 ("Reprocess from Envelope Serializing")
-                                newRecordStep = 4;
+                                // Center Code / Nodal changed updates its step to 1
+                                newRecordStep = 1;
                             }
                             else if ((processStep == 7 || processStep == 8 || processStep == 10) && isNotFulfilled)
                             {
@@ -8298,7 +8331,7 @@ namespace Tools.Controllers
 
                                 hasNotFulfilledChanges = true;
 
-                                int addedStep = (processStep == 5 || processStep == 6) ? 4 : ((processStep == 7 || processStep == 8) ? 7 : 1);
+                                int addedStep = (processStep == 5 || processStep == 6) ? 4 : 1;
                                 if (addedStep == 4)
                                 {
                                     if (newRec.EnvLotNo > 0)
@@ -8491,6 +8524,82 @@ namespace Tools.Controllers
             {
                 Console.WriteLine($"[ApplyComparisonChanges] Exception: {ex}");
                 return StatusCode(500, new { message = "An error occurred while applying batch changes.", error = ex.Message });
+            }
+        }
+
+        [HttpGet("batch-wise-data/{projectId}")]
+        public async Task<IActionResult> GetBatchWiseData(
+            int projectId,
+            [FromQuery] int? batchNo = null,
+            [FromQuery] int pageNo = 1,
+            [FromQuery] int pageSize = 10,
+            [FromQuery] string? search = null,
+            [FromQuery] string? sortBy = null,
+            [FromQuery] string? sortOrder = null)
+        {
+            try
+            {
+                if (projectId <= 0)
+                {
+                    return BadRequest("Invalid Project ID.");
+                }
+
+                var query = _context.NRDatas
+                    .Where(x => x.ProjectId == projectId && x.Status == true);
+
+                if (batchNo.HasValue)
+                {
+                    query = query.Where(x => x.Batch == batchNo.Value);
+                }
+
+                if (!string.IsNullOrWhiteSpace(search))
+                {
+                    search = search.Trim().ToLower();
+                    query = query.Where(x =>
+                        (x.CatchNo != null && x.CatchNo.ToLower().Contains(search)) ||
+                        (x.CenterCode != null && x.CenterCode.ToLower().Contains(search)) ||
+                        (x.SubjectName != null && x.SubjectName.ToLower().Contains(search)) ||
+                        (x.CourseName != null && x.CourseName.ToLower().Contains(search)) ||
+                        (x.NodalCode != null && x.NodalCode.ToLower().Contains(search))
+                    );
+                }
+
+                bool isAscending = string.IsNullOrWhiteSpace(sortOrder) || sortOrder.ToLower() != "desc";
+                var sortByField = sortBy?.Trim().ToLower();
+
+                query = sortByField switch
+                {
+                    "catchno" => isAscending ? query.OrderBy(x => x.CatchNo) : query.OrderByDescending(x => x.CatchNo),
+                    "centercode" => isAscending ? query.OrderBy(x => x.CenterCode) : query.OrderByDescending(x => x.CenterCode),
+                    "subjectname" => isAscending ? query.OrderBy(x => x.SubjectName) : query.OrderByDescending(x => x.SubjectName),
+                    "coursename" => isAscending ? query.OrderBy(x => x.CourseName) : query.OrderByDescending(x => x.CourseName),
+                    "nodalcode" => isAscending ? query.OrderBy(x => x.NodalCode) : query.OrderByDescending(x => x.NodalCode),
+                    "quantity" => isAscending ? query.OrderBy(x => x.Quantity) : query.OrderByDescending(x => x.Quantity),
+                    "examdate" => isAscending ? query.OrderBy(x => x.ExamDate) : query.OrderByDescending(x => x.ExamDate),
+                    "lotno" => isAscending ? query.OrderBy(x => x.LotNo) : query.OrderByDescending(x => x.LotNo),
+                    _ => query.OrderBy(x => x.Id)
+                };
+
+                int totalCount = await query.CountAsync();
+                int totalPages = pageSize > 0 ? (int)Math.Ceiling(totalCount / (double)pageSize) : 1;
+
+                var data = await (pageSize > 0
+                    ? query.Skip((pageNo - 1) * pageSize).Take(pageSize).ToListAsync()
+                    : query.ToListAsync());
+
+                return Ok(new
+                {
+                    PageNo = pageNo,
+                    PageSize = pageSize,
+                    TotalCount = totalCount,
+                    TotalPages = totalPages,
+                    Data = data
+                });
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[GetBatchWiseData] Exception: {ex}");
+                return StatusCode(500, new { message = "An error occurred while fetching batch wise data.", error = ex.Message });
             }
         }
 

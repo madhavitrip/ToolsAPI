@@ -669,9 +669,9 @@ namespace Tools.Controllers
                                 ? (object)d : DateTime.MinValue;
 
                         // ✅ Any field with "sort" in its name (covers RouteSort, CenterSort, 
-                        // District Sort, and any other dynamic sort field) → always int
+                        // District Sort, and any other dynamic sort field) → parse as double
                         if (fieldName.Contains("sort", StringComparison.OrdinalIgnoreCase))
-                            return int.TryParse(val.ToString(), out int i) ? i : 0;
+                            return double.TryParse(val.ToString(), out double d) ? d : 0.0;
 
                         // All other fields → string comparison
                         return val.ToString().Trim().ToLowerInvariant();
@@ -867,10 +867,10 @@ namespace Tools.Controllers
                         omrStart += envQuantity;
                     }
 
-                    int centerSort = 0;
-                    if (dict["CenterSort"] is double dCenterSort) centerSort = (int)dCenterSort;
+                    double centerSort = 0;
+                    if (dict["CenterSort"] is double dCenterSort) centerSort = dCenterSort;
                     else if (dict["CenterSort"] is int iCenterSort) centerSort = iCenterSort;
-                    else int.TryParse(dict["CenterSort"]?.ToString(), out centerSort);
+                    else double.TryParse(dict["CenterSort"]?.ToString(), out centerSort);
 
                     int routeSort = 0;
                     if (dict["RouteSort"] is double dRouteSort) routeSort = (int)dRouteSort;

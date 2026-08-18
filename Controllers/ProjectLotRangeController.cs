@@ -1,4 +1,4 @@
-﻿using ERPToolsAPI.Data;
+using ERPToolsAPI.Data;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Tools.Models;
@@ -62,32 +62,63 @@ namespace Tools.Controllers
 
                 Console.WriteLine($"[ProjectLotRangeController] Saving - ProjectId: {model.ProjectId}, StartDate: {startDateString}, EndDate: {endDateString}, LotNo: {model.LotNo}");
 
-                // Create the model with formatted date strings
-                var projectLotRange = new ProjectLotRange
+                // Check if a record with the same ProjectId and LotNo exists
+                var existingLotRange = await _context.ProjectLotRanges
+                    .FirstOrDefaultAsync(x => x.ProjectId == model.ProjectId && x.LotNo == model.LotNo);
+
+                if (existingLotRange != null)
                 {
-                    ProjectId = model.ProjectId,
-                    StartDate = startDateString,
-                    EndDate = endDateString,
-                    LotNo = model.LotNo
-                };
-
-                _context.ProjectLotRanges.Add(projectLotRange);
-                await _context.SaveChangesAsync();
-
-                Console.WriteLine($"[ProjectLotRangeController] Successfully saved with LotRangeId: {projectLotRange.LotRangeId}");
-
-                return Ok(new
-                {
-                    message = "Project Lot Range added successfully.",
-                    data = new
+                    // Update existing record
+                    existingLotRange.StartDate = startDateString;
+                    existingLotRange.EndDate = endDateString;
+                    
+                    _context.ProjectLotRanges.Update(existingLotRange);
+                    await _context.SaveChangesAsync();
+                    
+                    Console.WriteLine($"[ProjectLotRangeController] Successfully updated LotRangeId: {existingLotRange.LotRangeId}");
+                    
+                    return Ok(new
                     {
-                        projectLotRange.LotRangeId,
-                        projectLotRange.ProjectId,
-                        startDate = projectLotRange.StartDate,
-                        endDate = projectLotRange.EndDate,
-                        projectLotRange.LotNo
-                    }
-                });
+                        message = "Project Lot Range updated successfully.",
+                        data = new
+                        {
+                            existingLotRange.LotRangeId,
+                            existingLotRange.ProjectId,
+                            startDate = existingLotRange.StartDate,
+                            endDate = existingLotRange.EndDate,
+                            existingLotRange.LotNo
+                        }
+                    });
+                }
+                else
+                {
+                    // Create the model with formatted date strings
+                    var projectLotRange = new ProjectLotRange
+                    {
+                        ProjectId = model.ProjectId,
+                        StartDate = startDateString,
+                        EndDate = endDateString,
+                        LotNo = model.LotNo
+                    };
+
+                    _context.ProjectLotRanges.Add(projectLotRange);
+                    await _context.SaveChangesAsync();
+
+                    Console.WriteLine($"[ProjectLotRangeController] Successfully saved with LotRangeId: {projectLotRange.LotRangeId}");
+
+                    return Ok(new
+                    {
+                        message = "Project Lot Range added successfully.",
+                        data = new
+                        {
+                            projectLotRange.LotRangeId,
+                            projectLotRange.ProjectId,
+                            startDate = projectLotRange.StartDate,
+                            endDate = projectLotRange.EndDate,
+                            projectLotRange.LotNo
+                        }
+                    });
+                }
             }
             catch (DbUpdateException dbEx)
             {
