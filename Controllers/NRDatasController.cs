@@ -229,6 +229,13 @@ namespace Tools.Controllers
                     "NodalCode" => isAscending ? query.OrderBy(d => d.NodalCode) : query.OrderByDescending(d => d.NodalCode),
                     "CourseName" => isAscending ? query.OrderBy(d => d.CourseName) : query.OrderByDescending(d => d.CourseName),
                     "SubjectName" => isAscending ? query.OrderBy(d => d.SubjectName) : query.OrderByDescending(d => d.SubjectName),
+                    "Pages" => isAscending ? query.OrderBy(d => d.Pages) : query.OrderByDescending(d => d.Pages),
+                    "CenterSort" => isAscending ? query.OrderBy(d => d.CenterSort) : query.OrderByDescending(d => d.CenterSort),
+                    "LotNo" => isAscending ? query.OrderBy(d => d.LotNo) : query.OrderByDescending(d => d.LotNo),
+                    "Route" => isAscending ? query.OrderBy(d => d.Route) : query.OrderByDescending(d => d.Route),
+                    "District" => isAscending ? query.OrderBy(d => d.District) : query.OrderByDescending(d => d.District),
+                    "EnvLotNo" => isAscending ? query.OrderBy(d => d.EnvLotNo) : query.OrderByDescending(d => d.EnvLotNo),
+                    "Batch" => isAscending ? query.OrderBy(d => d.Batch) : query.OrderByDescending(d => d.Batch),
                     _ => query.OrderBy(d => d.Id),
                 };
             }
@@ -372,21 +379,34 @@ namespace Tools.Controllers
             // =========================================================
             // 🚀 STEP 1: GET PAGED DISTINCT KEYS (FAST)
             // =========================================================
-            var baseKeyQuery = query.Select(x => x.CatchNo).Distinct();
+            var baseGroupQuery = query.GroupBy(x => x.CatchNo)
+                .Select(g => new { 
+                    CatchNo = g.Key, 
+                    ExamDate = g.Max(x => x.ExamDate), 
+                    LotNo = g.Max(x => x.LotNo),
+                    Pages = g.Max(x => x.Pages)
+                });
 
             // sorting for keys only (cheap)
-            baseKeyQuery = (sortField, sortOrder?.ToLowerInvariant()) switch
+            baseGroupQuery = (sortField?.ToLowerInvariant(), sortOrder?.ToLowerInvariant()) switch
             {
-                ("CatchNo", "descend") => baseKeyQuery.OrderByDescending(x => x),
-                ("CatchNo", _) => baseKeyQuery.OrderBy(x => x),
-                _ => baseKeyQuery.OrderBy(x => x)
+                ("catchno", "descend") => baseGroupQuery.OrderByDescending(x => x.CatchNo),
+                ("catchno", _) => baseGroupQuery.OrderBy(x => x.CatchNo),
+                ("examdate", "descend") => baseGroupQuery.OrderByDescending(x => x.ExamDate),
+                ("examdate", _) => baseGroupQuery.OrderBy(x => x.ExamDate),
+                ("lotno", "descend") => baseGroupQuery.OrderByDescending(x => x.LotNo),
+                ("lotno", _) => baseGroupQuery.OrderBy(x => x.LotNo),
+                ("pages", "descend") => baseGroupQuery.OrderByDescending(x => x.Pages),
+                ("pages", _) => baseGroupQuery.OrderBy(x => x.Pages),
+                _ => baseGroupQuery.OrderBy(x => x.CatchNo)
             };
 
-            var totalCount = await baseKeyQuery.CountAsync();
+            var totalCount = await baseGroupQuery.CountAsync();
 
-            var pagedKeys = await baseKeyQuery
+            var pagedKeys = await baseGroupQuery
                 .Skip((pageNo - 1) * pageSize)
                 .Take(pageSize)
+                .Select(x => x.CatchNo)
                 .ToListAsync();
 
             if (pagedKeys.Count == 0)
@@ -450,6 +470,8 @@ namespace Tools.Controllers
                     NRDatas = g.Select(x => x.NRDatas).FirstOrDefault(),
                     RecordCount = g.Count()
                 })
+                .ToList()
+                .OrderBy(d => pagedKeys.IndexOf(d.CatchNo))
                 .ToList();
 
             // =========================================================
@@ -2042,6 +2064,12 @@ namespace Tools.Controllers
                 int projectId = inputData.GetProperty("projectId").GetInt32();
                 var incomingData = inputData.GetProperty("data");
 
+                bool isChangedNR = false;
+                if (inputData.TryGetProperty("isChangedNR", out JsonElement isChangedNRElem) && isChangedNRElem.ValueKind == JsonValueKind.True)
+                {
+                    isChangedNR = true;
+                }
+
                 // 1. Fetch project-specific configurations & fields
                 var projectConfig = await _context.ProjectConfigs
                     .FirstOrDefaultAsync(x => x.ProjectId == projectId);
@@ -2080,7 +2108,7 @@ namespace Tools.Controllers
                 // =========================================================
                 // FIRST UPLOAD => SIMPLE DIRECT INSERT (Batch = 1)
                 // =========================================================
-                if (!existingNRDataList.Any())
+                if (!existingNRDataList.Any() || !isChangedNR)
                 {
                     var nrDatasToAdd = new List<NRData>();
                     var extraEnvelopesToAdd = new List<ExtraEnvelopes>();

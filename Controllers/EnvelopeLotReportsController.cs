@@ -88,6 +88,7 @@ namespace ToolsAPI.Controllers
                         x.EnvelopeReport.DownloadedByUserId,
                         x.EnvelopeReport.DownloadedAt,
                         x.EnvelopeReport.FilePath,
+                        x.EnvelopeReport.Status,
 
                         // Version from RPTTemplates table
                         Version = x.RPTTemplate.Version,
@@ -413,6 +414,54 @@ namespace ToolsAPI.Controllers
             {
                 Console.WriteLine($"Error tracking download: {ex.Message}");
                 return StatusCode(500, new { message = "Failed to track download", error = ex.Message });
+            }
+        }
+
+        // PUT: api/EnvelopeLotReports/{id}/archive
+        [HttpPut("{id}/archive")]
+        public async Task<IActionResult> ArchiveReport(int id)
+        {
+            try
+            {
+                var report = await _context.EnvelopeLotReports.FindAsync(id);
+                if (report == null)
+                {
+                    return NotFound(new { message = "Report not found" });
+                }
+
+                report.Status = false;
+                _context.EnvelopeLotReports.Update(report);
+                await _context.SaveChangesAsync();
+
+                return Ok(new { message = "Report archived successfully" });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { message = "Failed to archive report", error = ex.Message });
+            }
+        }
+
+        // PUT: api/EnvelopeLotReports/{id}/unarchive
+        [HttpPut("{id}/unarchive")]
+        public async Task<IActionResult> UnarchiveReport(int id)
+        {
+            try
+            {
+                var report = await _context.EnvelopeLotReports.FindAsync(id);
+                if (report == null)
+                {
+                    return NotFound(new { message = "Report not found" });
+                }
+
+                report.Status = true;
+                _context.EnvelopeLotReports.Update(report);
+                await _context.SaveChangesAsync();
+
+                return Ok(new { message = "Report unarchived successfully" });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { message = "Failed to unarchive report", error = ex.Message });
             }
         }
     }

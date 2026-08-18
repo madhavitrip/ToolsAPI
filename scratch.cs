@@ -4,7 +4,6 @@ using System.Linq;
 using Microsoft.EntityFrameworkCore;
 using Tools.Models;
 
-
 namespace CheckSchema
 {
     class Program
