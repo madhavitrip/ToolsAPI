@@ -7995,7 +7995,7 @@ namespace Tools.Controllers
                                 if (processStep == 8) {
                                     newRecordStep = 5;
                                 } else if (processStep == 10) {
-                                    newRecordStep = target.Steps; // Original row keeps its step
+                                    newRecordStep = target.Steps; // Original row keeps its steps
                                 } else {
                                     newRecordStep = (target.Steps > processStep) ? processStep : target.Steps;
                                 }

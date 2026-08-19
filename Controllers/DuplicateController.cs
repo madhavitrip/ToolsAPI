@@ -428,6 +428,8 @@ WHERE ProjectId = {0};", ProjectId);
                     }
                 }
 
+                bool hasExtraConfig = await _context.ExtraConfigurations.AnyAsync(e => e.ProjectId == ProjectId);
+
                 // Consolidated calculation logic: Round Before (Optional) -> Enhance -> Round After (Mandatory if capacity exists)
                 if (data.Any())
                 {
@@ -462,8 +464,16 @@ WHERE ProjectId = {0};", ProjectId);
                                 d.Quantity = (int)Math.Round(totalTarget);
                             }
                         }
-                        // Keep steps as 1; step will be updated to 2 in EnvelopeConfiguration once both are done
-                        d.Steps = Tools.Models.PipelineNavigator.GetNextStep(Tools.Models.PipelineNavigator.STEP_DUP_PARTIAL, projectconfig?.Modules);
+                        
+                        if (hasExtraConfig)
+                        {
+                            // Keep steps as 1; step will be updated to 2 in EnvelopeConfiguration once both are done
+                            d.Steps = Tools.Models.PipelineNavigator.GetNextStep(Tools.Models.PipelineNavigator.STEP_DUP_PARTIAL, projectconfig?.Modules);
+                        }
+                        else
+                        {
+                            d.Steps = 4;
+                        }
                     }
 
                     await _context.SaveChangesAsync();
