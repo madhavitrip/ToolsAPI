@@ -1555,25 +1555,33 @@ namespace Tools.Controllers
                 }
                 else
                 {
-                    // Nodal change overrides everything
                     if (nodalChanged)
                     {
-                        existingRecord.Steps =
-                            Tools.Models.PipelineNavigator.STEP_ENHANCEMENT;
+                        if (existingRecord.Steps > Tools.Models.PipelineNavigator.STEP_ENHANCEMENT)
+                        {
+                            existingRecord.Steps = Tools.Models.PipelineNavigator.STEP_ENHANCEMENT;
+                        }
                     }
                     else if (shouldResetToStepEnvBreaking)
                     {
-                        existingRecord.Steps = 4; // Tools.Models.PipelineNavigator.STEP_AWAITING_EXTRA
+                        if (existingRecord.Steps > 4)
+                        {
+                            existingRecord.Steps = 4; // Tools.Models.PipelineNavigator.STEP_AWAITING_EXTRA
+                        }
                     }
                     else if (shouldResetToStepAwaitingEnv)
                     {
-                        existingRecord.Steps =
-                            Tools.Models.PipelineNavigator.STEP_AWAITING_ENV;
+                        if (existingRecord.Steps > Tools.Models.PipelineNavigator.STEP_AWAITING_ENV)
+                        {
+                            existingRecord.Steps = Tools.Models.PipelineNavigator.STEP_AWAITING_ENV;
+                        }
                     }
                     else if (shouldResetToStepAwaitingBox)
                     {
-                        existingRecord.Steps =
-                            Tools.Models.PipelineNavigator.STEP_AWAITING_BOX;
+                        if (existingRecord.Steps > Tools.Models.PipelineNavigator.STEP_AWAITING_BOX)
+                        {
+                            existingRecord.Steps = Tools.Models.PipelineNavigator.STEP_AWAITING_BOX;
+                        }
                     }
 
                     // =========================================================
@@ -1625,8 +1633,11 @@ namespace Tools.Controllers
                                     }
                                 }
 
-                                row.Steps = 4;
-                                rowChanged = true;
+                                if (row.Steps > 4)
+                                {
+                                    row.Steps = 4;
+                                    rowChanged = true;
+                                }
 
                                 if (rowChanged)
                                 {
@@ -1705,8 +1716,11 @@ namespace Tools.Controllers
                             if (nodalChanged || shouldResetToStepEnvBreaking || shouldResetToStepAwaitingEnv || shouldResetToStepAwaitingBox)
                             {
                                 // Reset related catch rows' steps to match the edited record's step
-                                row.Steps = existingRecord.Steps;
-                                rowChanged = true;
+                                if (row.Steps > existingRecord.Steps)
+                                {
+                                    row.Steps = existingRecord.Steps;
+                                    rowChanged = true;
+                                }
                             }
 
                             if (rowChanged)
@@ -1965,7 +1979,10 @@ namespace Tools.Controllers
                 {
                     int targetStep = envelopeFieldAffected ? 4 : resetStep;
 
-                    existingRecord.Steps = targetStep;
+                    if (existingRecord.Steps > targetStep)
+                    {
+                        existingRecord.Steps = targetStep;
+                    }
 
                     if (!string.IsNullOrWhiteSpace(catchNo))
                     {
@@ -1975,8 +1992,11 @@ namespace Tools.Controllers
 
                         foreach (var row in sameCatchRows)
                         {
-                            row.Steps = targetStep;
-                            _context.NRDatas.Update(row);
+                            if (row.Steps > targetStep)
+                            {
+                                row.Steps = targetStep;
+                                _context.NRDatas.Update(row);
+                            }
                         }
                     }
 
@@ -1988,18 +2008,21 @@ namespace Tools.Controllers
                     }
                 }
 
-                // If page count has been changed, reset the steps of the entire lot to 5
+                // If page count has been changed, reset the steps of the entire lot to 5 ONLY if step is 6
                 bool pagesChanged = changedFields.Contains("pages");
                 if (pagesChanged && existingRecord.LotNo > 0)
                 {
                     await _context.NRDatas
-                        .Where(x => x.ProjectId == projectId && x.LotNo == existingRecord.LotNo && x.Status)
+                        .Where(x => x.ProjectId == projectId && x.LotNo == existingRecord.LotNo && x.Status && x.Steps == 6)
                         .ExecuteUpdateAsync(s => s.SetProperty(x => x.Steps, 5));
                     
                     // MUST update tracked entities to prevent SaveChangesAsync from overwriting with old values
                     foreach (var record in records)
                     {
-                        record.Steps = 5;
+                        if (record.Steps == 6)
+                        {
+                            record.Steps = 5;
+                        }
                     }
                 }
 
@@ -2708,11 +2731,11 @@ namespace Tools.Controllers
 
 
         [HttpGet("PipelineRerunStatus")]
-        public async Task<ActionResult> GetPipelineRerunStatus(int ProjectId)
+        public async Task<ActionResult> GetPipelineRerunStatus(int ProjectId, int batch)
         {
             var activeQuery = _context.NRDatas
                  .AsNoTracking()
-                .Where(n => n.ProjectId == ProjectId && n.Status==true);
+                .Where(n => n.ProjectId == ProjectId && n.Status==true && n.Batch==batch);
 
             var totalActive = await activeQuery.CountAsync();
 
@@ -2774,11 +2797,11 @@ namespace Tools.Controllers
         }
 
         [HttpGet("DuplicateRerunStatus")]
-        public async Task<ActionResult> GetDuplicateRerunStatus(int ProjectId)
+        public async Task<ActionResult> GetDuplicateRerunStatus(int ProjectId, int Batch)
         {
             var requiresDuplicateRerun = await _context.NRDatas
                 .AnyAsync(p =>
-                    p.ProjectId == ProjectId &&
+                    p.ProjectId == ProjectId && p.Batch == Batch &&
                     p.Status == true &&
                     p.Steps == Tools.Models.PipelineNavigator.STEP_UPLOADED);
 

@@ -383,9 +383,9 @@ namespace Tools.Controllers
                                 System.Globalization.DateTimeStyles.None, out DateTime parsedDate)
                                 ? (object)parsedDate : DateTime.MinValue;
 
-                        // ✅ Any field containing "sort" → always int
+                        // ✅ Any field containing "sort" → parse as double to support decimals like 1.1
                         if (fieldName.Contains("sort", StringComparison.OrdinalIgnoreCase))
-                            return int.TryParse(val.ToString(), out int i) ? (object)i : 0;
+                            return double.TryParse(val.ToString(), out double d) ? (object)d : 0.0;
 
                         return val.ToString().Trim().ToLowerInvariant();
                     };
