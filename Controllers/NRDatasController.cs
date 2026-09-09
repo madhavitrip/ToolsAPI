@@ -5646,6 +5646,56 @@ namespace Tools.Controllers
             });
         }
 
+        // ---------------------------------------------------------
+        // Bulk-verify all catches in a project (used when project has no ABCD data)
+        // Sets VerificationStatus = 1 (Verified) for every active record in the project.
+        // Skips the normal A/B/C/D presence validation intentionally.
+        // ---------------------------------------------------------
+        [HttpPost("~/api/Correction/HeaderVerification/BulkVerifyProject/{projectId}")]
+        public async Task<IActionResult> BulkVerifyProject(int projectId)
+        {
+            if (projectId <= 0)
+                return BadRequest("Invalid project ID.");
+
+            var records = await _context.NRDatas
+                .Where(x => x.ProjectId == projectId && x.Status == true && x.VerificationStatus != (int)HeaderVerificationStatus.Verified)
+                .ToListAsync();
+
+            if (records.Count == 0)
+                return Ok(new { updatedCount = 0, message = "All catches are already verified." });
+
+            int userId = LogHelper.GetTriggeredBy(User);
+            DateTime utcNow = DateTime.UtcNow;
+
+            foreach (var record in records)
+            {
+                record.VerificationStatus = (int)HeaderVerificationStatus.Verified;
+                record.VerifiedBy = userId;
+                record.VerifiedOn = utcNow;
+
+                // Persist into the NRDatas JSON blob as well
+                Dictionary<string, JsonElement> data = new();
+                if (!string.IsNullOrWhiteSpace(record.NRDatas))
+                {
+                    try
+                    {
+                        data = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(record.NRDatas)
+                               ?? new Dictionary<string, JsonElement>();
+                    }
+                    catch
+                    {
+                        data = new Dictionary<string, JsonElement>();
+                    }
+                }
+                data["VerificationStatus"] = JsonSerializer.SerializeToElement((int)HeaderVerificationStatus.Verified);
+                record.NRDatas = JsonSerializer.Serialize(data);
+            }
+
+            await _context.SaveChangesAsync();
+
+            return Ok(new { updatedCount = records.Count, message = $"{records.Count} catch(es) marked as Verified." });
+        }
+
 
         [HttpDelete("DeleteCatchNo/{projectId}/{catchNo}")]
         public async Task<IActionResult> DeleteCatchNo(int projectId, string catchNo)
