@@ -2667,69 +2667,6 @@ namespace Tools.Controllers
         }
 
 
-        //[HttpGet("PipelineRerunStatus")]
-        //public async Task<ActionResult> GetPipelineRerunStatus(int ProjectId)
-        //{
-        //    var activeSteps = await _context.NRDatas
-        //        .Where(p => p.ProjectId == ProjectId && p.Status == true)
-        //        .Select(p => p.Steps)
-        //        .ToListAsync();
-
-        //    if (!activeSteps.Any())
-        //    {
-        //        return Ok(new
-        //        {
-        //            hasPendingPipelineChanges = false,
-        //            minStep = 6,
-        //            maxStep = 6,
-        //            totalActive = 0
-        //        });
-        //    }
-
-        //    int minStep = activeSteps.Min();
-        //    int maxStep = activeSteps.Max();
-        //    bool hasPendingPipelineChanges = minStep < Tools.Models.PipelineNavigator.STEP_DONE;
-
-        //    var lotsWithReports = await _context.BoxBreakingResults
-        //        .Where(b => b.ProjectId == ProjectId && b.Status && b.EnvelopeBreakingResultId.HasValue)
-        //        .Join(_context.EnvelopeBreakingResults,
-        //            b => b.EnvelopeBreakingResultId.Value,
-        //            e => e.Id,
-        //            (b, e) => new { e.CatchNo })
-        //        .Join(_context.NRDatas.Where(n => n.ProjectId == ProjectId && n.Status == true),
-        //            e => e.CatchNo,
-        //            n => n.CatchNo,
-        //            (e, n) => n.LotNo)
-        //        .Distinct()
-        //        .ToListAsync();
-
-        //    var pendingBoxLots = new List<int>();
-        //    if (lotsWithReports.Any())
-        //    {
-        //        pendingBoxLots = await _context.NRDatas
-        //            .Where(n => n.ProjectId == ProjectId && n.Status == true && lotsWithReports.Contains(n.LotNo) && n.Steps <= 5)
-        //            .Select(n => n.LotNo)
-        //            .Distinct()
-        //            .OrderBy(l => l)
-        //            .ToListAsync();
-        //    }
-
-        //    return Ok(new
-        //    {
-        //        hasPendingPipelineChanges,
-        //        minStep,
-        //        maxStep,
-        //        totalActive = activeSteps.Count,
-        //        duplicatePending = activeSteps.Any(s => s == 0),
-        //        enhancementPending = activeSteps.Any(s => s <= 2),
-        //        extraPending = activeSteps.Any(s => s <= 3),
-        //        envelopePending = activeSteps.Any(s => s <= 4),
-        //        boxPending = pendingBoxLots.Any(),
-        //        pendingBoxLots = pendingBoxLots
-        //    });
-        //}
-
-
         [HttpGet("PipelineRerunStatus")]
         public async Task<ActionResult> GetPipelineRerunStatus(int ProjectId, int batch)
         {

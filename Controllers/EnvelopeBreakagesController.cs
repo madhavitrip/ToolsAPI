@@ -336,6 +336,7 @@ namespace Tools.Controllers
                     .Select(int.Parse)
                     .OrderByDescending(x => x)
                     .ToList();
+                bool hasExtraConfig = await _context.ExtraConfigurations.AnyAsync(e => e.ProjectId == ProjectId);
 
                 var nrDataIds = nrDataList.Select(r => r.Id).ToList();
                 var env = await _context.EnvelopeBreakages
@@ -440,8 +441,16 @@ namespace Tools.Controllers
                     // Update steps since envelope configuration is completed
                     foreach (var nr in nrDataList)
                     {
-                        nr.Steps = Tools.Models.PipelineNavigator.GetNextStep(Tools.Models.PipelineNavigator.STEP_ENHANCEMENT, projectConfig?.Modules);
+                        if (hasExtraConfig)
+                        {
+                            nr.Steps = Tools.Models.PipelineNavigator.STEP_ENV_BREAKING;
+                        }
+                        else
+                        {
+                            nr.Steps = Tools.Models.PipelineNavigator.STEP_AWAITING_EXTRA;
+                        }
                     }
+
 
                     await _context.SaveChangesAsync();
                     await _loggerService.LogEventAsync($"Created Envelope Breaking of ProjectID {ProjectId} and updated steps", "EnvelopeBreakages", LogHelper.GetTriggeredBy(User), ProjectId);

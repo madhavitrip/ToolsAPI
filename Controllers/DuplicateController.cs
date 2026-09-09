@@ -366,16 +366,11 @@ WHERE ProjectId = {0};", ProjectId);
 
                 var data = await query.ToListAsync();
 
-                Console.WriteLine($"[ApplyEnhancement] Data loaded: {data.Count} records found.");
-
                 var projectconfig = await _context.ProjectConfigs
                     .Where(p => p.ProjectId == ProjectId).FirstOrDefaultAsync();
 
-                Console.WriteLine($"[ApplyEnhancement] Project config loaded. IsNull = {projectconfig == null}");
-
                 if (projectconfig == null)
                 {
-                    Console.WriteLine($"[ApplyEnhancement] Project config not exists for ProjectId: {ProjectId}");
                     return NotFound("Project config not exists for this project");
                 }
 
@@ -428,7 +423,6 @@ WHERE ProjectId = {0};", ProjectId);
                     }
                 }
 
-                bool hasExtraConfig = await _context.ExtraConfigurations.AnyAsync(e => e.ProjectId == ProjectId);
 
                 // Consolidated calculation logic: Round Before (Optional) -> Enhance -> Round After (Mandatory if capacity exists)
                 if (data.Any())
@@ -464,16 +458,8 @@ WHERE ProjectId = {0};", ProjectId);
                                 d.Quantity = (int)Math.Round(totalTarget);
                             }
                         }
-                        
-                        if (hasExtraConfig)
-                        {
-                            // Keep steps as 1; step will be updated to 2 in EnvelopeConfiguration once both are done
-                            d.Steps = Tools.Models.PipelineNavigator.GetNextStep(Tools.Models.PipelineNavigator.STEP_DUP_PARTIAL, projectconfig?.Modules);
-                        }
-                        else
-                        {
-                            d.Steps = 4;
-                        }
+                      
+                            d.Steps = Tools.Models.PipelineNavigator.STEP_ENHANCEMENT;
                     }
 
                     await _context.SaveChangesAsync();
@@ -542,7 +528,7 @@ WHERE ProjectId = {0};", ProjectId);
                 {
                     Console.WriteLine("Envelope breaking is called");
                     var envelopeController = new EnvelopeBreakagesController(_context, _logger, _apiSettingsOptions, _dispatchService);
-                    await envelopeController.EnvelopeConfiguration(ProjectId, bypassDispatch: true);
+                     await envelopeController.EnvelopeConfiguration(ProjectId, bypassDispatch: true);
                 }
                 catch (Exception ex)
                 {
