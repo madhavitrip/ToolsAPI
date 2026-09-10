@@ -5113,12 +5113,8 @@ namespace Tools.Controllers
                     B = GetJsonValue("B"),
                     C = GetJsonValue("C"),
                     D = GetJsonValue("D"),
-<<<<<<< HEAD
                     remark = nrData.Remarksss ?? "",
-=======
                     DynamicData = data.ToDictionary(kvp => kvp.Key, kvp => GetJsonValue(kvp.Key)),
-                    remark = nrData.Remark ?? "",
->>>>>>> 1e12d68111be2298437f1c4a2bb063f1ca163c03
                     date = nrData.ExamDate ?? "",
                     time = nrData.ExamTime ?? "",
                     status = (int)verificationStatus,
@@ -5685,13 +5681,8 @@ namespace Tools.Controllers
 
                 D = GetJsonValue("D"),
 
-<<<<<<< HEAD
                 remark = selectedRecord.Remarksss ?? "",
-=======
                 dynamicData = selectedRecordData.ToDictionary(kvp => kvp.Key, kvp => GetJsonValue(kvp.Key)),
-
-                remark = selectedRecord.Remark ?? "",
->>>>>>> 1e12d68111be2298437f1c4a2bb063f1ca163c03
 
                 date = selectedRecord.ExamDate ?? "",
 
