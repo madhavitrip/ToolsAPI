@@ -99,7 +99,8 @@ namespace Tools.Controllers
                 EnvelopeMakingCriteria = MapFields(config.EnvelopeMakingCriteria),
                 BoxBreakingCriteria = MapFields(config.BoxBreakingCriteria),
                 DuplicateCriteria = MapFields(config.DuplicateCriteria),
-                InnerBundlingCriteria = MapFields(config.InnerBundlingCriteria)
+                InnerBundlingCriteria = MapFields(config.InnerBundlingCriteria),
+                HeaderVerificationFields = MapFields(config.HeaderVerificationFields ?? new List<int>())
             };
 
             return Ok(result);
@@ -390,6 +391,18 @@ namespace Tools.Controllers
         private bool ProjectConfigExists(int id)
         {
             return _context.ProjectConfigs.Any(e => e.Id == id);
+        }
+
+        [HttpGet("RunMigration")]
+        public async Task<IActionResult> RunMigration()
+        {
+            try {
+                await _context.Database.ExecuteSqlRawAsync("ALTER TABLE ProjectConfigs ADD HeaderVerificationFields longtext NULL;");
+            } catch {}
+            try {
+                await _context.Database.ExecuteSqlRawAsync("ALTER TABLE MProjectConfigs ADD HeaderVerificationFields longtext NULL;");
+            } catch {}
+            return Ok("Migration run!");
         }
 
         private bool AreIntListsEqual(List<int>? list1, List<int>? list2)

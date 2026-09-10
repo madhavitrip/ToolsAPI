@@ -3,7 +3,7 @@ using System.ComponentModel.DataAnnotations;
 
 namespace Tools.Models
 {
-    public class NRData
+    public class TemporaryNrDatas
     {
         [Key]
         [DatabaseGenerated(DatabaseGeneratedOption.Identity)]
@@ -12,7 +12,7 @@ namespace Tools.Models
         public string? CourseName { get; set; }
         public string? SubjectName { get; set; }
         public string? CenterCode { get; set; }
-        public int Quantity { get; set; }
+        
         public int NRQuantity { get; set; }
         public string? CatchNo { get; set; }
         public string? ExamDate { get; set; }
@@ -27,18 +27,7 @@ namespace Tools.Models
         public double NodalSort { get; set; }
         public string? Symbol { get; set; }
         public bool Status { get; set; } = true;
-        public int? NRDataId { get; set; } = 0;
-        public int Steps { get; set; }
-        public List<int> UploadList { get; set; } = new List<int>();
-        public int LotNo { get; set; } = 0;
         public string? District { get; set; }
         public int DistrictSort { get; set; }
-        public int EnvLotNo { get; set; }
-        public int VerificationStatus { get; set; }
-        public int Batch { get; set; }
-
-        public int? VerifiedBy { get; set; } = 0;
-        public DateTime? VerifiedOn { get; set; } = DateTime.MinValue;
-        public string? Remarksss { get; set; }
     }
 }

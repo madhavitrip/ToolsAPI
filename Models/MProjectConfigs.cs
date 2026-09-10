@@ -28,6 +28,7 @@ namespace Tools.Models
         public bool ResetOmrSerialOnCatchChange { get; set; }
         public int? BookletSerialNumber { get; set; }
         public bool? ResetBookletSerialOnCatchChange { get; set; }
+        public List<int>? HeaderVerificationFields { get; set; } = new List<int>();
 
     }
 }
