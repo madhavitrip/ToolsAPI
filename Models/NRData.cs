@@ -39,6 +39,6 @@ namespace Tools.Models
 
         public int? VerifiedBy { get; set; } = 0;
         public DateTime? VerifiedOn { get; set; } = DateTime.MinValue;
-        public string? Remark { get; set; }
+        public string? Remarksss { get; set; }
     }
 }

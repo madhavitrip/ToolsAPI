@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using Tools.Models;
 using Tools.Services;
 using Tools.Middleware;
+using System.Text.Json;
 
 namespace Tools.Controllers
 {
@@ -33,8 +34,21 @@ namespace Tools.Controllers
                              && x.ExtraType == extrasConfiguration.ExtraType)
                     .ToListAsync();
 
+                string oldValue = null;
                 if (extra.Any())
                 {
+                    // Serialize old values for logging
+                    oldValue = JsonSerializer.Serialize(extra.Select(e => new
+                    {
+                        e.Id,
+                        e.GroupId,
+                        e.TypeId,
+                        e.ExtraType,
+                        e.Mode,
+                        e.Value,
+                        e.EnvelopeType
+                    }));
+
                     var folderName = $"{extrasConfiguration.TypeId}_{extrasConfiguration.GroupId}";
 
                     var reportPath = Path.Combine(
@@ -55,9 +69,23 @@ namespace Tools.Controllers
                         $"Deleted old MExtrasConfiguration record(s) for TypeId {extrasConfiguration.TypeId} and GroupId {extrasConfiguration.GroupId}",
                         "MExtraConfigurations",
                         LogHelper.GetTriggeredBy(User),
-                        extrasConfiguration.GroupId
+                        extrasConfiguration.GroupId,
+                        oldValue,
+                        null
                     );
                 }
+
+                // Serialize new value for logging
+                var newValue = JsonSerializer.Serialize(new
+                {
+                    extrasConfiguration.Id,
+                    extrasConfiguration.GroupId,
+                    extrasConfiguration.TypeId,
+                    extrasConfiguration.ExtraType,
+                    extrasConfiguration.Mode,
+                    extrasConfiguration.Value,
+                    extrasConfiguration.EnvelopeType
+                });
 
                 _context.MExtraConfigurations.Add(extrasConfiguration);
                 await _context.SaveChangesAsync();
@@ -66,7 +94,9 @@ namespace Tools.Controllers
                     $"Created new MExtrasConfiguration with TypeId {extrasConfiguration.TypeId} and GroupId {extrasConfiguration.GroupId}",
                     "MExtraConfigurations",
                     LogHelper.GetTriggeredBy(User),
-                    extrasConfiguration.GroupId
+                    extrasConfiguration.GroupId,
+                    oldValue,
+                    newValue
                 );
 
                 return Ok(extrasConfiguration); 
