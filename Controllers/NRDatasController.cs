@@ -2671,32 +2671,49 @@ namespace Tools.Controllers
         public async Task<ActionResult> GetPipelineRerunStatus(int ProjectId, int batch)
         {
             var activeQuery = _context.NRDatas
-                 .AsNoTracking()
-                .Where(n => n.ProjectId == ProjectId && n.Status==true && n.Batch==batch);
+                .AsNoTracking()
+                .Where(n =>
+                    n.ProjectId == ProjectId &&
+                    n.Status &&
+                    n.Batch == batch);
 
-            var totalActive = await activeQuery.CountAsync();
+            // Single query for all overall statistics
+            var stats = await activeQuery
+                .GroupBy(x => 1)
+                .Select(g => new
+                {
+                    TotalActive = g.Count(),
+                    MinStep = g.Min(x => x.Steps),
+                    MaxStep = g.Max(x => x.Steps),
 
-            if (totalActive == 0)
+                    DuplicatePending = g.Any(x => x.Steps == 0),
+                    EnhancementPending = g.Any(x => x.Steps <= 2),
+                    ExtraPending = g.Any(x => x.Steps <= 3),
+                    EnvelopePending = g.Any(x => x.Steps <= 4)
+                })
+                .FirstOrDefaultAsync();
+
+            if (stats == null)
             {
                 return Ok(new
                 {
                     hasPendingPipelineChanges = false,
                     minStep = 6,
                     maxStep = 6,
-                    totalActive = 0
+                    totalActive = 0,
+                    duplicatePending = false,
+                    enhancementPending = false,
+                    extraPending = false,
+                    envelopePending = false,
+                    boxPending = false,
+                    boxTotalLots = 0,
+                    boxCompletedLots = 0,
+                    boxPendingLots = 0,
+                    pendingBoxLots = Array.Empty<string>()
                 });
             }
 
-            var minStep = await activeQuery.MinAsync(n => n.Steps);
-            var maxStep = await activeQuery.MaxAsync(n => n.Steps);
-
-            var hasPendingPipelineChanges = minStep < Tools.Models.PipelineNavigator.STEP_DONE;
-
-            var duplicatePending = await activeQuery.AnyAsync(n => n.Steps == 0);
-            var enhancementPending = await activeQuery.AnyAsync(n => n.Steps <= 2);
-            var extraPending = await activeQuery.AnyAsync(n => n.Steps <= 3);
-            var envelopePending = await activeQuery.AnyAsync(n => n.Steps <= 4);
-
+            // One query for lot statistics
             var lotStats = await activeQuery
                 .GroupBy(n => n.LotNo)
                 .Select(g => new
@@ -2706,32 +2723,34 @@ namespace Tools.Controllers
                 })
                 .ToListAsync();
 
-            var boxTotalLots = lotStats.Count;
-            var boxCompletedLots = lotStats.Count(l => !l.IsPending);
-            var boxPendingLots = lotStats.Count(l => l.IsPending);
             var pendingBoxLots = lotStats
-                .Where(l => l.IsPending)
-                .Select(l => l.LotNo)
+                .Where(x => x.IsPending)
+                .Select(x => x.LotNo)
                 .OrderBy(x => x)
                 .ToList();
 
             return Ok(new
             {
-                hasPendingPipelineChanges,
-                minStep,
-                maxStep,
-                totalActive,
-                duplicatePending,
-                enhancementPending,
-                extraPending,
-                envelopePending,
-                boxPending = pendingBoxLots.Any(),
-                boxTotalLots,
-                boxCompletedLots,
-                boxPendingLots,
+                hasPendingPipelineChanges =
+                    stats.MinStep < Tools.Models.PipelineNavigator.STEP_DONE,
+
+                minStep = stats.MinStep,
+                maxStep = stats.MaxStep,
+                totalActive = stats.TotalActive,
+
+                duplicatePending = stats.DuplicatePending,
+                enhancementPending = stats.EnhancementPending,
+                extraPending = stats.ExtraPending,
+                envelopePending = stats.EnvelopePending,
+
+                boxPending = pendingBoxLots.Count > 0,
+                boxTotalLots = lotStats.Count,
+                boxCompletedLots = lotStats.Count(x => !x.IsPending),
+                boxPendingLots = pendingBoxLots.Count,
                 pendingBoxLots
             });
         }
+
 
         [HttpGet("DuplicateRerunStatus")]
         public async Task<ActionResult> GetDuplicateRerunStatus(int ProjectId, int Batch)
