@@ -982,9 +982,7 @@ namespace Tools.Controllers
                 }
                 headers.AddRange(jsonKeys);
 
-                var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
-
-                if (!Directory.Exists(reportPath)) Directory.CreateDirectory(reportPath);
+                var reportPath = FileStorageHelper.GetProjectFolder(ProjectId);
 
                 // ✅ One file per lot(s) selection or version
                 var lotStr = LotNo != null && LotNo.Any() ? string.Join("_", LotNo) : "All";

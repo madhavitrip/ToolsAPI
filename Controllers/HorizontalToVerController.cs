@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using System.Data;
 using ClosedXML.Excel;
@@ -117,9 +117,7 @@ namespace Tools.Controllers
               if (file == null || file.Length == 0)
                   return BadRequest("No file uploaded.");
 
-              var uploadsFolder = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "uploads");
-              if (!Directory.Exists(uploadsFolder))
-                  Directory.CreateDirectory(uploadsFolder);
+              var uploadsFolder = FileStorageHelper.GetUploadsFolder();
 
               var filePath = Path.Combine(uploadsFolder, file.FileName);
 
@@ -163,13 +161,7 @@ namespace Tools.Controllers
                     return BadRequest("Invalid fixed headers provided.");
 
                 // Step 2: Save uploaded file
-                string rootPath = Directory.GetCurrentDirectory();
-                string uploadsFolder = Path.Combine(rootPath, "wwwroot", "uploads", ProjectId.ToString());
-
-                if (!Directory.Exists(uploadsFolder))
-                {
-                    Directory.CreateDirectory(uploadsFolder);
-                }
+                string uploadsFolder = FileStorageHelper.GetUploadsFolder(ProjectId.ToString());
 
                 string inputFilePath = Path.Combine(uploadsFolder, file.FileName);
                 if (System.IO.File.Exists(inputFilePath))
@@ -256,7 +248,7 @@ namespace Tools.Controllers
         [HttpGet("check-file/{projectId}")]
         public IActionResult CheckFile(int projectId)
         {
-            string uploadsFolder = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "uploads", projectId.ToString());
+            string uploadsFolder = FileStorageHelper.GetUploadsFolder(projectId.ToString());
             string outputFile = Path.Combine(uploadsFolder, "Output.xlsx");
 
             if (System.IO.File.Exists(outputFile))

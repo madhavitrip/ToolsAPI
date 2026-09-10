@@ -412,8 +412,7 @@ namespace Tools.Controllers
                 headers.AddRange(innerKeys);
                 headers.AddRange(outerKeys);
 
-                var path = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
-                if (!Directory.Exists(path)) Directory.CreateDirectory(path);
+                var path = FileStorageHelper.GetProjectFolder(ProjectId);
 
                 var fileName = uploadId.HasValue ? $"ExtrasCalculation_v{uploadId}.xlsx" : ReportVersionHelper.GetNextVersionFileName(path, "ExtrasCalculation.xlsx");
                 var filePath = Path.Combine(path, fileName);

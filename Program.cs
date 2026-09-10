@@ -9,18 +9,23 @@ using Microsoft.IdentityModel.Tokens;
 using OfficeOpenXml;
 using System.Reflection;
 using Tools.Services;
+using Tools.Middleware;
 using Microsoft.Extensions.Options;
 using Tools.Models;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using ToolsAPI.Models;
+using Microsoft.Extensions.FileProviders;
 
 var builder = WebApplication.CreateBuilder(args);
+FileStorageHelper.Initialize(builder.Configuration);
 
+builder.Services.AddHttpContextAccessor();
 builder.Services.AddDbContext<ERPToolsDbContext>(options =>
     options.UseMySql(builder.Configuration.GetConnectionString("ERPToolsDb"),
         ServerVersion.AutoDetect(builder.Configuration.GetConnectionString("ERPToolsDb"))));
 builder.Services.AddScoped<ILoggerService, LoggerService>();
+builder.Services.AddScoped<ApiAuditLoggingFilter>();
 builder.Services.AddScoped<IAuthorizationService, AuthorizationService>();
 builder.Services.AddScoped<IMasterAuthService, MasterAuthService>();
 
@@ -99,7 +104,10 @@ builder.Services.AddHttpClient("RptService")
     });
 
 builder.Services.AddHttpClient<IDispatchService, DispatchService>();
-builder.Services.AddControllers();
+builder.Services.AddControllers(options =>
+{
+    options.Filters.Add<ApiAuditLoggingFilter>();
+});
 builder.Services.Configure<FormOptions>(options =>
 {
     options.MultipartBodyLengthLimit = 100 * 1024 * 1024; // 100 MB
@@ -132,10 +140,33 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseAuthentication();
-app.UseStaticFiles();
 app.UseHttpsRedirection();
 app.UseCors();
+
+// 1. Default wwwroot static files
 app.UseStaticFiles();
+
+// 2. Custom storage path (e.g. E:\Files) static files
+var storageBasePath = FileStorageHelper.GetStorageBasePath(builder.Configuration);
+if (Directory.Exists(storageBasePath))
+{
+    var fileProvider = new PhysicalFileProvider(storageBasePath);
+
+    // Serve at root URL so http://host:port/{projectId}/{fileName} continues to work seamlessly
+    app.UseStaticFiles(new StaticFileOptions
+    {
+        FileProvider = fileProvider,
+        RequestPath = ""
+    });
+
+    // Also serve at /Files URL so http://host:port/Files/{projectId}/{fileName} works as well
+    app.UseStaticFiles(new StaticFileOptions
+    {
+        FileProvider = fileProvider,
+        RequestPath = "/Files"
+    });
+}
+
 app.UseAuthorization();
 
 app.MapControllers();

@@ -120,7 +120,7 @@ namespace Tools.Controllers
             var existingActive = await scopeQuery.Where(t => t.IsActive == true).ToListAsync();
             existingActive.ForEach(t => t.IsActive = false);
 
-            var webRoot = _env.WebRootPath ?? Path.Combine(Directory.GetCurrentDirectory(), "wwwroot");
+            var webRoot = FileStorageHelper.GetStorageBasePath();
             var folderParts = new List<string> { webRoot, "rpt-templates" };
             string scopeSlug;
             
@@ -197,11 +197,21 @@ namespace Tools.Controllers
             if (template == null || string.IsNullOrEmpty(template.RPTFilePath))
                 return NotFound("Template or file not found.");
 
-            var webRoot = _env.WebRootPath ?? Path.Combine(Directory.GetCurrentDirectory(), "wwwroot");
+            var webRoot = FileStorageHelper.GetStorageBasePath();
             var filePath = Path.Combine(webRoot, template.RPTFilePath.Replace('/', Path.DirectorySeparatorChar).Replace('\\', Path.DirectorySeparatorChar).TrimStart(Path.DirectorySeparatorChar));
 
             if (!System.IO.File.Exists(filePath))
-                return NotFound("File not found on disk.");
+            {
+                var legacyPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", template.RPTFilePath.Replace('/', Path.DirectorySeparatorChar).Replace('\\', Path.DirectorySeparatorChar).TrimStart(Path.DirectorySeparatorChar));
+                if (System.IO.File.Exists(legacyPath))
+                {
+                    filePath = legacyPath;
+                }
+                else
+                {
+                    return NotFound("File not found on disk.");
+                }
+            }
 
             var bytes = await System.IO.File.ReadAllBytesAsync(filePath);
             return File(bytes, "application/octet-stream", Path.GetFileName(filePath));

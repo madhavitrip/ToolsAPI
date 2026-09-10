@@ -4870,14 +4870,16 @@ namespace Tools.Controllers
                 // Remove this block if you want a complete soft delete
                 if (!lotNo.HasValue)
                 {
-                    var reportPath = Path.Combine(
-                        Directory.GetCurrentDirectory(),
-                        "wwwroot",
-                        ProjectId.ToString());
-
+                    var reportPath = FileStorageHelper.GetProjectFolder(ProjectId);
                     if (Directory.Exists(reportPath))
                     {
-                        Directory.Delete(reportPath, true);
+                        try { Directory.Delete(reportPath, true); } catch { }
+                    }
+
+                    var legacyReportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
+                    if (Directory.Exists(legacyReportPath))
+                    {
+                        try { Directory.Delete(legacyReportPath, true); } catch { }
                     }
                 }
 
@@ -5068,13 +5070,8 @@ namespace Tools.Controllers
                     A = GetJsonValue("A"),
                     B = GetJsonValue("B"),
                     C = GetJsonValue("C"),
-                    D = GetJsonValue("D"),
-<<<<<<< HEAD
-                    remark = nrData.Remarksss ?? "",
-=======
                     DynamicData = data.ToDictionary(kvp => kvp.Key, kvp => GetJsonValue(kvp.Key)),
-                    remark = nrData.Remark ?? "",
->>>>>>> 1e12d68111be2298437f1c4a2bb063f1ca163c03
+                    remark = nrData.Remarksss ?? "",
                     date = nrData.ExamDate ?? "",
                     time = nrData.ExamTime ?? "",
                     status = (int)verificationStatus,
@@ -5641,13 +5638,8 @@ namespace Tools.Controllers
 
                 D = GetJsonValue("D"),
 
-<<<<<<< HEAD
-                remark = selectedRecord.Remarksss ?? "",
-=======
                 dynamicData = selectedRecordData.ToDictionary(kvp => kvp.Key, kvp => GetJsonValue(kvp.Key)),
-
-                remark = selectedRecord.Remark ?? "",
->>>>>>> 1e12d68111be2298437f1c4a2bb063f1ca163c03
+                remark = selectedRecord.Remarksss ?? "",
 
                 date = selectedRecord.ExamDate ?? "",
 

@@ -186,9 +186,7 @@ namespace Tools.Controllers
 
                 // ================= REPORT =================
 
-                var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
-                if (!Directory.Exists(reportPath))
-                    Directory.CreateDirectory(reportPath);
+                var reportPath = FileStorageHelper.GetProjectFolder(ProjectId);
 
                 var fileName = ReportVersionHelper.GetNextVersionFileName(reportPath, "DuplicateTool.xlsx");
                 var filePath = Path.Combine(reportPath, fileName);
@@ -469,9 +467,7 @@ WHERE ProjectId = {0};", ProjectId);
 
                 if (data.Any())
                 {
-                    var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
-                    if (!Directory.Exists(reportPath))
-                        Directory.CreateDirectory(reportPath);
+                    var reportPath = FileStorageHelper.GetProjectFolder(ProjectId);
 
                     var fileName = ReportVersionHelper.GetNextVersionFileName(reportPath, "EnhancementReport.xlsx");
                     filePath = Path.Combine(reportPath, fileName);
@@ -697,9 +693,7 @@ WHERE ProjectId = {0};", ProjectId);
                 if (!reportRows.Any())
                     return NotFound("No NRData found for this version.");
 
-                var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
-                if (!Directory.Exists(reportPath))
-                    Directory.CreateDirectory(reportPath);
+                var reportPath = FileStorageHelper.GetProjectFolder(ProjectId);
 
                 var fileName = uploadId.HasValue ? $"DuplicateTool_v{uploadId}.xlsx" : "DuplicateTool.xlsx";
                 var filePath = Path.Combine(reportPath, fileName);

@@ -82,8 +82,7 @@ namespace Tools.Controllers
                                     env.OuterEnvelope
                                 }).ToList();
 
-            var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
-            Directory.CreateDirectory(reportPath);
+            var reportPath = FileStorageHelper.GetProjectFolder(ProjectId);
 
             var filename = uploadId.HasValue ? $"EnvelopeBreaking_v{uploadId}.xlsx" : ReportVersionHelper.GetNextVersionFileName(reportPath, "EnvelopeBreaking.xlsx");
             var filePath = Path.Combine(reportPath, filename);
@@ -468,7 +467,7 @@ namespace Tools.Controllers
         [HttpGet("Reports/Exists")]
         public IActionResult CheckReportExists(int projectId, string fileName, int? uploadId = null)
         {
-            var rootFolder = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", projectId.ToString());
+            var rootFolder = FileStorageHelper.GetProjectFolder(projectId);
 
             string finalFileName = fileName;
             if (uploadId.HasValue)
@@ -506,13 +505,22 @@ namespace Tools.Controllers
 
             var filePath = Path.Combine(rootFolder, finalFileName);
             bool fileExists = System.IO.File.Exists(filePath);
+            if (!fileExists)
+            {
+                var legacyPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", projectId.ToString(), finalFileName);
+                if (System.IO.File.Exists(legacyPath))
+                {
+                    fileExists = true;
+                    filePath = legacyPath;
+                }
+            }
             return Ok(new { exists = fileExists, fileName = finalFileName });
         }
 
         [HttpGet("Reports/AllVersions")]
         public IActionResult GetAllReportVersions(int projectId)
         {
-            var rootFolder = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", projectId.ToString());
+            var rootFolder = FileStorageHelper.GetProjectFolder(projectId);
             var results = new Dictionary<string, List<object>>();
 
             var baseNames = new Dictionary<string, string>
@@ -657,6 +665,8 @@ namespace Tools.Controllers
                             var fileName = report.FileName;
                             var basePaths = new[]
                             {
+                                Path.Combine(FileStorageHelper.GetUploadsFolder("EnvelopeLotReports"), fileName),
+                                Path.Combine(FileStorageHelper.GetStorageBasePath(), fileName),
                                 Path.Combine(Directory.GetCurrentDirectory(), "Uploads", "EnvelopeLotReports", fileName),
                                 Path.Combine(Directory.GetCurrentDirectory(), "Uploads", fileName),
                                 Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "Uploads", "EnvelopeLotReports", fileName),
@@ -715,8 +725,8 @@ namespace Tools.Controllers
             }
             else
             {
-                // Report download logic (from wwwroot/{projectId}/)
-                var rootFolder = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", projectId.ToString());
+                // Report download logic (from FileStorage/{projectId}/)
+                var rootFolder = FileStorageHelper.GetProjectFolder(projectId);
 
                 if (!Directory.Exists(rootFolder))
                     return NotFound("No reports found for this project.");
@@ -1078,9 +1088,8 @@ namespace Tools.Controllers
                     worksheet.Cells[worksheet.Dimension.Address].AutoFitColumns();
                     worksheet.View.FreezePanes(2, 1);
                 }
-                // Save in application root folder
-                var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
-                Directory.CreateDirectory(reportPath);
+                // Save in storage folder
+                var reportPath = FileStorageHelper.GetProjectFolder(ProjectId);
                 var fileName = uploadId.HasValue ? $"EnvelopeSummary_v{uploadId}.xlsx" : ReportVersionHelper.GetNextVersionFileName(reportPath, "EnvelopeSummary.xlsx");
                 var filePath = Path.Combine(reportPath, fileName);
 
@@ -1371,8 +1380,7 @@ namespace Tools.Controllers
                 // ==============================
                 // 8️⃣ Save
                 // ==============================
-                var folderPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
-                Directory.CreateDirectory(folderPath);
+                var folderPath = FileStorageHelper.GetProjectFolder(ProjectId);
 
                 var fileName = uploadId.HasValue ? $"CatchSummary_v{uploadId}.xlsx" : ReportVersionHelper.GetNextVersionFileName(folderPath, "CatchSummary.xlsx");
                 var filePath = Path.Combine(folderPath, fileName);
