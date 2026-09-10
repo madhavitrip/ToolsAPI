@@ -5113,6 +5113,7 @@ namespace Tools.Controllers
                     B = GetJsonValue("B"),
                     C = GetJsonValue("C"),
                     D = GetJsonValue("D"),
+                    DynamicData = data.ToDictionary(kvp => kvp.Key, kvp => GetJsonValue(kvp.Key)),
                     remark = nrData.Remark ?? "",
                     date = nrData.ExamDate ?? "",
                     time = nrData.ExamTime ?? "",
@@ -5439,20 +5440,17 @@ namespace Tools.Controllers
             // 2.5 Validate A/B/C/D - At least one must have a value
             // ---------------------------------------------------------
 
-            string valueA = (updateModel.TryGetValue("A", out var aObj) ? aObj?.ToString()?.Trim() : null) ?? "";
-            string valueB = (updateModel.TryGetValue("B", out var bObj) ? bObj?.ToString()?.Trim() : null) ?? "";
-            string valueC = (updateModel.TryGetValue("C", out var cObj) ? cObj?.ToString()?.Trim() : null) ?? "";
-            string valueD = (updateModel.TryGetValue("D", out var dObj) ? dObj?.ToString()?.Trim() : null) ?? "";
+            bool hasAnyData = updateModel.Any(kvp => 
+                !string.Equals(kvp.Key, "status", StringComparison.OrdinalIgnoreCase) && 
+                !string.Equals(kvp.Key, "remark", StringComparison.OrdinalIgnoreCase) && 
+                !string.Equals(kvp.Key, "projectId", StringComparison.OrdinalIgnoreCase) && 
+                kvp.Value != null && 
+                !string.IsNullOrWhiteSpace(kvp.Value.ToString()));
 
-            bool allBlank = string.IsNullOrWhiteSpace(valueA) && 
-                           string.IsNullOrWhiteSpace(valueB) && 
-                           string.IsNullOrWhiteSpace(valueC) && 
-                           string.IsNullOrWhiteSpace(valueD);
-
-            if (allBlank)
+            if (!hasAnyData)
             {
                 return BadRequest(
-                    "At least one of the fields (A, B, C, or D) must have a value to update the status."
+                    "At least one of the fields must have a value to update the status."
                 );
             }
 
@@ -5597,24 +5595,18 @@ namespace Tools.Controllers
                         }
                     }
 
-                    void UpdateJsonValue(string key)
+                    foreach (var kvp in updateModel)
                     {
-                        if (
-                            updateModel.TryGetValue(key, out var value) &&
-                            value != null
-                        )
+                        if (string.Equals(kvp.Key, "status", StringComparison.OrdinalIgnoreCase) ||
+                            string.Equals(kvp.Key, "remark", StringComparison.OrdinalIgnoreCase) ||
+                            string.Equals(kvp.Key, "projectId", StringComparison.OrdinalIgnoreCase))
+                            continue;
+                            
+                        if (kvp.Value != null)
                         {
-                            nrDataJson[key] =
-                                JsonSerializer.SerializeToElement(
-                                    value.ToString()
-                                );
+                            nrDataJson[kvp.Key] = JsonSerializer.SerializeToElement(kvp.Value.ToString());
                         }
                     }
-
-                    UpdateJsonValue("A");
-                    UpdateJsonValue("B");
-                    UpdateJsonValue("C");
-                    UpdateJsonValue("D");
 
                     nrData.NRDatas =
                         JsonSerializer.Serialize(nrDataJson);
@@ -5688,6 +5680,8 @@ namespace Tools.Controllers
                 C = GetJsonValue("C"),
 
                 D = GetJsonValue("D"),
+
+                dynamicData = selectedRecordData.ToDictionary(kvp => kvp.Key, kvp => GetJsonValue(kvp.Key)),
 
                 remark = selectedRecord.Remark ?? "",
 
