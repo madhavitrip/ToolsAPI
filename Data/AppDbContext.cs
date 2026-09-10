@@ -51,10 +51,10 @@ namespace ERPToolsAPI.Data
         public DbSet<GroupMasterAuthPasscode> GroupMasterAuthPasscodes { get; set; }
         //public DbSet<UserAssignment> UserAssignments { get; set; }
 
-        // public DbSet<CatchList> CatchList { get; set; }
-        // public DbSet<NodalList> NodalList { get; set; }
+         public DbSet<CatchList> CatchList { get; set; }
+         public DbSet<NodalList> NodalList { get; set; }
 
-        // public DbSet<TemporaryNrDatas> TemporaryNrDatas { get; set; }
+         public DbSet<TemporaryNrDatas> TemporaryNrDatas { get; set; }
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);
