@@ -60,7 +60,9 @@ namespace Tools.Controllers
                 query = query.Where(t => t.GroupId == null);
             }
 
-            var templates = await query.ToListAsync();
+            var templates = await query
+                .OrderByDescending(t => t.CreatedDate)
+                .ToListAsync();
 
             var grouped = templates.GroupBy(t => t.TemplateName)
                 .Select(g =>
@@ -92,7 +94,8 @@ namespace Tools.Controllers
                 t.ParsedFieldsJson,
                 t.RequiredFieldsJson,
                 HasMapping = mappedIds.Contains(t.TemplateId)
-            });
+            })
+            .ToList();
 
             return Ok(result);
         }

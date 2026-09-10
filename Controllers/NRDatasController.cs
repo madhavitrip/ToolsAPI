@@ -5039,7 +5039,7 @@ namespace Tools.Controllers
 
             // Total unique catches with non-empty remarks for this project/lot
             int totalCorrectionCatches = await query
-                .Where(x => x.Remark != null && x.Remark.Trim() != "")
+                .Where(x => x.Remarksss != null && x.Remarksss.Trim() != "")
                 .Select(x => x.CatchNo)
                 .Distinct()
                 .CountAsync();
@@ -5049,9 +5049,9 @@ namespace Tools.Controllers
             if (filterHasRemark.HasValue)
             {
                 if (filterHasRemark.Value)
-                    query = query.Where(x => x.Remark != null && x.Remark.Trim() != "");
+                    query = query.Where(x => x.Remarksss != null && x.Remarksss.Trim() != "");
                 else
-                    query = query.Where(x => x.Remark == null || x.Remark.Trim() == "");
+                    query = query.Where(x => x.Remarksss == null || x.Remarksss.Trim() == "");
             }
 
             var records = await query
@@ -5113,8 +5113,12 @@ namespace Tools.Controllers
                     B = GetJsonValue("B"),
                     C = GetJsonValue("C"),
                     D = GetJsonValue("D"),
+<<<<<<< HEAD
+                    remark = nrData.Remarksss ?? "",
+=======
                     DynamicData = data.ToDictionary(kvp => kvp.Key, kvp => GetJsonValue(kvp.Key)),
                     remark = nrData.Remark ?? "",
+>>>>>>> 1e12d68111be2298437f1c4a2bb063f1ca163c03
                     date = nrData.ExamDate ?? "",
                     time = nrData.ExamTime ?? "",
                     status = (int)verificationStatus,
@@ -5354,14 +5358,14 @@ namespace Tools.Controllers
 
             var records = await _context.NRDatas
                 .Where(x => x.Status == true && x.CatchNo != null && (
-                    (x.Remark != null && x.Remark.Trim() != "") ||
+                    (x.Remarksss != null && x.Remarksss.Trim() != "") ||
                     x.VerificationStatus == (int)HeaderVerificationStatus.NotClear
                 ))
                 .Select(x => new
                 {
                     x.ProjectId,
                     x.CatchNo,
-                    HasRemark = x.Remark != null && x.Remark.Trim() != "",
+                    HasRemark = x.Remarksss != null && x.Remarksss.Trim() != "",
                     IsReview = x.VerificationStatus == (int)HeaderVerificationStatus.NotClear
                 })
                 .ToListAsync();
@@ -5519,12 +5523,12 @@ namespace Tools.Controllers
 
                 if (hasRemark)
                 {
-                    nrData.Remark = newRemark;
+                    nrData.Remarksss = newRemark;
                 }
                 else if (hasStatus && statusIsChanging)
                 {
                     // Only status updated, clear remark
-                    nrData.Remark = null;
+                    nrData.Remarksss = null;
                 }
 
                 // -----------------------------------------------------
@@ -5681,9 +5685,13 @@ namespace Tools.Controllers
 
                 D = GetJsonValue("D"),
 
+<<<<<<< HEAD
+                remark = selectedRecord.Remarksss ?? "",
+=======
                 dynamicData = selectedRecordData.ToDictionary(kvp => kvp.Key, kvp => GetJsonValue(kvp.Key)),
 
                 remark = selectedRecord.Remark ?? "",
+>>>>>>> 1e12d68111be2298437f1c4a2bb063f1ca163c03
 
                 date = selectedRecord.ExamDate ?? "",
 
@@ -6526,7 +6534,7 @@ namespace Tools.Controllers
                         "districtsort" => (object?)record.DistrictSort,
                         "lotno" or "lot" => (object?)record.LotNo,
                         "envlotno" => (object?)record.EnvLotNo,
-                        "remark" => record.Remark,
+                        "remark" => record.Remarksss,
                         _ => null
                     };
 
@@ -7776,7 +7784,7 @@ namespace Tools.Controllers
                         "districtsort" => (object?)record.DistrictSort,
                         "lotno" or "lot" => (object?)record.LotNo,
                         "envlotno" => (object?)record.EnvLotNo,
-                        "remark" => record.Remark,
+                        "remark" => record.Remarksss,
                         _ => null
                     };
 
@@ -8093,7 +8101,7 @@ namespace Tools.Controllers
                             target.District != source.District ||
                             target.DistrictSort != source.DistrictSort ||
                             target.NRDatas != source.NRDatas ||
-                            target.Remark != source.Remark;
+                            target.Remarksss != source.Remarksss;
 
                         bool isQuantityUpdated = false;
                         if (consolidatedBaseNRQty != source.NRQuantity)
@@ -8159,7 +8167,7 @@ namespace Tools.Controllers
                                 VerifiedOn = target.VerifiedOn,
                                 UploadList = target.UploadList,
                                 NRDataId = target.NRDataId,
-                                Remark = source.Remark
+                                Remarksss = source.Remarksss
                             };
 
                             _context.NRDatas.Add(newBaseRecord);
@@ -8201,7 +8209,7 @@ namespace Tools.Controllers
                                 VerifiedOn = target.VerifiedOn,
                                 UploadList = target.UploadList,
                                 NRDataId = target.NRDataId,
-                                Remark = source.Remark
+                                Remarksss = source.Remarksss
                             };
                             _context.NRDatas.Add(remainderRow);
                             baseBatch.Add(remainderRow);
@@ -8443,7 +8451,7 @@ namespace Tools.Controllers
                                     NRDatas = newRec.NRDatas,
                                     Steps = addedStep,
                                     EnvLotNo = (addedStep == 4) ? 0 : newRec.EnvLotNo,
-                                    Remark = newRec.Remark
+                                    Remarksss = newRec.Remarksss
                                 };
                                 _context.NRDatas.Add(addedRecord);
                                 addedCount++;
@@ -8494,9 +8502,9 @@ namespace Tools.Controllers
                                 baseCenterRec.Symbol = sourceRec.Symbol;
                             }
 
-                            if (IsFieldUnique("Remark") && !string.IsNullOrWhiteSpace(sourceRec.Remark))
+                            if (IsFieldUnique("Remark") && !string.IsNullOrWhiteSpace(sourceRec.Remarksss))
                             {
-                                baseCenterRec.Remark = sourceRec.Remark;
+                                baseCenterRec.Remarksss = sourceRec.Remarksss;
                             }
 
                             if (!string.IsNullOrWhiteSpace(sourceRec.NRDatas))
