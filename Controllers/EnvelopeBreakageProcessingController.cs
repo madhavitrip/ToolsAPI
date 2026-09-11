@@ -1271,8 +1271,7 @@ namespace Tools.Controllers
                     });
 
                 // Excel
-                var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
-                Directory.CreateDirectory(reportPath);
+                var reportPath = FileStorageHelper.GetProjectFolder(ProjectId);
 
                 var fileName = ReportVersionHelper.GetNextVersionFileName(reportPath, "EnvelopeBreaking.xlsx");
                 var filePath = Path.Combine(reportPath, fileName);
@@ -1379,8 +1378,7 @@ namespace Tools.Controllers
                     })
                     .ToList();
 
-                var reportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
-                Directory.CreateDirectory(reportPath);
+                var reportPath = FileStorageHelper.GetProjectFolder(ProjectId);
 
                 var fileName = uploadId.HasValue ? $"CatchWiseBookletAndOmrSerialing_v{uploadId}.xlsx" : ReportVersionHelper.GetNextVersionFileName(reportPath, "CatchWiseBookletAndOmrSerialing.xlsx");
                 var filePath = Path.Combine(reportPath, fileName);

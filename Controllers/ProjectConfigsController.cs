@@ -278,19 +278,29 @@ namespace Tools.Controllers
                     .ToList();
 
                 // ?? Step 3: Base path
-                var basePath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", request.ProjectId.ToString());
+                var basePath = FileStorageHelper.GetProjectFolder(request.ProjectId);
+                var legacyBasePath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", request.ProjectId.ToString());
 
-                if (!Directory.Exists(basePath))
+                if (!Directory.Exists(basePath) && !Directory.Exists(legacyBasePath))
                     return Ok("No project folder found");
 
                 // ?? Step 4: Delete matching files
                 foreach (var key in reportKeys)
                 {
-                    var files = Directory.GetFiles(basePath, $"{key}*");
-
-                    foreach (var file in files)
+                    if (Directory.Exists(basePath))
                     {
-                        System.IO.File.Delete(file);
+                        foreach (var file in Directory.GetFiles(basePath, $"{key}*"))
+                        {
+                            System.IO.File.Delete(file);
+                        }
+                    }
+
+                    if (Directory.Exists(legacyBasePath))
+                    {
+                        foreach (var file in Directory.GetFiles(legacyBasePath, $"{key}*"))
+                        {
+                            try { System.IO.File.Delete(file); } catch { }
+                        }
                     }
                 }
 
@@ -582,21 +592,34 @@ namespace Tools.Controllers
 
                 reportKeys = reportKeys.Distinct().ToList();
 
-                var basePath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", projectId.ToString());
-                if (Directory.Exists(basePath))
+                var basePath = FileStorageHelper.GetProjectFolder(projectId);
+                var legacyBasePath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", projectId.ToString());
+                if (Directory.Exists(basePath) || Directory.Exists(legacyBasePath))
                 {
                     foreach (var key in reportKeys)
                     {
-                        var files = Directory.GetFiles(basePath, $"{key}*");
-                        foreach (var file in files)
+                        if (Directory.Exists(basePath))
                         {
-                            try
+                            var files = Directory.GetFiles(basePath, $"{key}*");
+                            foreach (var file in files)
                             {
-                                System.IO.File.Delete(file);
+                                try
+                                {
+                                    System.IO.File.Delete(file);
+                                }
+                                catch (Exception ex)
+                                {
+                                    await _loggerService.LogErrorAsync($"Error deleting file: {file}", ex.Message, nameof(ProjectConfigsController));
+                                }
                             }
-                            catch (Exception ex)
+                        }
+
+                        if (Directory.Exists(legacyBasePath))
+                        {
+                            var legacyFiles = Directory.GetFiles(legacyBasePath, $"{key}*");
+                            foreach (var file in legacyFiles)
                             {
-                                await _loggerService.LogErrorAsync($"Error deleting file: {file}", ex.Message, nameof(ProjectConfigsController));
+                                try { System.IO.File.Delete(file); } catch { }
                             }
                         }
                     }

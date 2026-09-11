@@ -611,8 +611,8 @@ namespace Tools.Controllers
 
             var lastVersion = await scopeQuery.MaxAsync(t => (int?)t.Version) ?? 0;
 
-            // Save file to wwwroot/rpt-templates/{scope}/
-            var webRoot = _env.WebRootPath ?? Path.Combine(Directory.GetCurrentDirectory(), "wwwroot");
+            // Save file to storage/rpt-templates/{scope}/
+            var webRoot = FileStorageHelper.GetStorageBasePath();
             var folderParts = new List<string> { webRoot, "rpt-templates" };
             string scopeSlug;
             if (projectId.HasValue)
@@ -1359,7 +1359,7 @@ namespace Tools.Controllers
                         var lastVersion = latestMaster?.Version ?? 0;
                         var nextVersion = lastVersion + 1;
 
-                        var webRoot = _env.WebRootPath ?? Path.Combine(Directory.GetCurrentDirectory(), "wwwroot");
+                        var webRoot = FileStorageHelper.GetStorageBasePath();
 
                         // Get mapping from source
                         var srcMapping = await _context.RPTMappings.FirstOrDefaultAsync(m => m.TemplateId == source.TemplateId);
@@ -1624,10 +1624,20 @@ namespace Tools.Controllers
             if (t == null || string.IsNullOrWhiteSpace(t.RPTFilePath))
                 return NotFound("Template not found.");
 
-            var webRoot = _env.WebRootPath ?? Path.Combine(Directory.GetCurrentDirectory(), "wwwroot");
+            var webRoot = FileStorageHelper.GetStorageBasePath();
             var absolutePath = Path.Combine(webRoot, t.RPTFilePath);
             if (!System.IO.File.Exists(absolutePath))
-                return NotFound("File not found on disk.");
+            {
+                var legacyPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", t.RPTFilePath);
+                if (System.IO.File.Exists(legacyPath))
+                {
+                    absolutePath = legacyPath;
+                }
+                else
+                {
+                    return NotFound("File not found on disk.");
+                }
+            }
 
             var (parsedFields, parseError) = await ParseFieldsAsync(absolutePath, Path.GetFileName(absolutePath));
             if (!string.IsNullOrWhiteSpace(parseError))
@@ -1912,11 +1922,21 @@ namespace Tools.Controllers
             if (t == null || string.IsNullOrWhiteSpace(t.RPTFilePath))
                 return NotFound();
 
-            // Resolve relative path against wwwroot
-            var webRoot = _env.WebRootPath ?? Path.Combine(Directory.GetCurrentDirectory(), "wwwroot");
+            // Resolve relative path against storage root
+            var webRoot = FileStorageHelper.GetStorageBasePath();
             var absolutePath = Path.Combine(webRoot, t.RPTFilePath);
             if (!System.IO.File.Exists(absolutePath))
-                return NotFound("File not found on disk.");
+            {
+                var legacyPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", t.RPTFilePath);
+                if (System.IO.File.Exists(legacyPath))
+                {
+                    absolutePath = legacyPath;
+                }
+                else
+                {
+                    return NotFound("File not found on disk.");
+                }
+            }
 
             var bytes = await System.IO.File.ReadAllBytesAsync(absolutePath);
             return File(bytes, "application/octet-stream", Path.GetFileName(absolutePath));

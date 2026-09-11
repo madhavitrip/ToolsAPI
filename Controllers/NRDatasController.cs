@@ -4870,14 +4870,16 @@ namespace Tools.Controllers
                 // Remove this block if you want a complete soft delete
                 if (!lotNo.HasValue)
                 {
-                    var reportPath = Path.Combine(
-                        Directory.GetCurrentDirectory(),
-                        "wwwroot",
-                        ProjectId.ToString());
-
+                    var reportPath = FileStorageHelper.GetProjectFolder(ProjectId);
                     if (Directory.Exists(reportPath))
                     {
-                        Directory.Delete(reportPath, true);
+                        try { Directory.Delete(reportPath, true); } catch { }
+                    }
+
+                    var legacyReportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
+                    if (Directory.Exists(legacyReportPath))
+                    {
+                        try { Directory.Delete(legacyReportPath, true); } catch { }
                     }
                 }
 

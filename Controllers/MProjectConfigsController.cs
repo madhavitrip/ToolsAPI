@@ -69,15 +69,17 @@ namespace Tools.Controllers
                         null
                     );
 
-                    var reportPath = Path.Combine(
-                        Directory.GetCurrentDirectory(),
-                        "wwwroot",
-                        $"{config.TypeId}_{config.GroupId}"
-                    );
-
+                    var folderName = $"{config.TypeId}_{config.GroupId}";
+                    var reportPath = FileStorageHelper.GetGroupFolder(folderName);
                     if (Directory.Exists(reportPath))
                     {
-                        Directory.Delete(reportPath, true);
+                        try { Directory.Delete(reportPath, true); } catch { }
+                    }
+
+                    var legacyReportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", folderName);
+                    if (Directory.Exists(legacyReportPath))
+                    {
+                        try { Directory.Delete(legacyReportPath, true); } catch { }
                     }
 
                     _context.MProjectConfigs.Remove(config);

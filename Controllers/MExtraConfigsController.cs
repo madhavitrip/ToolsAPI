@@ -51,15 +51,16 @@ namespace Tools.Controllers
 
                     var folderName = $"{extrasConfiguration.TypeId}_{extrasConfiguration.GroupId}";
 
-                    var reportPath = Path.Combine(
-                        Directory.GetCurrentDirectory(),
-                        "wwwroot",
-                        folderName
-                    );
-
+                    var reportPath = FileStorageHelper.GetGroupFolder(folderName);
                     if (Directory.Exists(reportPath))
                     {
-                        Directory.Delete(reportPath, true);
+                        try { Directory.Delete(reportPath, true); } catch { }
+                    }
+
+                    var legacyReportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", folderName);
+                    if (Directory.Exists(legacyReportPath))
+                    {
+                        try { Directory.Delete(legacyReportPath, true); } catch { }
                     }
 
                     _context.MExtraConfigurations.RemoveRange(extra);
