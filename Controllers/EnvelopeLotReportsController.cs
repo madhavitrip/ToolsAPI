@@ -48,62 +48,80 @@ namespace ToolsAPI.Controllers
         //}
 
         [HttpGet("ByProject/{projectId}")]
-        public async Task<IActionResult> GetEnvelopeLotReportsByProject(int projectId)
+        public async Task<IActionResult> GetEnvelopeLotReportsByProject(
+            int projectId,
+            [FromQuery] bool latestOnly = true)
         {
             try
             {
                 Console.WriteLine(
-                    $"Loading envelope lot reports for project: {projectId}"
+                    $"Loading envelope lot reports for project: {projectId}, latestOnly: {latestOnly}"
                 );
 
-                var reports = await _context.EnvelopeLotReports
+                // Fetch all EnvelopeLotReports for this project
+                var envelopeLotReports = await _context.EnvelopeLotReports
                     .AsNoTracking()
                     .Where(r => r.ProjectId == projectId)
-
-                    // Join with RPTTemplates using TemplateId
-                    .Join(
-                        _context.RPTTemplates.AsNoTracking(),
-                        envelopeReport => envelopeReport.TemplateId,
-                        rptTemplate => rptTemplate.TemplateId,
-                        (envelopeReport, rptTemplate) => new
-                        {
-                            EnvelopeReport = envelopeReport,
-                            RPTTemplate = rptTemplate
-                        }
-                    )
-
-                    .OrderByDescending(x => x.EnvelopeReport.GeneratedAt)
-                    .ThenByDescending(x => x.EnvelopeReport.Id)
-
-                    .Select(x => new
-                    {
-                        x.EnvelopeReport.Id,
-                        x.EnvelopeReport.ProjectId,
-                        x.EnvelopeReport.TemplateId,
-                        x.EnvelopeReport.TemplateName,
-                        x.EnvelopeReport.EnvLotNumbers,
-                        x.EnvelopeReport.FileName,
-                        x.EnvelopeReport.GeneratedAt,
-                        x.EnvelopeReport.GeneratedByUserId,
-                        x.EnvelopeReport.DownloadedByUserId,
-                        x.EnvelopeReport.DownloadedAt,
-                        x.EnvelopeReport.FilePath,
-                        x.EnvelopeReport.Status,
-
-                        // Version from RPTTemplates table
-                        Version = x.RPTTemplate.Version,
-
-                        // Keep this for frontend consistency
-                        LotNumber = x.EnvelopeReport.LotNo
-                    })
+                    .OrderByDescending(r => r.GeneratedAt)
+                    .ThenByDescending(r => r.Id)
                     .ToListAsync();
 
+                // Fetch RPTTemplates lookup so we can do a LEFT join in memory.
+                // An inner Join would silently drop records whose TemplateId no longer
+                // exists in RPTTemplates (e.g., deleted / superseded templates).
+                var templateIds = envelopeLotReports.Select(r => r.TemplateId).Distinct().ToList();
+                var rptTemplatesLookup = await _context.RPTTemplates
+                    .AsNoTracking()
+                    .Where(t => templateIds.Contains(t.TemplateId))
+                    .ToDictionaryAsync(t => t.TemplateId, t => t.Version);
+
+                // Left join: every EnvelopeLotReport row is kept; Version is null when
+                // the template no longer exists in RPTTemplates.
+                var reports = envelopeLotReports.Select(r => new
+                {
+                    r.Id,
+                    r.ProjectId,
+                    r.TemplateId,
+                    r.TemplateName,
+                    r.EnvLotNumbers,
+                    r.FileName,
+                    r.GeneratedAt,
+                    r.GeneratedByUserId,
+                    r.DownloadedByUserId,
+                    r.DownloadedAt,
+                    r.FilePath,
+                    r.Status,
+
+                    // null when template has been deleted
+                    Version = rptTemplatesLookup.TryGetValue(r.TemplateId, out var ver) ? ver : (int?)null,
+
+                    // Keep this for frontend consistency
+                    LotNumber = r.LotNo
+                }).ToList();
+
+                // When latestOnly=true: keep only the highest version per
+                // (TemplateName + Batch + Lot) combination.
+                var result = latestOnly
+                    ? reports
+                        .GroupBy(r => new
+                        {
+                            r.TemplateName,           // Template name (e.g., "Envelope Breaking", "Box Breaking")
+                            Batch = r.EnvLotNumbers ?? "",  // Batch identifier
+                            Lot = r.LotNumber ?? 0    // Lot number
+                        })
+                        .Select(g => g.OrderByDescending(r => r.Version).First())  // Max version
+                        .OrderByDescending(r => r.GeneratedAt)
+                        .ThenByDescending(r => r.Id)
+                        .Cast<object>()
+                        .ToList()
+                    : reports.Cast<object>().ToList();
+
                 Console.WriteLine(
-                    $"Found {reports.Count} EnvelopeLotReports rows " +
-                    $"for project {projectId}"
+                    $"Returning {result.Count} EnvelopeLotReports rows " +
+                    $"for project {projectId} (latestOnly={latestOnly})"
                 );
 
-                return Ok(reports);
+                return Ok(result);
             }
             catch (Exception ex)
             {

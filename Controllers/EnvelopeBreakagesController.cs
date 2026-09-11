@@ -570,10 +570,15 @@ namespace Tools.Controllers
                                 version = version,
                                 lotNo = lotNo,
                                 generatedAt = fileInfo.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss"),
-                               
+                                generatedAtTicks = fileInfo.LastWriteTime.Ticks
                             });
                         }
                     }
+                    // Sort box-breaking list: most recent first
+                    list = list
+                        .OrderByDescending(x => ((dynamic)x).generatedAtTicks)
+                        .Cast<object>()
+                        .ToList();
                 }
                 else
                 {
@@ -599,10 +604,16 @@ namespace Tools.Controllers
                             {
                                 fileName = name,
                                 version = version,
-                                generatedAt = fileInfo.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss")
+                                generatedAt = fileInfo.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss"),
+                                generatedAtTicks = fileInfo.LastWriteTime.Ticks
                             });
                         }
                     }
+                    // Sort: most recent first
+                    list = list
+                        .OrderByDescending(x => ((dynamic)x).generatedAtTicks)
+                        .Cast<object>()
+                        .ToList();
                 }
 
                 results[key] = list;
