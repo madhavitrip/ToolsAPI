@@ -372,6 +372,7 @@ namespace Tools.Controllers
                     "CourseName" => query.Where(d => d.CourseName != null && d.CourseName.Contains(search)),
                     "ExamDate" => query.Where(d => d.ExamDate != null && d.ExamDate.Contains(search)),
                     "ExamTime" => query.Where(d => d.ExamTime != null && d.ExamTime.Contains(search)),
+                    "LotNo" => query.Where(d => d.LotNo.ToString().Contains(search)),
                     _ => query
                 };
             }
