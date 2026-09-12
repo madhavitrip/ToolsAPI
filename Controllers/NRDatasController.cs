@@ -372,6 +372,7 @@ namespace Tools.Controllers
                     "CourseName" => query.Where(d => d.CourseName != null && d.CourseName.Contains(search)),
                     "ExamDate" => query.Where(d => d.ExamDate != null && d.ExamDate.Contains(search)),
                     "ExamTime" => query.Where(d => d.ExamTime != null && d.ExamTime.Contains(search)),
+                    "LotNo" => query.Where(d => d.LotNo.ToString().Contains(search)),
                     _ => query
                 };
             }
@@ -3958,7 +3959,16 @@ namespace Tools.Controllers
 
             try
             {
-              
+                // Fetch allowed fields from Fields table where IsUnique = true
+                var allowedFields = await _context.Fields
+                    .Where(f => f.IsUnique)
+                    .Select(f => f.Name.ToLower())
+                    .ToListAsync();
+
+                // Always allow ExamDate and Day as special cases
+                allowedFields.Add("examdate");
+                allowedFields.Add("day");
+
                 var ids = effectiveRows
                     .Where(x => x.Id > 0)
                     .Select(x => x.Id)
@@ -4053,6 +4063,14 @@ namespace Tools.Controllers
                                 if (string.IsNullOrWhiteSpace(valueStr))
                                     continue;
 
+                                // Validate that this field is allowed
+                                var keyLower = key.ToLower();
+                                if (!allowedFields.Contains(keyLower))
+                                {
+                                    // Skip non-allowed fields
+                                    continue;
+                                }
+
                                 if (key.Equals(nameof(NRData.ExamDate), StringComparison.OrdinalIgnoreCase))
                                 {
                                     examDateUpdated = true;
@@ -4068,8 +4086,6 @@ namespace Tools.Controllers
 
                                 if (string.IsNullOrWhiteSpace(valueStr))
                                     continue;
-
-                                var keyLower = key.ToLower();
 
                                 if (modelProperties.TryGetValue(keyLower, out var property))
                                 {
