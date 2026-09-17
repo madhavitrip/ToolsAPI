@@ -1,4 +1,4 @@
-﻿using System.ComponentModel.DataAnnotations.Schema;
+using System.ComponentModel.DataAnnotations.Schema;
 using System.ComponentModel.DataAnnotations;
 
 namespace Tools.Models
@@ -12,6 +12,9 @@ namespace Tools.Models
         public string? CourseName { get; set; }
         public string? SubjectName { get; set; }
         public string? CenterCode { get; set; }
+        
+        public int CollegeCode { get; set; }
+        public string? CollegeName { get; set; }
         
         public int NRQuantity { get; set; }
         public string? CatchNo { get; set; }
