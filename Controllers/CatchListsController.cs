@@ -141,6 +141,22 @@ namespace Tools.Controllers
             }
         }
 
+        [HttpPost]
+        public async Task<IActionResult> CreateCatchList([FromBody] CatchList newRecord)
+        {
+            if (newRecord == null) return BadRequest("Invalid data");
+            try
+            {
+                await _context.CatchList.AddAsync(newRecord);
+                await _context.SaveChangesAsync();
+                return Ok(newRecord);
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, $"Internal server error: {ex.Message}");
+            }
+        }
+
         [HttpPost("Upload")]
         public async Task<IActionResult> UploadCatchList([FromBody] JsonElement inputData)
         {

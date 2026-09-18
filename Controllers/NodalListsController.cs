@@ -127,6 +127,22 @@ namespace Tools.Controllers
             }
         }
 
+        [HttpPost]
+        public async Task<IActionResult> CreateNodalList([FromBody] NodalList newRecord)
+        {
+            if (newRecord == null) return BadRequest("Invalid data");
+            try
+            {
+                await _context.NodalList.AddAsync(newRecord);
+                await _context.SaveChangesAsync();
+                return Ok(newRecord);
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, $"Internal server error: {ex.Message}");
+            }
+        }
+
         [HttpPost("Upload")]
         public async Task<IActionResult> UploadNodalList([FromBody] JsonElement inputData)
         {
