@@ -25,15 +25,15 @@ namespace Tools.Controllers
                 // Clear existing temp data
                 await _context.TemporaryNrDatas.Where(x => x.ProjectId == projectId).ExecuteDeleteAsync();
 
-                var catchLists = await _context.CatchList.AsNoTracking().Where(x => x.ProjectId == projectId).ToListAsync();
-                var nodalLists = await _context.NodalList.AsNoTracking().Where(x => x.ProjectId == projectId).ToListAsync();
-                var nodalLookup = nodalLists.ToLookup(n => n.CollegeCode);
+                var catchLists = await _context.CatchList.AsNoTracking().Where(x => x.ProjectId == projectId && x.Status).ToListAsync();
+                var nodalLists = await _context.NodalList.AsNoTracking().Where(x => x.ProjectId == projectId && x.Status).ToListAsync();
+                var nodalLookup = nodalLists.ToLookup(n => n.CollegeName);
 
                 var tempDatas = new List<TemporaryNrDatas>();
 
                 foreach (var catchItem in catchLists)
                 {
-                    var matchingNodals = nodalLookup[catchItem.CollegeCode].ToList();
+                    var matchingNodals = nodalLookup[catchItem.CollegeName].ToList();
 
                     if (!matchingNodals.Any())
                     {
@@ -115,8 +115,8 @@ namespace Tools.Controllers
         {
             try
             {
-                var catchLists = await _context.CatchList.AsNoTracking().Where(x => x.ProjectId == projectId).ToListAsync();
-                var nodalLists = await _context.NodalList.AsNoTracking().Where(x => x.ProjectId == projectId).ToListAsync();
+                var catchLists = await _context.CatchList.AsNoTracking().Where(x => x.ProjectId == projectId && x.Status).ToListAsync();
+                var nodalLists = await _context.NodalList.AsNoTracking().Where(x => x.ProjectId == projectId && x.Status).ToListAsync();
 
                 var errors = new List<string>();
 

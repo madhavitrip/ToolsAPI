@@ -12,10 +12,35 @@ namespace Tools.Controllers
     public class NodalListsController : ControllerBase
     {
         private readonly ERPToolsDbContext _context;
+        private static bool _schemaEnsured = false;
+        private static readonly object _schemaLock = new object();
 
         public NodalListsController(ERPToolsDbContext context)
         {
             _context = context;
+        }
+
+        private async Task EnsureSchemaAsync()
+        {
+            if (_schemaEnsured) return;
+            lock (_schemaLock)
+            {
+                if (_schemaEnsured) return;
+            }
+
+            try
+            {
+                await _context.Database.ExecuteSqlRawAsync("ALTER TABLE NodalList ADD COLUMN Status TINYINT(1) NOT NULL DEFAULT 1;");
+            }
+            catch
+            {
+                // Column may already exist
+            }
+
+            lock (_schemaLock)
+            {
+                _schemaEnsured = true;
+            }
         }
 
         [HttpGet("{projectId}")]
@@ -23,7 +48,8 @@ namespace Tools.Controllers
         {
             try
             {
-                var query = _context.NodalList.Where(x => x.ProjectId == projectId).AsQueryable();
+                await EnsureSchemaAsync();
+                var query = _context.NodalList.Where(x => x.ProjectId == projectId && x.Status).AsQueryable();
 
                 if (!string.IsNullOrEmpty(search))
                 {
@@ -105,7 +131,7 @@ namespace Tools.Controllers
         {
             if (id != updatedRecord.Id) return BadRequest("ID mismatch");
 
-            var existingRecord = await _context.NodalList.FindAsync(id);
+            var existingRecord = await _context.NodalList.FirstOrDefaultAsync(x => x.Id == id && x.Status);
             if (existingRecord == null) return NotFound("Record not found");
 
             existingRecord.CollegeCode = updatedRecord.CollegeCode;
@@ -127,12 +153,77 @@ namespace Tools.Controllers
             }
         }
 
+        [HttpDelete("{id}")]
+        public async Task<IActionResult> DeleteNodalList(int id)
+        {
+            try
+            {
+                await EnsureSchemaAsync();
+                var record = await _context.NodalList.FindAsync(id);
+                if (record == null || !record.Status)
+                {
+                    return NotFound(new { message = "Record not found" });
+                }
+
+                record.Status = false;
+                await _context.SaveChangesAsync();
+
+                return Ok(new { message = "Record deleted successfully", id });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, $"Internal server error: {ex.Message}");
+            }
+        }
+
+        [HttpDelete("project/{projectId}")]
+        [HttpDelete("deleteAll/{projectId}")]
+        [HttpPost("delete-all/{projectId}")]
+        public async Task<IActionResult> DeleteNodalListByProject(int projectId)
+        {
+            try
+            {
+                await EnsureSchemaAsync();
+                var affected = await _context.Database.ExecuteSqlRawAsync(
+                    "UPDATE NodalList SET Status = 0 WHERE ProjectId = {0} AND Status = 1;", projectId);
+
+                return Ok(new { message = "All records soft-deleted successfully", count = affected });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, $"Internal server error: {ex.Message}");
+            }
+        }
+
+        [HttpPost("batch-delete")]
+        public async Task<IActionResult> BatchDeleteNodalList([FromBody] List<int> ids)
+        {
+            if (ids == null || !ids.Any()) return BadRequest("No IDs provided");
+            try
+            {
+                await EnsureSchemaAsync();
+                var records = await _context.NodalList.Where(x => ids.Contains(x.Id) && x.Status).ToListAsync();
+                foreach (var record in records)
+                {
+                    record.Status = false;
+                }
+                await _context.SaveChangesAsync();
+                return Ok(new { message = $"{records.Count} records deleted successfully", count = records.Count });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, $"Internal server error: {ex.Message}");
+            }
+        }
+
         [HttpPost]
         public async Task<IActionResult> CreateNodalList([FromBody] NodalList newRecord)
         {
             if (newRecord == null) return BadRequest("Invalid data");
             try
             {
+                await EnsureSchemaAsync();
+                newRecord.Status = true;
                 await _context.NodalList.AddAsync(newRecord);
                 await _context.SaveChangesAsync();
                 return Ok(newRecord);
@@ -151,6 +242,7 @@ namespace Tools.Controllers
 
             try
             {
+                await EnsureSchemaAsync();
                 var projProp = inputData.GetProperty("projectId");
                 int projectId = projProp.ValueKind == JsonValueKind.String ? int.Parse(projProp.GetString()!) : projProp.GetInt32();
                 var incomingData = inputData.GetProperty("data");

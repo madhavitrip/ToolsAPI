@@ -2671,30 +2671,20 @@ namespace Tools.Controllers
         [HttpGet("PipelineRerunStatus")]
         public async Task<ActionResult> GetPipelineRerunStatus(int ProjectId, int batch)
         {
-            var activeQuery = _context.NRDatas
+            var lotStats = await _context.NRDatas
                 .AsNoTracking()
-                .Where(n =>
-                    n.ProjectId == ProjectId &&
-                    n.Status &&
-                    n.Batch == batch);
-
-            // Single query for all overall statistics
-            var stats = await activeQuery
-                .GroupBy(x => 1)
+                .Where(n => n.ProjectId == ProjectId && n.Status && n.Batch == batch)
+                .GroupBy(n => n.LotNo)
                 .Select(g => new
                 {
-                    TotalActive = g.Count(),
-                    MinStep = g.Min(x => x.Steps),
-                    MaxStep = g.Max(x => x.Steps),
-
-                    DuplicatePending = g.Any(x => x.Steps == 0),
-                    EnhancementPending = g.Any(x => x.Steps <= 2),
-                    ExtraPending = g.Any(x => x.Steps <= 3),
-                    EnvelopePending = g.Any(x => x.Steps <= 4)
+                    LotNo = g.Key,
+                    Count = g.Count(),
+                    MinSteps = g.Min(x => x.Steps),
+                    MaxSteps = g.Max(x => x.Steps)
                 })
-                .FirstOrDefaultAsync();
+                .ToListAsync();
 
-            if (stats == null)
+            if (lotStats.Count == 0)
             {
                 return Ok(new
                 {
@@ -2738,7 +2728,7 @@ namespace Tools.Controllers
                 .ToList();
 
             var pendingBoxLots = lotStats
-                .Where(x => x.IsPending)
+                .Where(x => x.MinSteps <= 5)
                 .Select(x => x.LotNo)
                 .OrderBy(x => x)
                 .ToList();
@@ -2755,21 +2745,20 @@ namespace Tools.Controllers
 
             return Ok(new
             {
-                hasPendingPipelineChanges =
-                    stats.MinStep < Tools.Models.PipelineNavigator.STEP_DONE,
+                hasPendingPipelineChanges = minStep < Tools.Models.PipelineNavigator.STEP_DONE,
 
-                minStep = stats.MinStep,
-                maxStep = stats.MaxStep,
-                totalActive = stats.TotalActive,
+                minStep,
+                maxStep,
+                totalActive,
 
-                duplicatePending = stats.DuplicatePending,
-                enhancementPending = stats.EnhancementPending,
-                extraPending = stats.ExtraPending,
-                envelopePending = stats.EnvelopePending,
+                duplicatePending = minStep == 0,
+                enhancementPending = minStep <= 2,
+                extraPending = minStep <= 3,
+                envelopePending = minStep <= 4,
 
                 boxPending = pendingBoxLots.Count > 0,
                 boxTotalLots = lotStats.Count,
-                boxCompletedLots = lotStats.Count(x => !x.IsPending),
+                boxCompletedLots = lotStats.Count(x => x.MinSteps > 5),
                 boxPendingLots = pendingBoxLots.Count,
                 pendingBoxLots,
 
@@ -2783,7 +2772,6 @@ namespace Tools.Controllers
                 completedEnvelopeLots
             });
         }
-
 
         [HttpGet("DuplicateRerunStatus")]
         public async Task<ActionResult> GetDuplicateRerunStatus(int ProjectId, int Batch)
@@ -4918,16 +4906,14 @@ namespace Tools.Controllers
                 // Remove this block if you want a complete soft delete
                 if (!lotNo.HasValue)
                 {
-                    var reportPath = FileStorageHelper.GetProjectFolder(ProjectId);
+                    var reportPath = Path.Combine(
+                        Directory.GetCurrentDirectory(),
+                        "wwwroot",
+                        ProjectId.ToString());
+
                     if (Directory.Exists(reportPath))
                     {
-                        try { Directory.Delete(reportPath, true); } catch { }
-                    }
-
-                    var legacyReportPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", ProjectId.ToString());
-                    if (Directory.Exists(legacyReportPath))
-                    {
-                        try { Directory.Delete(legacyReportPath, true); } catch { }
+                        Directory.Delete(reportPath, true);
                     }
                 }
 
@@ -5118,9 +5104,8 @@ namespace Tools.Controllers
                     A = GetJsonValue("A"),
                     B = GetJsonValue("B"),
                     C = GetJsonValue("C"),
-                    D = GetJsonValue("D"),
-                    remark = nrData.Remarksss ?? "",
                     DynamicData = data.ToDictionary(kvp => kvp.Key, kvp => GetJsonValue(kvp.Key)),
+                    remark = nrData.Remarksss ?? "",
                     date = nrData.ExamDate ?? "",
                     time = nrData.ExamTime ?? "",
                     status = (int)verificationStatus,
@@ -5687,8 +5672,8 @@ namespace Tools.Controllers
 
                 D = GetJsonValue("D"),
 
-                remark = selectedRecord.Remarksss ?? "",
                 dynamicData = selectedRecordData.ToDictionary(kvp => kvp.Key, kvp => GetJsonValue(kvp.Key)),
+                remark = selectedRecord.Remarksss ?? "",
 
                 date = selectedRecord.ExamDate ?? "",
 

@@ -1,4 +1,4 @@
-﻿using System.ComponentModel.DataAnnotations.Schema;
+using System.ComponentModel.DataAnnotations.Schema;
 using System.ComponentModel.DataAnnotations;
 
 namespace Tools.Models
@@ -17,5 +17,6 @@ namespace Tools.Models
         public int NodalCode { get; set; }
         public string? NodalName { get; set; }
         public string? OtherFields { get; set; }
+        public bool Status { get; set; } = true;
     }
 }

@@ -2,8 +2,8 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System.Text.Json;
 using System.Reflection;
+using System.Text.RegularExpressions;
 using Tools.Models;
-using ERPToolsAPI.Data;
 using ERPToolsAPI.Data;
 
 namespace Tools.Controllers
@@ -13,10 +13,35 @@ namespace Tools.Controllers
     public class CatchListsController : ControllerBase
     {
         private readonly ERPToolsDbContext _context;
+        private static bool _schemaEnsured = false;
+        private static readonly object _schemaLock = new object();
 
         public CatchListsController(ERPToolsDbContext context)
         {
             _context = context;
+        }
+
+        private async Task EnsureSchemaAsync()
+        {
+            if (_schemaEnsured) return;
+            lock (_schemaLock)
+            {
+                if (_schemaEnsured) return;
+            }
+
+            try
+            {
+                await _context.Database.ExecuteSqlRawAsync("ALTER TABLE CatchList ADD COLUMN Status TINYINT(1) NOT NULL DEFAULT 1;");
+            }
+            catch
+            {
+                // Column may already exist
+            }
+
+            lock (_schemaLock)
+            {
+                _schemaEnsured = true;
+            }
         }
 
         [HttpGet("{projectId}")]
@@ -24,7 +49,8 @@ namespace Tools.Controllers
         {
             try
             {
-                var query = _context.CatchList.Where(x => x.ProjectId == projectId).AsQueryable();
+                await EnsureSchemaAsync();
+                var query = _context.CatchList.Where(x => x.ProjectId == projectId && x.Status).AsQueryable();
 
                 if (!string.IsNullOrEmpty(search))
                 {
@@ -113,7 +139,7 @@ namespace Tools.Controllers
         {
             if (id != updatedRecord.Id) return BadRequest("ID mismatch");
 
-            var existingRecord = await _context.CatchList.FindAsync(id);
+            var existingRecord = await _context.CatchList.FirstOrDefaultAsync(x => x.Id == id && x.Status);
             if (existingRecord == null) return NotFound("Record not found");
 
             existingRecord.CatchNo = updatedRecord.CatchNo;
@@ -141,12 +167,77 @@ namespace Tools.Controllers
             }
         }
 
+        [HttpDelete("{id}")]
+        public async Task<IActionResult> DeleteCatchList(int id)
+        {
+            try
+            {
+                await EnsureSchemaAsync();
+                var record = await _context.CatchList.FindAsync(id);
+                if (record == null || !record.Status)
+                {
+                    return NotFound(new { message = "Record not found" });
+                }
+
+                record.Status = false;
+                await _context.SaveChangesAsync();
+
+                return Ok(new { message = "Record deleted successfully", id });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, $"Internal server error: {ex.Message}");
+            }
+        }
+
+        [HttpDelete("project/{projectId}")]
+        [HttpDelete("deleteAll/{projectId}")]
+        [HttpPost("delete-all/{projectId}")]
+        public async Task<IActionResult> DeleteCatchListByProject(int projectId)
+        {
+            try
+            {
+                await EnsureSchemaAsync();
+                var affected = await _context.Database.ExecuteSqlRawAsync(
+                    "UPDATE CatchList SET Status = 0 WHERE ProjectId = {0} AND Status = 1;", projectId);
+
+                return Ok(new { message = "All records soft-deleted successfully", count = affected });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, $"Internal server error: {ex.Message}");
+            }
+        }
+
+        [HttpPost("batch-delete")]
+        public async Task<IActionResult> BatchDeleteCatchList([FromBody] List<int> ids)
+        {
+            if (ids == null || !ids.Any()) return BadRequest("No IDs provided");
+            try
+            {
+                await EnsureSchemaAsync();
+                var records = await _context.CatchList.Where(x => ids.Contains(x.Id) && x.Status).ToListAsync();
+                foreach (var record in records)
+                {
+                    record.Status = false;
+                }
+                await _context.SaveChangesAsync();
+                return Ok(new { message = $"{records.Count} records deleted successfully", count = records.Count });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, $"Internal server error: {ex.Message}");
+            }
+        }
+
         [HttpPost]
         public async Task<IActionResult> CreateCatchList([FromBody] CatchList newRecord)
         {
             if (newRecord == null) return BadRequest("Invalid data");
             try
             {
+                await EnsureSchemaAsync();
+                newRecord.Status = true;
                 await _context.CatchList.AddAsync(newRecord);
                 await _context.SaveChangesAsync();
                 return Ok(newRecord);
@@ -165,6 +256,7 @@ namespace Tools.Controllers
 
             try
             {
+                await EnsureSchemaAsync();
                 var projProp = inputData.GetProperty("projectId");
                 int projectId = projProp.ValueKind == JsonValueKind.String ? int.Parse(projProp.GetString()!) : projProp.GetInt32();
                 var incomingData = inputData.GetProperty("data");
@@ -220,7 +312,31 @@ namespace Tools.Controllers
                     }
 
                     if (extraData.Any()) catchList.NRDatas = JsonSerializer.Serialize(extraData);
-                    catchListsToAdd.Add(catchList);
+
+                    if (!string.IsNullOrWhiteSpace(catchList.CatchNo))
+                    {
+                        var expandedCatches = ExpandCatchNoRange(catchList.CatchNo);
+                        if (expandedCatches.Count > 1)
+                        {
+                            foreach (var cNo in expandedCatches)
+                            {
+                                catchListsToAdd.Add(CloneCatchList(catchList, cNo));
+                            }
+                        }
+                        else if (expandedCatches.Count == 1)
+                        {
+                            catchList.CatchNo = expandedCatches[0];
+                            catchListsToAdd.Add(catchList);
+                        }
+                        else
+                        {
+                            catchListsToAdd.Add(catchList);
+                        }
+                    }
+                    else
+                    {
+                        catchListsToAdd.Add(catchList);
+                    }
                 }
 
                 if (catchListsToAdd.Any())
@@ -240,6 +356,85 @@ namespace Tools.Controllers
                 var innerMessage = ex.InnerException != null ? ex.InnerException.Message : ""; if (ex.InnerException?.InnerException != null) innerMessage += " | " + ex.InnerException.InnerException.Message;
                 return StatusCode(500, $"Internal server error: {ex.Message}. Inner: {innerMessage}");
             }
+        }
+
+        private static CatchList CloneCatchList(CatchList source, string catchNo)
+        {
+            return new CatchList
+            {
+                ProjectId = source.ProjectId,
+                CourseName = source.CourseName,
+                SubjectName = source.SubjectName,
+                CollegeName = source.CollegeName,
+                CollegeCode = source.CollegeCode,
+                PaperCode = source.PaperCode,
+                NRQuantity = source.NRQuantity,
+                CatchNo = catchNo,
+                ExamDate = source.ExamDate,
+                ExamTime = source.ExamTime,
+                NRDatas = source.NRDatas,
+                Transgender = source.Transgender,
+                Male = source.Male,
+                Female = source.Female,
+                Semester = source.Semester,
+                Status = source.Status
+            };
+        }
+
+        private static List<string> ExpandCatchNoRange(string? catchNo)
+        {
+            var result = new List<string>();
+            if (string.IsNullOrWhiteSpace(catchNo))
+            {
+                return result;
+            }
+
+            var trimmed = catchNo.Trim();
+            var match = Regex.Match(trimmed, @"^([A-Za-z_-]*?)(\d+)\s+to\s+([A-Za-z_-]*?)(\d+)$", RegexOptions.IgnoreCase);
+
+            if (match.Success)
+            {
+                string prefix1 = match.Groups[1].Value;
+                string numStr1 = match.Groups[2].Value;
+                string prefix2 = match.Groups[3].Value;
+                string numStr2 = match.Groups[4].Value;
+
+                if (string.Equals(prefix1, prefix2, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (long.TryParse(numStr1, out long startNum) && long.TryParse(numStr2, out long endNum))
+                    {
+                        if (startNum <= endNum && (endNum - startNum) <= 50000)
+                        {
+                            int padLength = (numStr1.StartsWith("0") || numStr2.StartsWith("0"))
+                                ? Math.Max(numStr1.Length, numStr2.Length)
+                                : 0;
+
+                            for (long n = startNum; n <= endNum; n++)
+                            {
+                                string formattedNum = padLength > 0 ? n.ToString().PadLeft(padLength, '0') : n.ToString();
+                                result.Add($"{prefix1}{formattedNum}");
+                            }
+                            return result;
+                        }
+                        else if (startNum > endNum && (startNum - endNum) <= 50000)
+                        {
+                            int padLength = (numStr1.StartsWith("0") || numStr2.StartsWith("0"))
+                                ? Math.Max(numStr1.Length, numStr2.Length)
+                                : 0;
+
+                            for (long n = startNum; n >= endNum; n--)
+                            {
+                                string formattedNum = padLength > 0 ? n.ToString().PadLeft(padLength, '0') : n.ToString();
+                                result.Add($"{prefix1}{formattedNum}");
+                            }
+                            return result;
+                        }
+                    }
+                }
+            }
+
+            result.Add(trimmed);
+            return result;
         }
     }
 }
