@@ -23,7 +23,6 @@ namespace Tools.Models
         public int Male { get; set; }
         public int Female { get; set; }
         public string? Semester { get; set; }
-       
-    
-}
+        public bool Status { get; set; } = true;
+    }
 }
