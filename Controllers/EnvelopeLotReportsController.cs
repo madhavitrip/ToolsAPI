@@ -73,7 +73,7 @@ namespace ToolsAPI.Controllers
                 var rptTemplatesLookup = await _context.RPTTemplates
                     .AsNoTracking()
                     .Where(t => templateIds.Contains(t.TemplateId))
-                    .ToDictionaryAsync(t => t.TemplateId, t => t.Version);
+                    .ToDictionaryAsync(t => t.TemplateId, t => t);
 
                 // Left join: every EnvelopeLotReport row is kept; Version is null when
                 // the template no longer exists in RPTTemplates.
@@ -83,6 +83,7 @@ namespace ToolsAPI.Controllers
                     r.ProjectId,
                     r.TemplateId,
                     r.TemplateName,
+                    SubName = rptTemplatesLookup.TryGetValue(r.TemplateId, out var tpl) ? tpl.SubName : null,
                     r.EnvLotNumbers,
                     r.FileName,
                     r.GeneratedAt,
@@ -93,13 +94,13 @@ namespace ToolsAPI.Controllers
                     r.Status,
 
                     // null when template has been deleted
-                    Version = rptTemplatesLookup.TryGetValue(r.TemplateId, out var ver) ? ver : (int?)null,
+                    Version = rptTemplatesLookup.TryGetValue(r.TemplateId, out var tplV) ? (int?)tplV.Version : null,
 
                     // Keep this for frontend consistency
                     LotNumber = r.LotNo
                 }).ToList();
 
-                // When latestOnly=true: keep only the highest version per
+                // When latestOnly=true: keep only the latest generated report per
                 // (TemplateName + Batch + Lot) combination.
                 var result = latestOnly
                     ? reports
@@ -109,7 +110,7 @@ namespace ToolsAPI.Controllers
                             Batch = r.EnvLotNumbers ?? "",  // Batch identifier
                             Lot = r.LotNumber ?? 0    // Lot number
                         })
-                        .Select(g => g.OrderByDescending(r => r.Version).First())  // Max version
+                        .Select(g => g.OrderByDescending(r => r.GeneratedAt).ThenByDescending(r => r.Id).First())
                         .OrderByDescending(r => r.GeneratedAt)
                         .ThenByDescending(r => r.Id)
                         .Cast<object>()
