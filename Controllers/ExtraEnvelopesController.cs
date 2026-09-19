@@ -426,7 +426,14 @@ namespace Tools.Controllers
 
                 var path = FileStorageHelper.GetProjectFolder(ProjectId);
 
-                var fileName = uploadId.HasValue ? $"ExtrasCalculation_v{uploadId}.xlsx" : ReportVersionHelper.GetNextVersionFileName(path, "ExtrasCalculation.xlsx");
+                var distinctLots = (lotNo.HasValue && lotNo.Value > 0)
+                    ? new List<int> { lotNo.Value }
+                    : nrDataList.Where(r => r.LotNo > 0).Select(r => r.LotNo).Distinct().OrderBy(l => l).ToList();
+                var lotStr = distinctLots.Any() ? string.Join("_", distinctLots) : "All";
+
+                var fileName = uploadId.HasValue
+                    ? $"ExtrasCalculation_{lotStr}_v{uploadId}.xlsx"
+                    : ReportVersionHelper.GetNextVersionFileName(path, $"ExtrasCalculation_{lotStr}.xlsx");
                 var filePath = Path.Combine(path, fileName);
 
                 using (var package = new ExcelPackage())

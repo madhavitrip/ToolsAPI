@@ -194,7 +194,12 @@ namespace Tools.Controllers
 
                 var reportPath = FileStorageHelper.GetProjectFolder(ProjectId);
 
-                var fileName = ReportVersionHelper.GetNextVersionFileName(reportPath, "DuplicateTool.xlsx");
+                var distinctLots = (lotNo.HasValue && lotNo.Value > 0)
+                    ? new List<int> { lotNo.Value }
+                    : reportRows.Where(r => r.LotNo > 0).Select(r => r.LotNo).Distinct().OrderBy(l => l).ToList();
+                var lotStr = distinctLots.Any() ? string.Join("_", distinctLots) : "All";
+
+                var fileName = ReportVersionHelper.GetNextVersionFileName(reportPath, $"DuplicateTool_{lotStr}.xlsx");
                 var filePath = Path.Combine(reportPath, fileName);
 
                 var baseProperties = typeof(NRData).GetProperties(BindingFlags.Public | BindingFlags.Instance)
@@ -325,7 +330,9 @@ namespace Tools.Controllers
                     MergedRows = mergedCount,
                     message = hasPendingDuplicateRows
                         ? "Duplicates processed successfully."
-                        : "No pending duplicate rows. Report regenerated from active data."
+                        : "No pending duplicate rows. Report regenerated from active data.",
+                    fileName,
+                    filePath
                 });
             }
             catch (Exception ex)
@@ -481,7 +488,12 @@ WHERE ProjectId = {0};", ProjectId);
                 {
                     var reportPath = FileStorageHelper.GetProjectFolder(ProjectId);
 
-                    var fileName = ReportVersionHelper.GetNextVersionFileName(reportPath, "EnhancementReport.xlsx");
+                    var distinctLots = (lotNo.HasValue && lotNo.Value > 0)
+                        ? new List<int> { lotNo.Value }
+                        : data.Where(r => r.LotNo > 0).Select(r => r.LotNo).Distinct().OrderBy(l => l).ToList();
+                    var lotStr = distinctLots.Any() ? string.Join("_", distinctLots) : "All";
+
+                    var fileName = ReportVersionHelper.GetNextVersionFileName(reportPath, $"EnhancementReport_{lotStr}.xlsx");
                     filePath = Path.Combine(reportPath, fileName);
 
                     var baseProperties = typeof(NRData).GetProperties(BindingFlags.Public | BindingFlags.Instance)
@@ -546,7 +558,8 @@ WHERE ProjectId = {0};", ProjectId);
                 return Ok(new
                 {
                     EnhancementApplied = data.Any() ? projectconfig.Enhancement : 0.0,
-                    ReportPath = filePath
+                    ReportPath = filePath,
+                    fileName = !string.IsNullOrEmpty(filePath) ? Path.GetFileName(filePath) : null
                 });
             }
             catch (Exception ex)
@@ -685,7 +698,7 @@ WHERE ProjectId = {0};", ProjectId);
 
 
         [HttpGet("DuplicateReport")]
-        public async Task<IActionResult> DuplicateReport(int ProjectId, int? uploadId = null)
+        public async Task<IActionResult> DuplicateReport(int ProjectId, int? uploadId = null, [FromQuery] int? lotNo = null)
         {
             try
             {
@@ -702,12 +715,22 @@ WHERE ProjectId = {0};", ProjectId);
                         .ToListAsync();
                 }
 
+                if (lotNo.HasValue && lotNo.Value > 0)
+                {
+                    reportRows = reportRows.Where(r => r.LotNo == lotNo.Value).ToList();
+                }
+
                 if (!reportRows.Any())
                     return NotFound("No NRData found for this version.");
 
                 var reportPath = FileStorageHelper.GetProjectFolder(ProjectId);
 
-                var fileName = uploadId.HasValue ? $"DuplicateTool_v{uploadId}.xlsx" : "DuplicateTool.xlsx";
+                var distinctLots = (lotNo.HasValue && lotNo.Value > 0)
+                    ? new List<int> { lotNo.Value }
+                    : reportRows.Where(r => r.LotNo > 0).Select(r => r.LotNo).Distinct().OrderBy(l => l).ToList();
+                var lotStr = distinctLots.Any() ? string.Join("_", distinctLots) : "All";
+
+                var fileName = uploadId.HasValue ? $"DuplicateTool_{lotStr}_v{uploadId}.xlsx" : $"DuplicateTool_{lotStr}.xlsx";
                 var filePath = Path.Combine(reportPath, fileName);
                 
                 if (System.IO.File.Exists(filePath))

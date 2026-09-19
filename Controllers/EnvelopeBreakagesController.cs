@@ -39,7 +39,7 @@ namespace Tools.Controllers
         }
 
         [HttpGet]
-        public async Task<ActionResult> GetEnvelopeBreakages(int ProjectId, int? uploadId = null)
+        public async Task<ActionResult> GetEnvelopeBreakages(int ProjectId, int? uploadId = null, [FromQuery] int? lotNo = null)
         {
             List<NRData> NRData;
             if (uploadId.HasValue)
@@ -52,6 +52,11 @@ namespace Tools.Controllers
                 NRData = await _context.NRDatas
                     .Where(p => p.ProjectId == ProjectId && p.Status == true)
                     .ToListAsync();
+            }
+
+            if (lotNo.HasValue && lotNo.Value > 0)
+            {
+                NRData = NRData.Where(p => p.LotNo == lotNo.Value).ToList();
             }
 
             var Envelope = await _context.EnvelopeBreakages
@@ -84,7 +89,12 @@ namespace Tools.Controllers
 
             var reportPath = FileStorageHelper.GetProjectFolder(ProjectId);
 
-            var filename = uploadId.HasValue ? $"EnvelopeBreaking_v{uploadId}.xlsx" : ReportVersionHelper.GetNextVersionFileName(reportPath, "EnvelopeBreaking.xlsx");
+            var distinctLots = (lotNo.HasValue && lotNo.Value > 0)
+                ? new List<int> { lotNo.Value }
+                : NRData.Where(r => r.LotNo > 0).Select(r => r.LotNo).Distinct().OrderBy(l => l).ToList();
+            var lotStr = distinctLots.Any() ? string.Join("_", distinctLots) : "All";
+
+            var filename = uploadId.HasValue ? $"EnvelopeBreaking_{lotStr}_v{uploadId}.xlsx" : ReportVersionHelper.GetNextVersionFileName(reportPath, $"EnvelopeBreaking_{lotStr}.xlsx");
             var filePath = Path.Combine(reportPath, filename);
 
             // ?? Skip generation if file already exists
@@ -486,19 +496,33 @@ namespace Tools.Controllers
                 string nameWithoutExt = Path.GetFileNameWithoutExtension(fileName);
                 if (Directory.Exists(rootFolder))
                 {
-                    var pattern = new System.Text.RegularExpressions.Regex(@"^" + System.Text.RegularExpressions.Regex.Escape(nameWithoutExt) + @"_v(\d+)" + System.Text.RegularExpressions.Regex.Escape(extension) + "$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                    var pattern = new System.Text.RegularExpressions.Regex(@"^" + System.Text.RegularExpressions.Regex.Escape(nameWithoutExt) + @"(?:_(?:(?:v(\d+))|(?:([^_]+)(?:_v(\d+))?)))?" + System.Text.RegularExpressions.Regex.Escape(extension) + "$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
                     int maxVersion = 0;
+                    string latestFile = null;
+                    DateTime latestTime = DateTime.MinValue;
+
                     foreach (var file in Directory.GetFiles(rootFolder))
                     {
-                        var match = pattern.Match(Path.GetFileName(file));
-                        if (match.Success && int.TryParse(match.Groups[1].Value, out int v) && v > maxVersion)
+                        var fname = Path.GetFileName(file);
+                        var match = pattern.Match(fname);
+                        if (match.Success)
                         {
-                            maxVersion = v;
+                            var fInfo = new FileInfo(file);
+                            int v = 0;
+                            if (match.Groups[1].Success && int.TryParse(match.Groups[1].Value, out int v1)) v = v1;
+                            else if (match.Groups[3].Success && int.TryParse(match.Groups[3].Value, out int v3)) v = v3;
+
+                            if (v > maxVersion || (v == maxVersion && fInfo.LastWriteTime > latestTime) || latestFile == null)
+                            {
+                                maxVersion = v;
+                                latestTime = fInfo.LastWriteTime;
+                                latestFile = fname;
+                            }
                         }
                     }
-                    if (maxVersion > 0)
+                    if (latestFile != null)
                     {
-                        finalFileName = $"{nameWithoutExt}_v{maxVersion}{extension}";
+                        finalFileName = latestFile;
                     }
                 }
             }
@@ -593,7 +617,7 @@ namespace Tools.Controllers
                     string extension = Path.GetExtension(baseFile);
                     string nameWithoutExt = Path.GetFileNameWithoutExtension(baseFile);
 
-                    var pattern = new System.Text.RegularExpressions.Regex(@"^" + System.Text.RegularExpressions.Regex.Escape(nameWithoutExt) + @"(?:_v(\d+))?" + System.Text.RegularExpressions.Regex.Escape(extension) + "$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                    var pattern = new System.Text.RegularExpressions.Regex(@"^" + System.Text.RegularExpressions.Regex.Escape(nameWithoutExt) + @"(?:_(?:(?:v(\d+))|(?:([^_]+)(?:_v(\d+))?)))?" + System.Text.RegularExpressions.Regex.Escape(extension) + "$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
                     foreach (var file in Directory.GetFiles(rootFolder))
                     {
@@ -602,16 +626,27 @@ namespace Tools.Controllers
                         if (match.Success)
                         {
                             var fileInfo = new FileInfo(file);
-                            int version = 0;
+                            int? version = null;
+                            string lotNo = null;
+
                             if (match.Groups[1].Success)
                             {
                                 version = int.Parse(match.Groups[1].Value);
+                            }
+                            else if (match.Groups[2].Success)
+                            {
+                                lotNo = match.Groups[2].Value;
+                                if (match.Groups[3].Success)
+                                {
+                                    version = int.Parse(match.Groups[3].Value);
+                                }
                             }
 
                             list.Add(new
                             {
                                 fileName = name,
-                                version = version,
+                                version = version ?? 0,
+                                lotNo = lotNo,
                                 generatedAt = fileInfo.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss"),
                                 generatedAtTicks = fileInfo.LastWriteTime.Ticks
                             });

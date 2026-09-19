@@ -953,7 +953,7 @@ namespace Tools.Controllers
                 // Call the report generation method directly instead of using HttpClient
                 try
                 {
-                    var reportResponse = await GetEnvelopeBreakingReport(ProjectId);
+                    var reportResponse = await GetEnvelopeBreakingReport(ProjectId, lotNo);
                     var isSuccess = true;
                     int statusCode = 500;
                     string exactError = "Failed to get envelope breakages after configuration.";
@@ -1005,7 +1005,7 @@ namespace Tools.Controllers
 
 
         [HttpGet("GetEnvelopeBreakingReport")]
-        public async Task<IActionResult> GetEnvelopeBreakingReport(int ProjectId)
+        public async Task<IActionResult> GetEnvelopeBreakingReport(int ProjectId, [FromQuery] int? lotNo = null)
         {
             try
             {
@@ -1064,6 +1064,12 @@ namespace Tools.Controllers
                              nrDataByCatch.TryGetValue(result.CatchNo, out var catchNr))
                     {
                         nr = catchNr;
+                    }
+
+                    if (lotNo.HasValue && lotNo.Value > 0)
+                    {
+                        if (nr == null || nr.LotNo != lotNo.Value)
+                            continue;
                     }
 
                     // NR fields (now works for MSS too)
@@ -1273,7 +1279,12 @@ namespace Tools.Controllers
                 // Excel
                 var reportPath = FileStorageHelper.GetProjectFolder(ProjectId);
 
-                var fileName = ReportVersionHelper.GetNextVersionFileName(reportPath, "EnvelopeBreaking.xlsx");
+                var distinctLots = (lotNo.HasValue && lotNo.Value > 0)
+                    ? new List<int> { lotNo.Value }
+                    : nrDataDict.Values.Where(r => r.LotNo > 0).Select(r => r.LotNo).Distinct().OrderBy(l => l).ToList();
+                var lotStr = distinctLots.Any() ? string.Join("_", distinctLots) : "All";
+
+                var fileName = ReportVersionHelper.GetNextVersionFileName(reportPath, $"EnvelopeBreaking_{lotStr}.xlsx");
                 var filePath = Path.Combine(reportPath, fileName);
 
                 using (var package = new ExcelPackage())
