@@ -34,12 +34,12 @@ namespace Tools.Controllers
         }
 
         [HttpPost]
-        public async Task<IActionResult> MergeFields(int ProjectId, int? batchId = null)
+        public async Task<IActionResult> MergeFields(int ProjectId, int? batchId = null, int? lotNo = null)
         {
             try
             {
                 // Log incoming parameters for debugging
-                Console.WriteLine($"[DuplicateController] Received ProjectId: {ProjectId}, batchId: {batchId}");
+                Console.WriteLine($"[DuplicateController] Received ProjectId: {ProjectId}, batchId: {batchId}, lotNo: {lotNo}");
                 
                 IQueryable<NRData> query = _context.NRDatas
                     .Where(p => p.ProjectId == ProjectId && p.Status == true);
@@ -56,6 +56,12 @@ namespace Tools.Controllers
                     // Only look for records with STEP_UPLOADED when no batch is specified
                     Console.WriteLine($"[DuplicateController] No batchId provided, processing records with STEP_UPLOADED");
                     query = query.Where(p => p.Steps == Tools.Models.PipelineNavigator.STEP_UPLOADED);
+                }
+
+                if (lotNo.HasValue && lotNo.Value > 0)
+                {
+                    Console.WriteLine($"[DuplicateController] Filtering by lotNo: {lotNo.Value}");
+                    query = query.Where(p => p.LotNo == lotNo.Value);
                 }
 
                 var data = await query.ToListAsync();
@@ -329,11 +335,11 @@ namespace Tools.Controllers
             }
         }
         [HttpPost("Enhancement")]
-        public async Task<IActionResult> ApplyEnhancement(int ProjectId, [FromQuery] int? batch = null)
+        public async Task<IActionResult> ApplyEnhancement(int ProjectId, [FromQuery] int? batch = null, [FromQuery] int? lotNo = null)
         {
             try
             {
-                Console.WriteLine($"ApplyEnhancement API called for ProjectId: {ProjectId}, batch: {batch}");
+                Console.WriteLine($"ApplyEnhancement API called for ProjectId: {ProjectId}, batch: {batch}, lotNo: {lotNo}");
 
                 // Normalize NULL numeric fields to 0 to avoid materialization errors
                 await _context.Database.ExecuteSqlRawAsync(@"
@@ -360,6 +366,12 @@ WHERE ProjectId = {0};", ProjectId);
                 else
                 {
                     query = query.Where(p => p.Batch == 1 || p.Steps == Tools.Models.PipelineNavigator.STEP_DUP_PARTIAL);
+                }
+
+                if (lotNo.HasValue && lotNo.Value > 0)
+                {
+                    Console.WriteLine($"[ApplyEnhancement] Filtering by lotNo: {lotNo.Value}");
+                    query = query.Where(p => p.LotNo == lotNo.Value);
                 }
 
                 var data = await query.ToListAsync();

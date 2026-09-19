@@ -357,7 +357,9 @@ namespace ToolsAPI.Controllers
                     TemplateName = request.TemplateName,
                     EnvLotNumbers = request.EnvLotNumbers ?? "",
                     LotNo = request.LotNo ?? 0,
-                    FileName = request.FileName,
+                    FileName = request.FileName != null && request.FileName.Length > 250
+                        ? request.FileName.Substring(0, 250)  // DB column is VARCHAR(255) — truncate until migration widens it
+                        : request.FileName,
                     GeneratedAt = DateTime.UtcNow,
                     GeneratedByUserId = request.GeneratedByUserId,
                     FilePath = request.FilePath

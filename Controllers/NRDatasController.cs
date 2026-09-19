@@ -2714,21 +2714,44 @@ namespace Tools.Controllers
                 });
             }
 
-            // One query for lot statistics
-            var lotStats = await activeQuery
+            // Fetch raw lot steps into memory to avoid MySQL GROUP BY complexity timeout
+            var rawLotSteps = await activeQuery
+                .Select(n => new { n.LotNo, n.Steps })
+                .ToListAsync();
+
+            // Group and calculate statistics in memory
+            var lotStats = rawLotSteps
                 .GroupBy(n => n.LotNo)
                 .Select(g => new
                 {
                     LotNo = g.Key,
-                    IsPending = g.Any(n => n.Steps <= 5)
+                    IsPending = g.Any(n => n.Steps <= 5),
+                    IsDuplicatePending = g.Any(n => n.Steps == 0),
+                    IsEnhancementPending = g.Any(n => n.Steps == 1),
+                    IsExtraPending = g.Any(n => n.Steps == 3),
+                    IsEnvelopePending = g.Any(n => n.Steps == 4),
+                    IsDuplicateCompleted = g.Any(n => n.Steps > 0),
+                    IsEnhancementCompleted = g.Any(n => n.Steps > 1),
+                    IsExtraCompleted = g.Any(n => n.Steps > 3),
+                    IsEnvelopeCompleted = g.Any(n => n.Steps > 4)
                 })
-                .ToListAsync();
+                .ToList();
 
             var pendingBoxLots = lotStats
                 .Where(x => x.IsPending)
                 .Select(x => x.LotNo)
                 .OrderBy(x => x)
                 .ToList();
+
+            var pendingDuplicateLots = lotStats.Where(x => x.IsDuplicatePending).Select(x => x.LotNo).OrderBy(x => x).ToList();
+            var pendingEnhancementLots = lotStats.Where(x => x.IsEnhancementPending).Select(x => x.LotNo).OrderBy(x => x).ToList();
+            var pendingExtraLots = lotStats.Where(x => x.IsExtraPending).Select(x => x.LotNo).OrderBy(x => x).ToList();
+            var pendingEnvelopeLots = lotStats.Where(x => x.IsEnvelopePending).Select(x => x.LotNo).OrderBy(x => x).ToList();
+
+            var completedDuplicateLots = lotStats.Where(x => x.IsDuplicateCompleted).Select(x => x.LotNo).OrderBy(x => x).ToList();
+            var completedEnhancementLots = lotStats.Where(x => x.IsEnhancementCompleted).Select(x => x.LotNo).OrderBy(x => x).ToList();
+            var completedExtraLots = lotStats.Where(x => x.IsExtraCompleted).Select(x => x.LotNo).OrderBy(x => x).ToList();
+            var completedEnvelopeLots = lotStats.Where(x => x.IsEnvelopeCompleted).Select(x => x.LotNo).OrderBy(x => x).ToList();
 
             return Ok(new
             {
@@ -2748,7 +2771,16 @@ namespace Tools.Controllers
                 boxTotalLots = lotStats.Count,
                 boxCompletedLots = lotStats.Count(x => !x.IsPending),
                 boxPendingLots = pendingBoxLots.Count,
-                pendingBoxLots
+                pendingBoxLots,
+
+                pendingDuplicateLots,
+                completedDuplicateLots,
+                pendingEnhancementLots,
+                completedEnhancementLots,
+                pendingExtraLots,
+                completedExtraLots,
+                pendingEnvelopeLots,
+                completedEnvelopeLots
             });
         }
 
