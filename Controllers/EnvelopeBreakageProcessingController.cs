@@ -940,7 +940,7 @@ namespace Tools.Controllers
 
                 _context.EnvelopeBreakingResults.AddRange(envelopeResults);
                 foreach (var nr in nrData)
-                    nr.Steps = Tools.Models.PipelineNavigator.GetNextStep(Tools.Models.PipelineNavigator.STEP_AWAITING_EXTRA, projectconfig?.Modules);
+                   nr.Steps = Tools.Models.PipelineNavigator.STEP_AWAITING_ENV; ;
 
                 await _context.SaveChangesAsync();
 
