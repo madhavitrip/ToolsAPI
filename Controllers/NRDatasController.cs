@@ -2724,15 +2724,22 @@ namespace Tools.Controllers
                 .Select(g => new
                 {
                     LotNo = g.Key,
-                    IsPending = g.Any(n => n.Steps <= 5),
-                    IsDuplicatePending = g.Any(n => n.Steps == 0),
-                    IsEnhancementPending = g.Any(n => n.Steps == 1),
-                    IsExtraPending = g.Any(n => n.Steps == 3),
-                    IsEnvelopePending = g.Any(n => n.Steps == 4),
+                    IsPending = g.Any(n => n.Steps <= 6), // Pending for overall pipeline / Box Breaking
+                    IsDuplicatePending = g.Any(n => n.Steps <= 0),
+                    IsEnhancementPending = g.Any(n => n.Steps <= 2), // Enhancement runs up to 2
+                    IsExtraPending = g.Any(n => n.Steps <= 3), // Extra runs up to 3/4
+                    IsEnvelopePending = g.Any(n => n.Steps <= 4), // Envelope runs up to 4/5
+                    IsBoxPending = g.Any(n => n.Steps <= 6),
+                    IsDuplicateReady = g.Any(n => n.Steps == 0),
+                    IsEnhancementReady = g.Any(n => n.Steps == 1 || n.Steps == 2),
+                    IsExtraReady = g.Any(n => n.Steps == 3 || n.Steps == 4), // Some configurations might use 3 or 4
+                    IsEnvelopeReady = g.Any(n => n.Steps == 4 || n.Steps == 5),
+                    IsBoxReady = g.Any(n => n.Steps == 5 || n.Steps == 6),
                     IsDuplicateCompleted = g.Any(n => n.Steps > 0),
-                    IsEnhancementCompleted = g.Any(n => n.Steps > 1),
+                    IsEnhancementCompleted = g.Any(n => n.Steps > 2),
                     IsExtraCompleted = g.Any(n => n.Steps > 3),
-                    IsEnvelopeCompleted = g.Any(n => n.Steps > 4)
+                    IsEnvelopeCompleted = g.Any(n => n.Steps > 4),
+                    IsBoxCompleted = g.Any(n => n.Steps > 6)
                 })
                 .ToList();
 
@@ -2747,10 +2754,17 @@ namespace Tools.Controllers
             var pendingExtraLots = lotStats.Where(x => x.IsExtraPending).Select(x => x.LotNo).OrderBy(x => x).ToList();
             var pendingEnvelopeLots = lotStats.Where(x => x.IsEnvelopePending).Select(x => x.LotNo).OrderBy(x => x).ToList();
 
+            var readyDuplicateLots = lotStats.Where(x => x.IsDuplicateReady).Select(x => x.LotNo).OrderBy(x => x).ToList();
+            var readyEnhancementLots = lotStats.Where(x => x.IsEnhancementReady).Select(x => x.LotNo).OrderBy(x => x).ToList();
+            var readyExtraLots = lotStats.Where(x => x.IsExtraReady).Select(x => x.LotNo).OrderBy(x => x).ToList();
+            var readyEnvelopeLots = lotStats.Where(x => x.IsEnvelopeReady).Select(x => x.LotNo).OrderBy(x => x).ToList();
+            var readyBoxLots = lotStats.Where(x => x.IsBoxReady).Select(x => x.LotNo).OrderBy(x => x).ToList();
+
             var completedDuplicateLots = lotStats.Where(x => x.IsDuplicateCompleted).Select(x => x.LotNo).OrderBy(x => x).ToList();
             var completedEnhancementLots = lotStats.Where(x => x.IsEnhancementCompleted).Select(x => x.LotNo).OrderBy(x => x).ToList();
             var completedExtraLots = lotStats.Where(x => x.IsExtraCompleted).Select(x => x.LotNo).OrderBy(x => x).ToList();
             var completedEnvelopeLots = lotStats.Where(x => x.IsEnvelopeCompleted).Select(x => x.LotNo).OrderBy(x => x).ToList();
+            var completedBoxLots = lotStats.Where(x => x.IsBoxCompleted).Select(x => x.LotNo).OrderBy(x => x).ToList();
 
             return Ok(new
             {
@@ -2779,7 +2793,13 @@ namespace Tools.Controllers
                 pendingExtraLots,
                 completedExtraLots,
                 pendingEnvelopeLots,
-                completedEnvelopeLots
+                completedEnvelopeLots,
+                completedBoxLots,
+                readyDuplicateLots,
+                readyEnhancementLots,
+                readyExtraLots,
+                readyEnvelopeLots,
+                readyBoxLots
             });
         }
 
