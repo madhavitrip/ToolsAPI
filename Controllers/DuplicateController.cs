@@ -13,6 +13,7 @@ using Humanizer;
 using Newtonsoft.Json;
 using NRData = Tools.Models.NRData;
 using Tools.Services;
+using Tools.Middleware;
 
 namespace Tools.Controllers
 {
@@ -790,6 +791,17 @@ WHERE ProjectId = {0};", ProjectId);
                     ws.View.FreezePanes(2, 1);
                     package.SaveAs(new FileInfo(filePath));
                 }
+
+                await ToolsAPI.Helpers.ExcelReportHelper.RecordExcelReportAsync(
+                    _context,
+                    ProjectId,
+                    1, // Module 1 (Duplicates)
+                    uploadId ?? 1,
+                    lotNo,
+                    filePath,
+                    true,
+                    Tools.Services.LogHelper.GetTriggeredBy(User, Request)
+                );
 
                 return Ok(new { message = "Report generated successfully", fileName });
             }

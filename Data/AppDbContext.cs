@@ -55,6 +55,7 @@ namespace ERPToolsAPI.Data
         public DbSet<NodalList> NodalList { get; set; }
 
         public DbSet<TemporaryNrDatas> TemporaryNrDatas { get; set; }
+        public DbSet<ExcelReport> ExcelReports { get; set; }
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);
