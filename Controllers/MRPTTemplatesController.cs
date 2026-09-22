@@ -103,6 +103,8 @@ namespace Tools.Controllers
         [Authorize]
         [RequireMasterAuth(Module = "Master Templates", Operation = "SAVE MASTER")]
         [HttpPost("upload")]
+        [DisableRequestSizeLimit]
+        [RequestFormLimits(ValueLengthLimit = int.MaxValue, MultipartBodyLengthLimit = int.MaxValue)]
         public async Task<ActionResult> Upload([FromForm] IFormFile file, [FromForm] int typeId, [FromForm] int? groupId, [FromForm] string templateName, [FromForm] string? subName)
         {
             if (file == null || file.Length == 0) return BadRequest("No file uploaded.");
