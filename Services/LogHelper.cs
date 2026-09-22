@@ -9,33 +9,63 @@ namespace Tools.Services
     {
         public static int GetTriggeredBy(ClaimsPrincipal user, HttpRequest request = null)
         {
-            // Try claims first (populated when [Authorize] is present)
-            if (user != null)
+            var claimTypes = new[]
             {
-                var value = user.FindFirst("userid")?.Value;
-                if (int.TryParse(value, out var id) && id > 0)
-                    return id;
+                "userid",
+                "userId",
+                "id",
+                "sub",
+                ClaimTypes.NameIdentifier,
+                ClaimTypes.Name,
+                "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name",
+                "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier"
+            };
+
+            // 1. Try claims from ClaimsPrincipal
+            if (user != null && user.Claims != null)
+            {
+                foreach (var type in claimTypes)
+                {
+                    var val = user.FindFirst(type)?.Value;
+                    if (!string.IsNullOrWhiteSpace(val) && int.TryParse(val, out var id) && id > 0)
+                        return id;
+                }
             }
 
-            // Fallback: parse JWT directly from Authorization header
-            // (for controllers without [Authorize] where claims aren't populated)
-            if (request != null)
+            // 2. Fallback: parse JWT directly from Authorization header
+            if (request != null && request.Headers.ContainsKey("Authorization"))
             {
-                var token = request.Headers["Authorization"].ToString()?.Replace("Bearer ", "").Trim();
-                if (!string.IsNullOrWhiteSpace(token))
+                var authHeader = request.Headers["Authorization"].ToString();
+                if (!string.IsNullOrWhiteSpace(authHeader))
                 {
-                    try
+                    var token = authHeader.Replace("Bearer ", "", StringComparison.OrdinalIgnoreCase).Trim();
+                    if (!string.IsNullOrWhiteSpace(token))
                     {
-                        var handler = new JwtSecurityTokenHandler();
-                        if (handler.CanReadToken(token))
+                        try
                         {
-                            var jwt = handler.ReadToken(token) as JwtSecurityToken;
-                            var claim = jwt?.Claims.FirstOrDefault(c => c.Type == "userid")?.Value;
-                            if (int.TryParse(claim, out var jwtId) && jwtId > 0)
-                                return jwtId;
+                            var handler = new JwtSecurityTokenHandler();
+                            if (handler.CanReadToken(token))
+                            {
+                                var jwt = handler.ReadToken(token) as JwtSecurityToken;
+                                if (jwt?.Claims != null)
+                                {
+                                    foreach (var type in claimTypes)
+                                    {
+                                        var val = jwt.Claims.FirstOrDefault(c =>
+                                            c.Type.Equals(type, StringComparison.OrdinalIgnoreCase) ||
+                                            c.Type.EndsWith("/" + type, StringComparison.OrdinalIgnoreCase) ||
+                                            c.Type.EndsWith("name", StringComparison.OrdinalIgnoreCase) ||
+                                            c.Type.EndsWith("nameidentifier", StringComparison.OrdinalIgnoreCase)
+                                        )?.Value;
+
+                                        if (!string.IsNullOrWhiteSpace(val) && int.TryParse(val, out var jwtId) && jwtId > 0)
+                                            return jwtId;
+                                    }
+                                }
+                            }
                         }
+                        catch { }
                     }
-                    catch { }
                 }
             }
 

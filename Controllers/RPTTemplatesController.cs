@@ -85,25 +85,37 @@ namespace Tools.Controllers
                     .FirstOrDefaultAsync(p => p.ProjectId == projectId.Value);
 
                 if (project == null)
-                    return NotFound("Project not found.");
+                {
+                    if (groupId.HasValue && typeId.HasValue)
+                    {
+                        // Fallback to group scope if project is not found
+                        projectId = null;
+                    }
+                    else
+                    {
+                        return NotFound("Project not found.");
+                    }
+                }
+                else
+                {
+                    // Only fill missing values
+                    if (!groupId.HasValue)
+                        groupId = project.GroupId;
 
-                // Only fill missing values
-                if (!groupId.HasValue)
-                    groupId = project.GroupId;
+                    if (!typeId.HasValue)
+                        typeId = project.TypeId;
 
-                if (!typeId.HasValue)
-                    typeId = project.TypeId;
+                    // Still validate after attempting fill
+                    if (!groupId.HasValue || !typeId.HasValue)
+                        return BadRequest("groupId and typeId could not be resolved.");
 
-                // Still validate after attempting fill
-                if (!groupId.HasValue || !typeId.HasValue)
-                    return BadRequest("groupId and typeId could not be resolved.");
+                    var resolved = await ResolveTemplatesForContext(
+                        typeId.Value,
+                        groupId.Value,
+                        projectId.Value);
 
-                var resolved = await ResolveTemplatesForContext(
-                    typeId.Value,
-                    groupId.Value,
-                    projectId.Value);
-
-                return Ok(await AttachMappingFlags(resolved));
+                    return Ok(await AttachMappingFlags(resolved));
+                }
             }
 
             if (groupId.HasValue)
@@ -990,24 +1002,30 @@ namespace Tools.Controllers
         [Authorize]
         [HttpGet("importable-templates")]
         public async Task<ActionResult> GetImportableTemplates(
-     [FromQuery] string sourceScope,
-     [FromQuery] int? sourceGroupId,
-     [FromQuery] int? sourceProjectId,
-     [FromQuery] int? sourceTypeId)
+            [FromQuery] string sourceScope,
+            [FromQuery] int? sourceGroupId,
+            [FromQuery] int? sourceProjectId,
+            [FromQuery] int? sourceTypeId)
         {
             if (string.IsNullOrWhiteSpace(sourceScope))
                 return BadRequest("Source scope is required.");
 
+            sourceGroupId = NormalizeNullableId(sourceGroupId);
+            sourceProjectId = NormalizeNullableId(sourceProjectId);
+            sourceTypeId = NormalizeNullableId(sourceTypeId);
+
             if (sourceScope == "project")
             {
-                if (!sourceProjectId.HasValue || !sourceTypeId.HasValue)
-                    return BadRequest("SourceProjectId and SourceTypeId are required for project scope.");
+                if (!sourceProjectId.HasValue)
+                    return BadRequest("SourceProjectId is required for project scope.");
 
-                var projectTemplates = await _context.RPTTemplates
-                    .Where(t =>
-                        t.ProjectId == sourceProjectId.Value &&
-                        t.TypeId == sourceTypeId.Value &&
-                        t.IsDeleted == false)
+                var query = _context.RPTTemplates
+                    .Where(t => t.ProjectId == sourceProjectId.Value && t.IsDeleted == false);
+
+                if (sourceTypeId.HasValue)
+                    query = query.Where(t => t.TypeId == sourceTypeId.Value);
+
+                var projectTemplates = await query
                     .OrderBy(t => t.TemplateName)
                     .ThenByDescending(t => t.Version)
                     .Select(t => new
@@ -1024,16 +1042,16 @@ namespace Tools.Controllers
 
             if (sourceScope == "group")
             {
-                if (!sourceGroupId.HasValue || !sourceTypeId.HasValue)
-                    return BadRequest("SourceGroupId and SourceTypeId are required for group scope.");
+                if (!sourceGroupId.HasValue)
+                    return BadRequest("SourceGroupId is required for group scope.");
 
-                var groupTemplates = await _context.MRPTTemplates
-                    .Where(t =>
-                        t.GroupId == sourceGroupId.Value &&
-                        t.TypeId == sourceTypeId.Value &&
-                        t.IsDeleted == false)
-                    .OrderBy(t => t.TemplateName)
-                    .ThenByDescending(t => t.Version)
+                // 1) Fetch group templates from RPTTemplates
+                var rptQuery = _context.RPTTemplates
+                    .Where(t => t.GroupId == sourceGroupId.Value && t.ProjectId == null && t.IsDeleted == false);
+                if (sourceTypeId.HasValue)
+                    rptQuery = rptQuery.Where(t => t.TypeId == sourceTypeId.Value);
+
+                var rptList = await rptQuery
                     .Select(t => new
                     {
                         t.TemplateId,
@@ -1043,21 +1061,41 @@ namespace Tools.Controllers
                     })
                     .ToListAsync();
 
-                return Ok(groupTemplates);
+                // 2) Fetch group master templates from MRPTTemplates
+                var mrptQuery = _context.MRPTTemplates
+                    .Where(t => t.GroupId == sourceGroupId.Value && t.IsDeleted == false);
+                if (sourceTypeId.HasValue)
+                    mrptQuery = mrptQuery.Where(t => t.TypeId == sourceTypeId.Value);
+
+                var mrptList = await mrptQuery
+                    .Select(t => new
+                    {
+                        t.TemplateId,
+                        t.TemplateName,
+                        t.Version,
+                        t.SubName
+                    })
+                    .ToListAsync();
+
+                var combined = rptList.Concat(mrptList)
+                    .GroupBy(t => new { t.TemplateName, t.Version, t.SubName })
+                    .Select(g => g.First())
+                    .OrderBy(t => t.TemplateName)
+                    .ThenByDescending(t => t.Version)
+                    .ToList();
+
+                return Ok(combined);
             }
 
             if (sourceScope == "standard")
             {
-                if (!sourceTypeId.HasValue)
-                    return BadRequest("SourceTypeId is required for standard scope.");
+                // 1) Fetch standard templates from RPTTemplates
+                var rptQuery = _context.RPTTemplates
+                    .Where(t => t.GroupId == null && t.ProjectId == null && t.IsDeleted == false);
+                if (sourceTypeId.HasValue)
+                    rptQuery = rptQuery.Where(t => t.TypeId == sourceTypeId.Value);
 
-                var standardTemplates = await _context.MRPTTemplates
-                    .Where(t =>
-                        t.GroupId == null &&
-                        t.TypeId == sourceTypeId.Value &&
-                        t.IsDeleted == false)
-                    .OrderBy(t => t.TemplateName)
-                    .ThenByDescending(t => t.Version)
+                var rptList = await rptQuery
                     .Select(t => new
                     {
                         t.TemplateId,
@@ -1067,7 +1105,30 @@ namespace Tools.Controllers
                     })
                     .ToListAsync();
 
-                return Ok(standardTemplates);
+                // 2) Fetch standard templates from MRPTTemplates
+                var mrptQuery = _context.MRPTTemplates
+                    .Where(t => t.GroupId == null && t.IsDeleted == false);
+                if (sourceTypeId.HasValue)
+                    mrptQuery = mrptQuery.Where(t => t.TypeId == sourceTypeId.Value);
+
+                var mrptList = await mrptQuery
+                    .Select(t => new
+                    {
+                        t.TemplateId,
+                        t.TemplateName,
+                        t.Version,
+                        t.SubName
+                    })
+                    .ToListAsync();
+
+                var combined = rptList.Concat(mrptList)
+                    .GroupBy(t => new { t.TemplateName, t.Version, t.SubName })
+                    .Select(g => g.First())
+                    .OrderBy(t => t.TemplateName)
+                    .ThenByDescending(t => t.Version)
+                    .ToList();
+
+                return Ok(combined);
             }
 
             return BadRequest("Invalid source scope.");
@@ -1152,45 +1213,79 @@ namespace Tools.Controllers
             }
             else // "group" or "standard"
             {
-                List<MRPTTemplate> masterSources;
-                
                 if (req.SelectedTemplateIds != null && req.SelectedTemplateIds.Any())
                 {
-                    masterSources = await _context.MRPTTemplates
+                    // 1) First check RPTTemplates (regular templates)
+                    var rptMatches = await _context.RPTTemplates
                         .Where(t => req.SelectedTemplateIds.Contains(t.TemplateId))
                         .ToListAsync();
+                    sourceTemplates.AddRange(rptMatches);
+
+                    // 2) Check MRPTTemplates (master templates) for any IDs not found in RPTTemplates
+                    var foundIds = new HashSet<int>(rptMatches.Select(t => t.TemplateId));
+                    var missingIds = req.SelectedTemplateIds.Where(id => !foundIds.Contains(id)).ToList();
+
+                    if (missingIds.Any())
+                    {
+                        var mrptMatches = await _context.MRPTTemplates
+                            .Where(t => missingIds.Contains(t.TemplateId))
+                            .ToListAsync();
+
+                        foreach (var mt in mrptMatches)
+                        {
+                            sourceTemplates.Add(new RPTTemplate
+                            {
+                                TemplateId = mt.TemplateId, 
+                                TemplateName = mt.TemplateName,
+                                SubName = mt.SubName,
+                                RPTFilePath = mt.RPTFilePath,
+                                ParsedFieldsJson = mt.ParsedFieldsJson,
+                                RequiredFieldsJson = mt.RequiredFieldsJson,
+                                DesignSnapshotJson = mt.DesignSnapshotJson,
+                                ModuleIds = mt.ModuleIds,
+                                TypeId = mt.TypeId
+                            });
+                        }
+                    }
                 }
                 else
                 {
-                    var query = _context.MRPTTemplates.Where(t => t.IsActive == true && t.IsDeleted == false);
-                    if (sourceTypeId.HasValue) query = query.Where(t => t.TypeId == sourceTypeId);
-                    
+                    // No selected IDs: import all active templates for that group/standard scope
+                    var rptQuery = _context.RPTTemplates.Where(t => t.IsActive == true && t.IsDeleted == false);
+                    var mrptQuery = _context.MRPTTemplates.Where(t => t.IsActive == true && t.IsDeleted == false);
+
+                    if (sourceTypeId.HasValue)
+                    {
+                        rptQuery = rptQuery.Where(t => t.TypeId == sourceTypeId);
+                        mrptQuery = mrptQuery.Where(t => t.TypeId == sourceTypeId);
+                    }
+
                     if (sourceScope == "group")
                     {
                         if (req.SourceGroupId <= 0) return BadRequest("SourceGroupId is required for group imports.");
                         if (req.IncludeStandard)
-                            query = query.Where(t => t.GroupId == req.SourceGroupId || t.GroupId == null);
+                        {
+                            rptQuery = rptQuery.Where(t => (t.GroupId == req.SourceGroupId || t.GroupId == null) && t.ProjectId == null);
+                            mrptQuery = mrptQuery.Where(t => t.GroupId == req.SourceGroupId || t.GroupId == null);
+                        }
                         else
-                            query = query.Where(t => t.GroupId == req.SourceGroupId);
+                        {
+                            rptQuery = rptQuery.Where(t => t.GroupId == req.SourceGroupId && t.ProjectId == null);
+                            mrptQuery = mrptQuery.Where(t => t.GroupId == req.SourceGroupId);
+                        }
                     }
                     else // standard
                     {
-                        query = query.Where(t => t.GroupId == null);
+                        rptQuery = rptQuery.Where(t => t.GroupId == null && t.ProjectId == null);
+                        mrptQuery = mrptQuery.Where(t => t.GroupId == null);
                     }
 
-                    var allMatches = await query.ToListAsync();
-                    // Keep only latest active per template name if importing blindly
-                    masterSources = allMatches.GroupBy(t => t.TemplateName)
-                        .Select(g => g.OrderByDescending(x => x.Version).First())
-                        .ToList();
-                }
+                    var rptMatches = await rptQuery.ToListAsync();
+                    var mrptMatches = await mrptQuery.ToListAsync();
 
-                // Map MRPTTemplate to RPTTemplate for unified import logic downstream
-                foreach (var mt in masterSources)
-                {
-                    sourceTemplates.Add(new RPTTemplate
+                    var convertedMrpt = mrptMatches.Select(mt => new RPTTemplate
                     {
-                        TemplateId = mt.TemplateId, 
+                        TemplateId = mt.TemplateId,
                         TemplateName = mt.TemplateName,
                         SubName = mt.SubName,
                         RPTFilePath = mt.RPTFilePath,
@@ -1199,7 +1294,13 @@ namespace Tools.Controllers
                         DesignSnapshotJson = mt.DesignSnapshotJson,
                         ModuleIds = mt.ModuleIds,
                         TypeId = mt.TypeId
-                    });
+                    }).ToList();
+
+                    var allMatches = rptMatches.Concat(convertedMrpt).ToList();
+
+                    sourceTemplates = allMatches.GroupBy(t => t.TemplateName)
+                        .Select(g => g.OrderByDescending(x => x.Version).First())
+                        .ToList();
                 }
             }
 
