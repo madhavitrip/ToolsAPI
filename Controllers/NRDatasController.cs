@@ -272,7 +272,8 @@ namespace Tools.Controllers
                     d.EnvLotNo,
                     d.Batch,
                     d.NRDatas,
-                    d.Day
+                    d.Day,
+                    d.District
 
                 })
                 .ToListAsync();
