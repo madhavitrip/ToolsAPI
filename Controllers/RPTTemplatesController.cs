@@ -203,7 +203,7 @@ namespace Tools.Controllers
             {
                 "id", "projectid", "envelopetype", "envelopebreakingresultid",
                 "createdat", "uploadedbatch", "uploadbatch", "nrdataid",
-                "extraid", "envelopid", "envelopeid", "status", "lotno"
+                "extraid", "envelopid", "envelopeid", "status", "lotno", "verifiedon", "verifiedby", "verificationstatus", "batch"
             };
 
             List<string> FilterColumns(List<string> columns) =>
