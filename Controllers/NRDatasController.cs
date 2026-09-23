@@ -2756,6 +2756,13 @@ namespace Tools.Controllers
                 var completedExtraLots = lotStats.Where(x => x.IsExtraCompleted).Select(x => x.LotNo).OrderBy(x => x).ToList();
                 var completedEnvelopeLots = lotStats.Where(x => x.IsEnvelopeCompleted).Select(x => x.LotNo).OrderBy(x => x).ToList();
 
+                // Ready lots: lots that have pending work AND their dependency step is satisfied
+                var readyDuplicateLots = pendingDuplicateLots; // no dependency
+                var readyEnhancementLots = pendingEnhancementLots.Where(l => completedDuplicateLots.Contains(l)).ToList();
+                var readyExtraLots = pendingExtraLots.Where(l => completedEnhancementLots.Contains(l)).ToList();
+                var readyEnvelopeLots = pendingEnvelopeLots.Where(l => completedExtraLots.Contains(l)).ToList();
+                var readyBoxLots = pendingBoxLots.Where(l => completedEnvelopeLots.Contains(l)).ToList();
+
                 return Ok(new
                 {
                     hasPendingPipelineChanges = minStep < Tools.Models.PipelineNavigator.STEP_DONE,
@@ -2777,12 +2784,17 @@ namespace Tools.Controllers
 
                     pendingDuplicateLots,
                     completedDuplicateLots,
+                    readyDuplicateLots,
                     pendingEnhancementLots,
                     completedEnhancementLots,
+                    readyEnhancementLots,
                     pendingExtraLots,
                     completedExtraLots,
+                    readyExtraLots,
                     pendingEnvelopeLots,
-                    completedEnvelopeLots
+                    completedEnvelopeLots,
+                    readyEnvelopeLots,
+                    readyBoxLots
                 });
             }
             catch (Exception ex)

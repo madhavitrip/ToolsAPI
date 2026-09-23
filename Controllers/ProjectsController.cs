@@ -88,14 +88,17 @@ namespace Tools.Controllers
                     return Unauthorized("Invalid User ID format.");
                 }
 
+                // Extract user roleId
+                int userRoleId = LogHelper.GetUserRoleId(User, Request);
+
                 // Fetch all projects (we'll filter them in memory)
                 var projects = await _context.Projects
                     .ToListAsync(); // Fetch all projects (client-side filtering will follow)
 
-                // Filter the projects where the userId is in the UserAssigned list AND Status is false (active)
-                var userProjects = projects
-                    .Where(p => p.UserAssigned.Contains(userIntId) && p.Status == false) // Perform client-side filtering
-                    .ToList();
+                // Filter projects: RoleId 1 sees ALL active projects (Status == false); other roles filter by UserAssigned list
+                var userProjects = (userRoleId == 1)
+                    ? projects.Where(p => p.Status == false).ToList()
+                    : projects.Where(p => p.UserAssigned != null && p.UserAssigned.Contains(userIntId) && p.Status == false).ToList();
 
                 if (userProjects == null || !userProjects.Any())
                 {
@@ -104,7 +107,7 @@ namespace Tools.Controllers
 
                 var projectIds = userProjects.Select(p => p.ProjectId).ToList();
 
-                // Perform the join and grouping
+                // Perform the event log lookup
                 var projectWithLastLoggedAt = await _context.EventLogs
                     .Where(e => projectIds.Contains(e.ProjectId))  // Filter EventLogs for the user's projects
                     .GroupBy(e => e.ProjectId)  // Group by ProjectId to get distinct projects
@@ -115,30 +118,26 @@ namespace Tools.Controllers
                     })
                     .ToListAsync();
 
-                // Join the result with userProjects to get the project name and latest log time
+                var logDict = projectWithLastLoggedAt.ToDictionary(l => l.ProjectId, l => (DateTime?)l.LatestLoggedAt);
+
+                // Join using dictionary lookup (left join approach so projects without event logs are not dropped)
                 var result = userProjects
-                 .Join(projectWithLastLoggedAt,
-                  p => p.ProjectId,
-                  l => l.ProjectId,
-                    (p, l) => new
+                    .Select(p =>
                     {
-                      p.ProjectId,
-                      p.GroupId,
-                      p.TypeId,
-                      LatestLoggedAt = l.LatestLoggedAt,
-                      p.Status,
+                        var latestLoggedAt = logDict.TryGetValue(p.ProjectId, out var loggedAt) ? loggedAt : null;
+                        return new
+                        {
+                            p.ProjectId,
+                            p.GroupId,
+                            p.TypeId,
+                            LoggedAt = latestLoggedAt,
+                            TimeAgo = latestLoggedAt.HasValue ? GetTimeAgo(latestLoggedAt.Value) : "Never accessed",
+                            p.Status,
+                        };
                     })
-                 .OrderByDescending(x => x.LatestLoggedAt)   // ? Order by latest access
-                  .Select(x => new
-                  {
-                   x.ProjectId,
-                   x.GroupId,
-                   x.TypeId,
-                   LoggedAt = x.LatestLoggedAt,
-                   TimeAgo = GetTimeAgo(x.LatestLoggedAt),
-                   x.Status,
-                  })
-               .ToList();
+                    .OrderByDescending(x => x.LoggedAt.HasValue ? x.LoggedAt.Value : DateTime.MinValue)
+                    .ToList();
+
                 return Ok(result);
             }
             catch (Exception ex)
@@ -180,14 +179,17 @@ namespace Tools.Controllers
                     return Unauthorized("Invalid User ID format.");
                 }
 
+                // Extract user roleId
+                int userRoleId = LogHelper.GetUserRoleId(User, Request);
+
                 // Fetch all projects
                 var projects = await _context.Projects
                     .ToListAsync();
 
-                // Filter the projects where the userId is in the UserAssigned list AND Status is true (archived)
-                var userArchivedProjects = projects
-                    .Where(p => p.UserAssigned.Contains(userIntId) && p.Status == true)
-                    .ToList();
+                // Filter projects: RoleId 1 sees ALL archived projects (Status == true); other roles filter by UserAssigned list
+                var userArchivedProjects = (userRoleId == 1)
+                    ? projects.Where(p => p.Status == true).ToList()
+                    : projects.Where(p => p.UserAssigned != null && p.UserAssigned.Contains(userIntId) && p.Status == true).ToList();
 
                 if (userArchivedProjects == null || !userArchivedProjects.Any())
                 {
@@ -207,29 +209,25 @@ namespace Tools.Controllers
                     })
                     .ToListAsync();
 
-                // Join and format result
+                var logDict = projectWithLastLoggedAt.ToDictionary(l => l.ProjectId, l => (DateTime?)l.LatestLoggedAt);
+
+                // Join using dictionary lookup (left join approach so archived projects without event logs are not dropped)
                 var result = userArchivedProjects
-                 .Join(projectWithLastLoggedAt,
-                  p => p.ProjectId,
-                  l => l.ProjectId,
-                    (p, l) => new
+                    .Select(p =>
                     {
-                      p.ProjectId,
-                      p.GroupId,
-                      p.TypeId,
-                      LatestLoggedAt = l.LatestLoggedAt,
-                      IsActive = !p.Status, // Status true = archived, so IsActive is false
+                        var latestLoggedAt = logDict.TryGetValue(p.ProjectId, out var loggedAt) ? loggedAt : null;
+                        return new
+                        {
+                            p.ProjectId,
+                            p.GroupId,
+                            p.TypeId,
+                            LoggedAt = latestLoggedAt,
+                            TimeAgo = latestLoggedAt.HasValue ? GetTimeAgo(latestLoggedAt.Value) : "Never accessed",
+                            IsActive = !p.Status,
+                        };
                     })
-                 .OrderByDescending(x => x.LatestLoggedAt)
-                  .Select(x => new
-                  {
-                   x.ProjectId,
-                   x.GroupId,
-                   x.TypeId,
-                   TimeAgo = GetTimeAgo(x.LatestLoggedAt),
-                   x.IsActive,
-                  })
-               .ToList();
+                    .OrderByDescending(x => x.LoggedAt.HasValue ? x.LoggedAt.Value : DateTime.MinValue)
+                    .ToList();
                 
                 return Ok(result);
             }
