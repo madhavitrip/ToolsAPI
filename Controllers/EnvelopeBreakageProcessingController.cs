@@ -1352,7 +1352,7 @@ namespace Tools.Controllers
         }
 
         [HttpGet("CatchWithOmrSerialing")]
-        public async Task<IActionResult> ProcessSerialingReport(int ProjectId, int? uploadId = null)
+        public async Task<IActionResult> ProcessSerialingReport(int ProjectId, int? uploadId = null, [FromQuery] int? lotNo = null)
         {
             try
             {
@@ -1437,7 +1437,7 @@ namespace Tools.Controllers
                     ProjectId,
                     4, // Module 4 (Envelope Breaking Serialing)
                     uploadId ?? 1,
-                    null,
+                    lotNo.HasValue && lotNo.Value > 0 ? lotNo : null,
                     filePath,
                     true,
                     Tools.Services.LogHelper.GetTriggeredBy(User, Request)
