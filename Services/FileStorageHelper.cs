@@ -134,5 +134,56 @@ namespace Tools.Services
 
             return null;
         }
+
+        /// <summary>
+        /// Converts an absolute path to a relative path by stripping the storage base directory.
+        /// If the path is already relative, it is returned as-is (normalized).
+        /// </summary>
+        public static string GetRelativePath(string filePath)
+        {
+            if (string.IsNullOrWhiteSpace(filePath))
+                return filePath;
+
+            // Normalize separators
+            filePath = filePath
+                .Replace('/', Path.DirectorySeparatorChar)
+                .Replace('\\', Path.DirectorySeparatorChar);
+
+            if (!Path.IsPathRooted(filePath))
+                return filePath.TrimStart(Path.DirectorySeparatorChar);
+
+            var basePath = GetStorageBasePath();
+            if (!basePath.EndsWith(Path.DirectorySeparatorChar.ToString()))
+                basePath += Path.DirectorySeparatorChar;
+
+            if (filePath.StartsWith(basePath, StringComparison.OrdinalIgnoreCase))
+                return filePath.Substring(basePath.Length).TrimStart(Path.DirectorySeparatorChar);
+
+            // Also strip legacy wwwroot path if present
+            var wwwRoot = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot") + Path.DirectorySeparatorChar;
+            if (filePath.StartsWith(wwwRoot, StringComparison.OrdinalIgnoreCase))
+                return filePath.Substring(wwwRoot.Length).TrimStart(Path.DirectorySeparatorChar);
+
+            // Path is absolute but doesn't match known bases — return filename + parent folder only
+            return filePath.TrimStart(Path.DirectorySeparatorChar);
+        }
+
+        /// <summary>
+        /// Ensures the given path is resolved to a fully qualified absolute path.
+        /// Relative/unrooted paths are resolved against the storage base directory.
+        /// </summary>
+        public static string? GetAbsolutePath(string? filePath)
+        {
+            if (string.IsNullOrWhiteSpace(filePath))
+                return filePath;
+
+            if (Path.IsPathRooted(filePath))
+            {
+                return Path.GetFullPath(filePath);
+            }
+
+            var basePath = GetStorageBasePath();
+            return Path.GetFullPath(Path.Combine(basePath, filePath));
+        }
     }
 }

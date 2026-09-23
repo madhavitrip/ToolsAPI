@@ -59,6 +59,11 @@ namespace Tools.Controllers
                 report.GeneratedByUserId = LogHelper.GetTriggeredBy(User);
             }
 
+            if (!string.IsNullOrWhiteSpace(report.FilePath))
+            {
+                report.FilePath = FileStorageHelper.GetRelativePath(report.FilePath);
+            }
+
             _context.ExcelReports.Add(report);
             await _context.SaveChangesAsync();
 
@@ -77,6 +82,36 @@ namespace Tools.Controllers
             await _context.SaveChangesAsync();
 
             return Ok(new { message = "Excel report record deleted successfully." });
+        }
+
+        // GET: api/ExcelReports/Download/{id}
+        [HttpGet("Download/{id}")]
+        public async Task<IActionResult> DownloadReport(int id)
+        {
+            var report = await _context.ExcelReports.FindAsync(id);
+            if (report == null || string.IsNullOrWhiteSpace(report.FilePath))
+                return NotFound("Excel report record or file path not found.");
+
+            var fullPath = FileStorageHelper.GetAbsolutePath(report.FilePath);
+            if (string.IsNullOrEmpty(fullPath) || !System.IO.File.Exists(fullPath))
+            {
+                var fileName = System.IO.Path.GetFileName(report.FilePath);
+                var relativePath = report.ProjectId.HasValue ? System.IO.Path.Combine(report.ProjectId.Value.ToString(), fileName) : fileName;
+                var fallbackPath = FileStorageHelper.FindExistingFilePath(relativePath);
+                if (fallbackPath != null && System.IO.File.Exists(fallbackPath))
+                {
+                    fullPath = fallbackPath;
+                }
+                else
+                {
+                    return NotFound($"Report file not found on server.");
+                }
+            }
+
+            var mimeType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+            var fileNameToReturn = System.IO.Path.GetFileName(fullPath);
+            var fileStream = System.IO.File.OpenRead(fullPath);
+            return File(fileStream, mimeType, fileNameToReturn);
         }
     }
 }

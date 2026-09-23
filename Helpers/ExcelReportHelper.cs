@@ -2,6 +2,7 @@ using ERPToolsAPI.Data;
 using System;
 using System.Threading.Tasks;
 using Tools.Models;
+using Tools.Services;
 
 namespace ToolsAPI.Helpers
 {
@@ -27,10 +28,10 @@ namespace ToolsAPI.Helpers
                     ModuleId = moduleId,
                     Version = version,
                     Lot = lot,
-                    FilePath = filePath,
+                    FilePath = FileStorageHelper.GetRelativePath(filePath),
                     Status = status,
                     GeneratedAt = DateTime.Now,
-                    GeneratedByUserId = generatedByUserId
+                    GeneratedByUserId = generatedByUserId > 0 ? generatedByUserId : null
                 };
 
                 context.ExcelReports.Add(report);

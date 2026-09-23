@@ -1325,7 +1325,7 @@ namespace Tools.Controllers
                 await ToolsAPI.Helpers.ExcelReportHelper.RecordExcelReportAsync(
                     _context,
                     ProjectId,
-                    3, // Module 3 (Envelope Breakage)
+                    4, // Module 4 (Envelope Breaking)
                     1,
                     lotNo,
                     filePath,
@@ -1435,7 +1435,7 @@ namespace Tools.Controllers
                 await ToolsAPI.Helpers.ExcelReportHelper.RecordExcelReportAsync(
                     _context,
                     ProjectId,
-                    3, // Module 3 (Envelope Breakage Serialing)
+                    4, // Module 4 (Envelope Breaking Serialing)
                     uploadId ?? 1,
                     null,
                     filePath,
