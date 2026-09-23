@@ -272,7 +272,8 @@ namespace Tools.Controllers
                     d.EnvLotNo,
                     d.Batch,
                     d.NRDatas,
-                    d.Day
+                    d.Day,
+                    d.District
 
                 })
                 .ToListAsync();
@@ -2789,6 +2790,9 @@ namespace Tools.Controllers
                 await _loggerService.LogErrorAsync("Error getting pipeline rerun status", ex.Message, nameof(NRDatasController));
                 return StatusCode(500, "Internal server error");
             }
+
+
+          
         }
 
 

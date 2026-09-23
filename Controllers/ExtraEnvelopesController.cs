@@ -14,6 +14,7 @@ using System.Drawing;
 using System.Reflection;
 using Tools.Services;
 using Microsoft.CodeAnalysis;
+using Tools.Middleware;
 
 namespace Tools.Controllers
 {
@@ -458,6 +459,17 @@ namespace Tools.Controllers
                     ws.Cells[ws.Dimension.Address].AutoFitColumns();
                     package.SaveAs(new FileInfo(filePath));
                 }
+
+                await ToolsAPI.Helpers.ExcelReportHelper.RecordExcelReportAsync(
+                    _context,
+                    ProjectId,
+                    2, // Module 2 (Extras calculation)
+                    uploadId ?? 1,
+                    lotNo,
+                    filePath,
+                    true,
+                    Tools.Services.LogHelper.GetTriggeredBy(User, Request)
+                );
 
                 return Ok(new
                 {

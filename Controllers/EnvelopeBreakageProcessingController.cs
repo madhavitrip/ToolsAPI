@@ -14,6 +14,7 @@ using Tools.Services;
 using Microsoft.Extensions.Options;
 using System.Globalization;
 using System.Dynamic;
+using Tools.Middleware;
 
 namespace Tools.Controllers
 {
@@ -940,7 +941,7 @@ namespace Tools.Controllers
 
                 _context.EnvelopeBreakingResults.AddRange(envelopeResults);
                 foreach (var nr in nrData)
-                    nr.Steps = Tools.Models.PipelineNavigator.GetNextStep(Tools.Models.PipelineNavigator.STEP_AWAITING_EXTRA, projectconfig?.Modules);
+                   nr.Steps = Tools.Models.PipelineNavigator.STEP_AWAITING_ENV; ;
 
                 await _context.SaveChangesAsync();
 
@@ -1321,6 +1322,17 @@ namespace Tools.Controllers
                     package.SaveAs(new FileInfo(filePath));
                 }
 
+                await ToolsAPI.Helpers.ExcelReportHelper.RecordExcelReportAsync(
+                    _context,
+                    ProjectId,
+                    3, // Module 3 (Envelope Breakage)
+                    1,
+                    lotNo,
+                    filePath,
+                    true,
+                    Tools.Services.LogHelper.GetTriggeredBy(User, Request)
+                );
+
                 return Ok(new
                 {
                     message = "Report generated successfully",
@@ -1419,6 +1431,17 @@ namespace Tools.Controllers
                     worksheet.View.FreezePanes(2, 1);
                     package.SaveAs(new FileInfo(filePath));
                 }
+
+                await ToolsAPI.Helpers.ExcelReportHelper.RecordExcelReportAsync(
+                    _context,
+                    ProjectId,
+                    3, // Module 3 (Envelope Breakage Serialing)
+                    uploadId ?? 1,
+                    null,
+                    filePath,
+                    true,
+                    Tools.Services.LogHelper.GetTriggeredBy(User, Request)
+                );
                 return Ok(new { message = "Excel generated successfully", path = filePath });
             }
             catch (Exception ex)

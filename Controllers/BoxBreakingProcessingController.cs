@@ -7,6 +7,7 @@ using System.Reflection;
 using System.Text.Json;
 using Tools.Models;
 using Tools.Services;
+using Tools.Middleware;
 
 namespace Tools.Controllers
 {
@@ -34,7 +35,7 @@ namespace Tools.Controllers
             try
             {
                 if (!skipReset) await ResetReportStatus(ProjectId);
-                await _loggerService.LogEventAsync($"Starting box breaking for ProjectId {ProjectId}, Lots: {string.Join(",", LotNo)}", "BoxBreakingProcessing", LogHelper.GetTriggeredBy(User), ProjectId);
+                await _loggerService.LogEventAsync($"Starting box breaking for ProjectId {ProjectId}, Lots: {string.Join(",", LotNo)}", "BoxBreakingProcessing", Tools.Services.LogHelper.GetTriggeredBy(User), ProjectId);
 
                 // ✅ STEP 1: Validate dispatch status for all lots (mandatory backend validation unless bypassed)
                 // Allow a global bypass via environment variable `BYPASS_DISPATCH_CHECK=true`
@@ -834,7 +835,7 @@ namespace Tools.Controllers
 
                 _context.BoxBreakingResults.AddRange(boxResults);
                 foreach (var nr in nrData)
-                     nr.Steps = Tools.Models.PipelineNavigator.GetNextStep(Tools.Models.PipelineNavigator.STEP_AWAITING_ENV, projectconfig?.Modules);
+                     nr.Steps = Tools.Models.PipelineNavigator.GetNextStep(Tools.Models.PipelineNavigator.STEP_AWAITING_BOX, projectconfig?.Modules);
 
                 await _loggerService.LogEventAsync($"Preparing to save {boxResults.Count} box results in {sw.ElapsedMilliseconds}ms", "BoxBreakingProcessing", 0, ProjectId);
 
@@ -843,7 +844,7 @@ namespace Tools.Controllers
                 await _loggerService.LogEventAsync(
                     $"Database save completed: {boxResults.Count} box breaking results for ProjectId {ProjectId}",
                     "BoxBreakingProcessing",
-                    LogHelper.GetTriggeredBy(User),
+                    Tools.Services.LogHelper.GetTriggeredBy(User),
                     ProjectId);
 
                 sw.Stop();
@@ -1064,6 +1065,17 @@ namespace Tools.Controllers
                     ws.View.FreezePanes(2, 1);
                     package.SaveAs(new FileInfo(filePath));
                 }
+
+                await ToolsAPI.Helpers.ExcelReportHelper.RecordExcelReportAsync(
+                    _context,
+                    ProjectId,
+                    5, // Module 5 (Box Breaking)
+                    uploadId ?? 1,
+                    LotNo != null && LotNo.Any() ? LotNo.First() : null,
+                    filePath,
+                    true,
+                    Tools.Services.LogHelper.GetTriggeredBy(User, Request)
+                );
 
                 return Ok(new { message = "Report generated successfully", filePath, lot = LotNo });
             }

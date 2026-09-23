@@ -18,6 +18,7 @@ using static System.Runtime.InteropServices.JavaScript.JSType;
 using System.Composition;
 using DocumentFormat.OpenXml.Spreadsheet;
 using Microsoft.Extensions.Options;
+using Tools.Middleware;
 
 namespace Tools.Controllers
 {
@@ -240,6 +241,16 @@ namespace Tools.Controllers
                     ws.View.FreezePanes(2, 1);
                     package.SaveAs(new FileInfo(filePath));
                 }
+                await ToolsAPI.Helpers.ExcelReportHelper.RecordExcelReportAsync(
+                    _context,
+                    ProjectId,
+                    4, // Module 4 (Envelope Breaking)
+                    1,
+                    null,
+                    filePath,
+                    true,
+                    Tools.Services.LogHelper.GetTriggeredBy(User, Request)
+                );
                 await _loggerService.LogEventAsync($"EnvelopeBreakage report of ProjectId {ProjectId} has been created", "EnvelopeBreakage", LogHelper.GetTriggeredBy(User), ProjectId);
                 return Ok(Consolidated); // Return original data for UI (optional)
             }
@@ -1141,6 +1152,17 @@ namespace Tools.Controllers
 
                 package.SaveAs(new FileInfo(filePath));
 
+                await ToolsAPI.Helpers.ExcelReportHelper.RecordExcelReportAsync(
+                    _context,
+                    ProjectId,
+                    6, // Module 6 (Envelope Breaking Summary)
+                    uploadId ?? 1,
+                    null,
+                    filePath,
+                    true,
+                    Tools.Services.LogHelper.GetTriggeredBy(User, Request)
+                );
+
                 return Ok(new { message = $"Envelope summary report saved at root folder: {filePath}", fileName });
 
             }
@@ -1432,6 +1454,17 @@ namespace Tools.Controllers
                 var filePath = Path.Combine(folderPath, fileName);
 
                 package.SaveAs(new FileInfo(filePath));
+
+                await ToolsAPI.Helpers.ExcelReportHelper.RecordExcelReportAsync(
+                    _context,
+                    ProjectId,
+                    7, // Module 7 (Catch Summary)
+                    uploadId ?? 1,
+                    null,
+                    filePath,
+                    true,
+                    Tools.Services.LogHelper.GetTriggeredBy(User, Request)
+                );
 
                 await _loggerService.LogEventAsync("CatchSummary report created", "CatchSummary", LogHelper.GetTriggeredBy(User), ProjectId);
 
