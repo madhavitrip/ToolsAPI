@@ -463,7 +463,7 @@ namespace Tools.Controllers
                 await ToolsAPI.Helpers.ExcelReportHelper.RecordExcelReportAsync(
                     _context,
                     ProjectId,
-                    2, // Module 2 (Extras calculation)
+                    3, // Module 3 (Extras Calculation)
                     uploadId ?? 1,
                     lotNo,
                     filePath,

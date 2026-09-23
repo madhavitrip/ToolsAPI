@@ -326,6 +326,20 @@ namespace Tools.Controllers
                     package.SaveAs(new FileInfo(filePath));
                 }
 
+                // Record in ExcelReports table
+                var dupVersionMatch = System.Text.RegularExpressions.Regex.Match(fileName, @"_v(\d+)\.xlsx$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                int dupVersion = dupVersionMatch.Success ? int.Parse(dupVersionMatch.Groups[1].Value) : 1;
+                await ToolsAPI.Helpers.ExcelReportHelper.RecordExcelReportAsync(
+                    _context,
+                    ProjectId,
+                    1, // Module 1 (Duplicate Tool)
+                    dupVersion,
+                    lotNo.HasValue && lotNo.Value > 0 ? lotNo : null,
+                    filePath,
+                    true,
+                    LogHelper.GetTriggeredBy(User)
+                );
+
                 return Ok(new
                 {
                     MergedRows = mergedCount,
@@ -530,6 +544,20 @@ WHERE ProjectId = {0};", ProjectId);
                         ws.View.FreezePanes(2, 1);
 
                         package.SaveAs(new FileInfo(filePath));
+
+                        // Record in ExcelReports table
+                        var enhVersionMatch = System.Text.RegularExpressions.Regex.Match(fileName, @"_v(\d+)\.xlsx$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                        int enhVersion = enhVersionMatch.Success ? int.Parse(enhVersionMatch.Groups[1].Value) : 1;
+                        await ToolsAPI.Helpers.ExcelReportHelper.RecordExcelReportAsync(
+                            _context,
+                            ProjectId,
+                            2, // Module 2 (Envelope Setup and Enhancement)
+                            enhVersion,
+                            lotNo.HasValue && lotNo.Value > 0 ? lotNo : null,
+                            filePath,
+                            true,
+                            LogHelper.GetTriggeredBy(User)
+                        );
                     }
 
                     // Logging

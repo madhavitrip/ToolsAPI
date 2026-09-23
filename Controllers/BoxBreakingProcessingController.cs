@@ -900,7 +900,7 @@ namespace Tools.Controllers
         }
 
         [HttpGet("GetBoxBreakingReport")]
-        public async Task<IActionResult> GetBoxBreakingReport(int ProjectId, [FromQuery] List<int> LotNo, [FromQuery] int? uploadId = null)
+        public async Task<IActionResult> GetBoxBreakingReport(int ProjectId, [FromQuery] List<int> LotNo, [FromQuery] int? uploadId = null, [FromQuery] int? userId = null)
         {
             try
             {
@@ -1074,7 +1074,7 @@ namespace Tools.Controllers
                     LotNo != null && LotNo.Any() ? LotNo.First() : null,
                     filePath,
                     true,
-                    Tools.Services.LogHelper.GetTriggeredBy(User, Request)
+                    Tools.Services.LogHelper.GetTriggeredBy(User, Request) is int tid && tid > 0 ? tid : userId
                 );
 
                 return Ok(new { message = "Report generated successfully", filePath, lot = LotNo });
