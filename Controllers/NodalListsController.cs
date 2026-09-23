@@ -216,6 +216,88 @@ namespace Tools.Controllers
             }
         }
 
+        public class ResolveCollegeCenterDto
+        {
+            public int ProjectId { get; set; }
+            public int CollegeCode { get; set; }
+            public string? Gender { get; set; }
+            public int CorrectCenterCode { get; set; }
+            public string? CorrectCenterName { get; set; }
+        }
+
+        [HttpPost("resolve-college-center")]
+        public async Task<IActionResult> ResolveCollegeCenter([FromBody] ResolveCollegeCenterDto req)
+        {
+            try
+            {
+                await EnsureSchemaAsync();
+                var query = _context.NodalList
+                    .Where(x => x.ProjectId == req.ProjectId && x.CollegeCode == req.CollegeCode && x.Status);
+
+                if (!string.IsNullOrEmpty(req.Gender) && req.Gender.ToUpper() != "ALL")
+                {
+                    query = query.Where(x => (x.Gender ?? "").ToUpper() == req.Gender.ToUpper());
+                }
+
+                var records = await query.ToListAsync();
+                if (!records.Any()) return NotFound(new { message = "No matching records found to update" });
+
+                foreach (var r in records)
+                {
+                    r.ExamCenterCode = req.CorrectCenterCode;
+                    if (!string.IsNullOrEmpty(req.CorrectCenterName))
+                    {
+                        r.ExamCenterName = req.CorrectCenterName;
+                    }
+                }
+
+                await _context.SaveChangesAsync();
+                return Ok(new { message = $"Updated {records.Count} record(s) to Center {req.CorrectCenterCode}", count = records.Count });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, $"Internal server error: {ex.Message}");
+            }
+        }
+
+        public class ResolveCenterNodalDto
+        {
+            public int ProjectId { get; set; }
+            public int CenterCode { get; set; }
+            public int CorrectNodalCode { get; set; }
+            public string? CorrectNodalName { get; set; }
+        }
+
+        [HttpPost("resolve-center-nodal")]
+        public async Task<IActionResult> ResolveCenterNodal([FromBody] ResolveCenterNodalDto req)
+        {
+            try
+            {
+                await EnsureSchemaAsync();
+                var records = await _context.NodalList
+                    .Where(x => x.ProjectId == req.ProjectId && x.ExamCenterCode == req.CenterCode && x.Status)
+                    .ToListAsync();
+
+                if (!records.Any()) return NotFound(new { message = "No matching records found to update" });
+
+                foreach (var r in records)
+                {
+                    r.NodalCode = req.CorrectNodalCode;
+                    if (!string.IsNullOrEmpty(req.CorrectNodalName))
+                    {
+                        r.NodalName = req.CorrectNodalName;
+                    }
+                }
+
+                await _context.SaveChangesAsync();
+                return Ok(new { message = $"Updated {records.Count} record(s) to Nodal {req.CorrectNodalCode}", count = records.Count });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, $"Internal server error: {ex.Message}");
+            }
+        }
+
         [HttpPost]
         public async Task<IActionResult> CreateNodalList([FromBody] NodalList newRecord)
         {

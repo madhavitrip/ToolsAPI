@@ -110,6 +110,10 @@ namespace Tools.Controllers
             // Update allowed fields
             existingRecord.CenterCode = updatedRecord.CenterCode;
             existingRecord.NodalCode = updatedRecord.NodalCode;
+            existingRecord.CollegeCode = updatedRecord.CollegeCode;
+            existingRecord.CollegeName = updatedRecord.CollegeName;
+            existingRecord.CourseName = updatedRecord.CourseName;
+            existingRecord.SubjectName = updatedRecord.SubjectName;
             existingRecord.CatchNo = updatedRecord.CatchNo;
             existingRecord.NRQuantity = updatedRecord.NRQuantity;
             existingRecord.ExamDate = updatedRecord.ExamDate;
@@ -120,6 +124,63 @@ namespace Tools.Controllers
             {
                 await _context.SaveChangesAsync();
                 return Ok(existingRecord);
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, $"Internal server error: {ex.Message}");
+            }
+        }
+
+        [HttpDelete("{id}")]
+        public async Task<IActionResult> DeleteTemporaryData(int id)
+        {
+            try
+            {
+                var record = await _context.TemporaryNrDatas.FindAsync(id);
+                if (record == null)
+                {
+                    return NotFound(new { message = "Record not found" });
+                }
+
+                _context.TemporaryNrDatas.Remove(record);
+                await _context.SaveChangesAsync();
+
+                return Ok(new { message = "Record deleted successfully", id });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, $"Internal server error: {ex.Message}");
+            }
+        }
+
+        [HttpDelete("deleteAll/{projectId}")]
+        public async Task<IActionResult> DeleteAllTemporaryData(int projectId)
+        {
+            try
+            {
+                var affected = await _context.TemporaryNrDatas
+                    .Where(x => x.ProjectId == projectId)
+                    .ExecuteDeleteAsync();
+
+                return Ok(new { message = "All temporary preview records deleted successfully", count = affected });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, $"Internal server error: {ex.Message}");
+            }
+        }
+
+        [HttpPost("batch-delete")]
+        public async Task<IActionResult> BatchDeleteTemporaryData([FromBody] List<int> ids)
+        {
+            if (ids == null || !ids.Any()) return BadRequest("No records selected for deletion.");
+            try
+            {
+                var affected = await _context.TemporaryNrDatas
+                    .Where(x => ids.Contains(x.Id))
+                    .ExecuteDeleteAsync();
+
+                return Ok(new { message = $"{affected} record(s) deleted successfully", count = affected });
             }
             catch (Exception ex)
             {
