@@ -2667,134 +2667,141 @@ namespace Tools.Controllers
             int NrData = await _context.NRDatas.Where(p => p.ProjectId == ProjectId).CountAsync();
             return Ok(new { Conflict, NrData });
         }
-
         [HttpGet("PipelineRerunStatus")]
-        public async Task<ActionResult> GetPipelineRerunStatus(int ProjectId, [FromQuery] int? batch = null)
+        public async Task<ActionResult> GetPipelineRerunStatus(int ProjectId, int batch)
         {
-            try
+            var activeQuery = _context.NRDatas
+                .AsNoTracking()
+                .Where(n =>
+                    n.ProjectId == ProjectId &&
+                    n.Status &&
+                    n.Batch == batch);
+
+            // Single query for all overall statistics
+            var stats = await activeQuery
+                .GroupBy(x => 1)
+                .Select(g => new
+                {
+                    TotalActive = g.Count(),
+                    MinStep = g.Min(x => x.Steps),
+                    MaxStep = g.Max(x => x.Steps),
+
+                    DuplicatePending = g.Any(x => x.Steps == 0),
+                    EnhancementPending = g.Any(x => x.Steps <= 2),
+                    ExtraPending = g.Any(x => x.Steps <= 3),
+                    EnvelopePending = g.Any(x => x.Steps <= 4)
+                })
+                .FirstOrDefaultAsync();
+
+            if (stats == null)
             {
-                IQueryable<NRData> activeQuery = _context.NRDatas
-                    .AsNoTracking()
-                    .Where(n => n.ProjectId == ProjectId && n.Status == true);
-
-                if (batch.HasValue && batch.Value > 0)
-                {
-                    activeQuery = activeQuery.Where(n => n.Batch == batch.Value);
-                }
-
-                // Fetch raw lot steps into memory to avoid MySQL GROUP BY complexity timeout
-                var rawRecords = await activeQuery
-                    .Select(n => new { n.LotNo, n.Steps })
-                    .ToListAsync();
-
-                if (rawRecords.Count == 0)
-                {
-                    return Ok(new
-                    {
-                        hasPendingPipelineChanges = false,
-                        minStep = 6,
-                        maxStep = 6,
-                        totalActive = 0,
-                        duplicatePending = false,
-                        enhancementPending = false,
-                        extraPending = false,
-                        envelopePending = false,
-                        boxPending = false,
-                        boxTotalLots = 0,
-                        boxCompletedLots = 0,
-                        boxPendingLots = 0,
-                        pendingBoxLots = new List<int>(),
-                        pendingDuplicateLots = new List<int>(),
-                        completedDuplicateLots = new List<int>(),
-                        pendingEnhancementLots = new List<int>(),
-                        completedEnhancementLots = new List<int>(),
-                        pendingExtraLots = new List<int>(),
-                        completedExtraLots = new List<int>(),
-                        pendingEnvelopeLots = new List<int>(),
-                        completedEnvelopeLots = new List<int>()
-                    });
-                }
-
-                int minStep = rawRecords.Min(n => n.Steps);
-                int maxStep = rawRecords.Max(n => n.Steps);
-                int totalActive = rawRecords.Count;
-
-                // Group and calculate statistics in memory
-                var lotStats = rawRecords
-                    .GroupBy(n => n.LotNo)
-                    .Select(g => new
-                    {
-                        LotNo = g.Key,
-                        Count = g.Count(),
-                        MinSteps = g.Min(x => x.Steps),
-                        MaxSteps = g.Max(x => x.Steps),
-                        IsPending = g.Any(n => n.Steps <= 5),
-                        IsDuplicatePending = g.Any(n => n.Steps == 0),
-                        IsEnhancementPending = g.Any(n => n.Steps <= 1),
-                        IsExtraPending = g.Any(n => n.Steps <= 3),
-                        IsEnvelopePending = g.Any(n => n.Steps <= 4),
-                        IsDuplicateCompleted = g.All(n => n.Steps >= 1),
-                        IsEnhancementCompleted = g.All(n => n.Steps >= 2),
-                        IsExtraCompleted = g.All(n => n.Steps >= 4),
-                        IsEnvelopeCompleted = g.All(n => n.Steps >= 5)
-                    })
-                    .ToList();
-
-                var pendingBoxLots = lotStats
-                    .Where(x => x.MinSteps <= 5)
-                    .Select(x => x.LotNo)
-                    .OrderBy(x => x)
-                    .ToList();
-
-                var pendingDuplicateLots = lotStats.Where(x => x.IsDuplicatePending).Select(x => x.LotNo).OrderBy(x => x).ToList();
-                var pendingEnhancementLots = lotStats.Where(x => x.IsEnhancementPending).Select(x => x.LotNo).OrderBy(x => x).ToList();
-                var pendingExtraLots = lotStats.Where(x => x.IsExtraPending).Select(x => x.LotNo).OrderBy(x => x).ToList();
-                var pendingEnvelopeLots = lotStats.Where(x => x.IsEnvelopePending).Select(x => x.LotNo).OrderBy(x => x).ToList();
-
-                var completedDuplicateLots = lotStats.Where(x => x.IsDuplicateCompleted).Select(x => x.LotNo).OrderBy(x => x).ToList();
-                var completedEnhancementLots = lotStats.Where(x => x.IsEnhancementCompleted).Select(x => x.LotNo).OrderBy(x => x).ToList();
-                var completedExtraLots = lotStats.Where(x => x.IsExtraCompleted).Select(x => x.LotNo).OrderBy(x => x).ToList();
-                var completedEnvelopeLots = lotStats.Where(x => x.IsEnvelopeCompleted).Select(x => x.LotNo).OrderBy(x => x).ToList();
-
                 return Ok(new
                 {
-                    hasPendingPipelineChanges = minStep < Tools.Models.PipelineNavigator.STEP_DONE,
-
-                    minStep,
-                    maxStep,
-                    totalActive,
-
-                    duplicatePending = rawRecords.Any(n => n.Steps == 0),
-                    enhancementPending = rawRecords.Any(n => n.Steps <= 1),
-                    extraPending = rawRecords.Any(n => n.Steps <= 3),
-                    envelopePending = rawRecords.Any(n => n.Steps <= 4),
-
-                    boxPending = pendingBoxLots.Count > 0,
-                    boxTotalLots = lotStats.Count,
-                    boxCompletedLots = lotStats.Count(x => x.MinSteps > 5),
-                    boxPendingLots = pendingBoxLots.Count,
-                    pendingBoxLots,
-
-                    pendingDuplicateLots,
-                    completedDuplicateLots,
-                    pendingEnhancementLots,
-                    completedEnhancementLots,
-                    pendingExtraLots,
-                    completedExtraLots,
-                    pendingEnvelopeLots,
-                    completedEnvelopeLots
+                    hasPendingPipelineChanges = false,
+                    minStep = 6,
+                    maxStep = 6,
+                    totalActive = 0,
+                    duplicatePending = false,
+                    enhancementPending = false,
+                    extraPending = false,
+                    envelopePending = false,
+                    boxPending = false,
+                    boxTotalLots = 0,
+                    boxCompletedLots = 0,
+                    boxPendingLots = 0,
+                    pendingBoxLots = Array.Empty<string>()
                 });
             }
-            catch (Exception ex)
+
+            // Fetch raw lot steps into memory to avoid MySQL GROUP BY complexity timeout
+            var rawLotSteps = await activeQuery
+                .Select(n => new { n.LotNo, n.Steps })
+                .ToListAsync();
+
+            // Group and calculate statistics in memory
+            var lotStats = rawLotSteps
+                .GroupBy(n => n.LotNo)
+                .Select(g => new
+                {
+                    LotNo = g.Key,
+                    IsPending = g.Any(n => n.Steps <= 6), // Pending for overall pipeline / Box Breaking
+                    IsDuplicatePending = g.Any(n => n.Steps <= 0),
+                    IsEnhancementPending = g.Any(n => n.Steps <= 2), // Enhancement runs up to 2
+                    IsExtraPending = g.Any(n => n.Steps <= 3), // Extra runs up to 3/4
+                    IsEnvelopePending = g.Any(n => n.Steps <= 4), // Envelope runs up to 4/5
+                    IsBoxPending = g.Any(n => n.Steps <= 6),
+                    IsDuplicateReady = g.Any(n => n.Steps == 0),
+                    IsEnhancementReady = g.Any(n => n.Steps == 1 || n.Steps == 2),
+                    IsExtraReady = g.Any(n => n.Steps == 3 || n.Steps == 4), // Some configurations might use 3 or 4
+                    IsEnvelopeReady = g.Any(n => n.Steps == 4 || n.Steps == 5),
+                    IsBoxReady = g.Any(n => n.Steps == 5 || n.Steps == 6),
+                    IsDuplicateCompleted = g.Any(n => n.Steps > 0),
+                    IsEnhancementCompleted = g.Any(n => n.Steps > 2),
+                    IsExtraCompleted = g.Any(n => n.Steps > 3),
+                    IsEnvelopeCompleted = g.Any(n => n.Steps > 4),
+                    IsBoxCompleted = g.Any(n => n.Steps > 6)
+                })
+                .ToList();
+
+            var pendingBoxLots = lotStats
+                .Where(x => x.IsPending)
+                .Select(x => x.LotNo)
+                .OrderBy(x => x)
+                .ToList();
+
+            var pendingDuplicateLots = lotStats.Where(x => x.IsDuplicatePending).Select(x => x.LotNo).OrderBy(x => x).ToList();
+            var pendingEnhancementLots = lotStats.Where(x => x.IsEnhancementPending).Select(x => x.LotNo).OrderBy(x => x).ToList();
+            var pendingExtraLots = lotStats.Where(x => x.IsExtraPending).Select(x => x.LotNo).OrderBy(x => x).ToList();
+            var pendingEnvelopeLots = lotStats.Where(x => x.IsEnvelopePending).Select(x => x.LotNo).OrderBy(x => x).ToList();
+
+            var readyDuplicateLots = lotStats.Where(x => x.IsDuplicateReady).Select(x => x.LotNo).OrderBy(x => x).ToList();
+            var readyEnhancementLots = lotStats.Where(x => x.IsEnhancementReady).Select(x => x.LotNo).OrderBy(x => x).ToList();
+            var readyExtraLots = lotStats.Where(x => x.IsExtraReady).Select(x => x.LotNo).OrderBy(x => x).ToList();
+            var readyEnvelopeLots = lotStats.Where(x => x.IsEnvelopeReady).Select(x => x.LotNo).OrderBy(x => x).ToList();
+            var readyBoxLots = lotStats.Where(x => x.IsBoxReady).Select(x => x.LotNo).OrderBy(x => x).ToList();
+
+            var completedDuplicateLots = lotStats.Where(x => x.IsDuplicateCompleted).Select(x => x.LotNo).OrderBy(x => x).ToList();
+            var completedEnhancementLots = lotStats.Where(x => x.IsEnhancementCompleted).Select(x => x.LotNo).OrderBy(x => x).ToList();
+            var completedExtraLots = lotStats.Where(x => x.IsExtraCompleted).Select(x => x.LotNo).OrderBy(x => x).ToList();
+            var completedEnvelopeLots = lotStats.Where(x => x.IsEnvelopeCompleted).Select(x => x.LotNo).OrderBy(x => x).ToList();
+            var completedBoxLots = lotStats.Where(x => x.IsBoxCompleted).Select(x => x.LotNo).OrderBy(x => x).ToList();
+
+            return Ok(new
             {
-                await _loggerService.LogErrorAsync("Error getting pipeline rerun status", ex.Message, nameof(NRDatasController));
-                return StatusCode(500, "Internal server error");
-            }
+                hasPendingPipelineChanges =
+                    stats.MinStep < Tools.Models.PipelineNavigator.STEP_DONE,
 
+                minStep = stats.MinStep,
+                maxStep = stats.MaxStep,
+                totalActive = stats.TotalActive,
 
-          
+                duplicatePending = stats.DuplicatePending,
+                enhancementPending = stats.EnhancementPending,
+                extraPending = stats.ExtraPending,
+                envelopePending = stats.EnvelopePending,
+
+                boxPending = pendingBoxLots.Count > 0,
+                boxTotalLots = lotStats.Count,
+                boxCompletedLots = lotStats.Count(x => !x.IsPending),
+                boxPendingLots = pendingBoxLots.Count,
+                pendingBoxLots,
+
+                pendingDuplicateLots,
+                completedDuplicateLots,
+                pendingEnhancementLots,
+                completedEnhancementLots,
+                pendingExtraLots,
+                completedExtraLots,
+                pendingEnvelopeLots,
+                completedEnvelopeLots,
+                completedBoxLots,
+                readyDuplicateLots,
+                readyEnhancementLots,
+                readyExtraLots,
+                readyEnvelopeLots,
+                readyBoxLots
+            });
         }
-
 
         [HttpGet("DuplicateRerunStatus")]
         public async Task<ActionResult> GetDuplicateRerunStatus(int ProjectId, [FromQuery] int? Batch = null)

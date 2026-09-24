@@ -11,10 +11,16 @@ namespace Tools.Models
         public int ProjectId { get; set; }
         public string? CourseName { get; set; }
         public string? SubjectName { get; set; }
+        [Required]
         public string? CollegeName { get; set; }
+        [Required]
+        public int CenterCode { get; set; }
+        [Required]
+        public string CenterName { get; set; }
         public int CollegeCode { get; set; }
         public string? PaperCode { get; set; }
         public int NRQuantity { get; set; }
+        [Required]
         public string? CatchNo { get; set; }
         public string? ExamDate { get; set; }
         public string? ExamTime { get; set; }
