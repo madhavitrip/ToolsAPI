@@ -4926,7 +4926,7 @@ namespace Tools.Controllers
                         .ToListAsync();
 
                     envelopeBreaking = await _context.EnvelopeBreakages
-                        .Where(e => e.ProjectId == ProjectId).ToListAsync();
+                        .Where(e => e.ProjectId == ProjectId && (e.Status == 1 || e.Status == null)).ToListAsync();
 
                     extra = await _context.ExtrasEnvelope
                         .Where(s => s.ProjectId == ProjectId).ToListAsync();
