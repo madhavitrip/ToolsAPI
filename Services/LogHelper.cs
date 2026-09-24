@@ -69,6 +69,13 @@ namespace Tools.Services
                 }
             }
 
+            // 3. Fallback: read X-User-Id header directly
+            if (request != null && request.Headers.TryGetValue("X-User-Id", out var userIdHeader))
+            {
+                if (int.TryParse(userIdHeader.ToString(), out var headerUserId) && headerUserId > 0)
+                    return headerUserId;
+            }
+
             return 0;
         }
 

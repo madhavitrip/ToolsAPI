@@ -855,7 +855,9 @@ namespace Tools.Controllers
                     ProjectId);
 
                 // Await report generation to avoid DbContext concurrency issues
-                await GenerateBoxBreakingReportAsync(ProjectId, LotNo);
+                var authHeader = Request.Headers.ContainsKey("Authorization") ? Request.Headers["Authorization"].ToString() : null;
+                var triggeredBy = Tools.Services.LogHelper.GetTriggeredBy(User, Request);
+                await GenerateBoxBreakingReportAsync(ProjectId, LotNo, authHeader, triggeredBy > 0 ? triggeredBy : (int?)null);
 
                 return Ok(new
                 {
@@ -873,14 +875,18 @@ namespace Tools.Controllers
             }
         }
 
-        private async Task GenerateBoxBreakingReportAsync(int projectId, List<int> lotNumbers)
+        private async Task GenerateBoxBreakingReportAsync(int projectId, List<int> lotNumbers, string authHeader = null, int? userId = null)
         {
             try
             {
                 using var client = new HttpClient();
+                if (!string.IsNullOrEmpty(authHeader))
+                    client.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", authHeader);
+
                 foreach (var lot in lotNumbers)
                 {
-                    var url = $"{_apiSettings.BoxBreaking}?ProjectId={projectId}&LotNo={lot}";
+                    var userIdParam = userId.HasValue ? $"&userId={userId.Value}" : "";
+                    var url = $"{_apiSettings.BoxBreaking}?ProjectId={projectId}&LotNo={lot}{userIdParam}";
                     var response = await client.GetAsync(url);
 
                     if (!response.IsSuccessStatusCode)

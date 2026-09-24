@@ -246,7 +246,7 @@ namespace Tools.Controllers
                     ProjectId,
                     4, // Module 4 (Envelope Breaking)
                     1,
-                    null,
+                    lotNo.HasValue && lotNo.Value > 0 ? lotNo : null,
                     filePath,
                     true,
                     Tools.Services.LogHelper.GetTriggeredBy(User, Request)
@@ -879,7 +879,7 @@ namespace Tools.Controllers
         }
 
         [HttpGet("EnvelopeSummaryReport")]
-        public async Task<IActionResult> EnvelopeSummaryReport(int ProjectId, int? uploadId = null)
+        public async Task<IActionResult> EnvelopeSummaryReport(int ProjectId, int? uploadId = null, [FromQuery] int? lotNo = null)
         {
             try
             {
@@ -1157,7 +1157,7 @@ namespace Tools.Controllers
                     ProjectId,
                     6, // Module 6 (Envelope Breaking Summary)
                     uploadId ?? 1,
-                    null,
+                    lotNo.HasValue && lotNo.Value > 0 ? lotNo : null,
                     filePath,
                     true,
                     Tools.Services.LogHelper.GetTriggeredBy(User, Request)
@@ -1175,7 +1175,7 @@ namespace Tools.Controllers
 
 
         [HttpGet("CatchEnvelopeSummaryWithExtras")]
-        public async Task<IActionResult> CatchEnvelopeSummaryWithExtras(int ProjectId, int? uploadId = null)
+        public async Task<IActionResult> CatchEnvelopeSummaryWithExtras(int ProjectId, int? uploadId = null, [FromQuery] int? lotNo = null)
         {
             try
             {
@@ -1460,7 +1460,7 @@ namespace Tools.Controllers
                     ProjectId,
                     7, // Module 7 (Catch Summary)
                     uploadId ?? 1,
-                    null,
+                    lotNo.HasValue && lotNo.Value > 0 ? lotNo : null,
                     filePath,
                     true,
                     Tools.Services.LogHelper.GetTriggeredBy(User, Request)
