@@ -52,6 +52,42 @@ namespace Tools.Controllers
                 }
             }
 
+            bool changedInDb = false;
+            foreach (var report in reports)
+            {
+                var fileName = (report.FilePath ?? "").ToLowerInvariant();
+                if (fileName.Contains("enhancement") && report.ModuleId != 2)
+                {
+                    report.ModuleId = 2;
+                    if (report.Id > 0)
+                    {
+                        _context.Entry(report).Property(r => r.ModuleId).IsModified = true;
+                        changedInDb = true;
+                    }
+                }
+                else if (fileName.Contains("extra") && report.ModuleId != 3)
+                {
+                    report.ModuleId = 3;
+                    if (report.Id > 0)
+                    {
+                        _context.Entry(report).Property(r => r.ModuleId).IsModified = true;
+                        changedInDb = true;
+                    }
+                }
+            }
+
+            if (changedInDb)
+            {
+                try
+                {
+                    await _context.SaveChangesAsync();
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[ExcelReportsController] Error saving normalized ModuleIds: {ex.Message}");
+                }
+            }
+
             return Ok(reports.OrderByDescending(r => r.GeneratedAt));
         }
 
@@ -60,12 +96,12 @@ namespace Tools.Controllers
         public async Task<ActionResult<IEnumerable<ExcelReport>>> GetReportsByModule(int moduleId, int projectId)
         {
             var reports = await _context.ExcelReports
-                .Where(r => r.ProjectId == projectId && r.ModuleId == moduleId)
+                .Where(r => r.ProjectId == projectId)
                 .OrderByDescending(r => r.GeneratedAt)
                 .ToListAsync();
 
-            // Fallback: Fetch excel directly from storage directory for this module/project
-            var diskReports = FallbackScanExcelFiles(projectId, moduleId);
+            // Fallback: Fetch excel directly from storage directory for this project
+            var diskReports = FallbackScanExcelFiles(projectId);
             if (diskReports.Any())
             {
                 var existingPaths = new HashSet<string>(
@@ -82,7 +118,44 @@ namespace Tools.Controllers
                 }
             }
 
-            return Ok(reports.OrderByDescending(r => r.GeneratedAt));
+            bool changedInDb = false;
+            foreach (var report in reports)
+            {
+                var fileName = (report.FilePath ?? "").ToLowerInvariant();
+                if (fileName.Contains("enhancement") && report.ModuleId != 2)
+                {
+                    report.ModuleId = 2;
+                    if (report.Id > 0)
+                    {
+                        _context.Entry(report).Property(r => r.ModuleId).IsModified = true;
+                        changedInDb = true;
+                    }
+                }
+                else if (fileName.Contains("extra") && report.ModuleId != 3)
+                {
+                    report.ModuleId = 3;
+                    if (report.Id > 0)
+                    {
+                        _context.Entry(report).Property(r => r.ModuleId).IsModified = true;
+                        changedInDb = true;
+                    }
+                }
+            }
+
+            if (changedInDb)
+            {
+                try
+                {
+                    await _context.SaveChangesAsync();
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[ExcelReportsController] Error saving normalized ModuleIds: {ex.Message}");
+                }
+            }
+
+            var filteredReports = reports.Where(r => r.ModuleId == moduleId).OrderByDescending(r => r.GeneratedAt);
+            return Ok(filteredReports);
         }
 
         // POST: api/ExcelReports
@@ -254,8 +327,8 @@ namespace Tools.Controllers
         {
             var fn = fileName.ToLowerInvariant();
             if (fn.Contains("duplicate")) return 1;
-            if (fn.Contains("extra")) return 2;
-            if (fn.Contains("enhancement")) return 3;
+            if (fn.Contains("enhancement")) return 2;
+            if (fn.Contains("extra")) return 3;
             if (fn.Contains("envelopebreaking") || fn.Contains("envelope_breaking")) return 4;
             if (fn.Contains("boxbreaking") || fn.Contains("box_breaking")) return 5;
             if (fn.Contains("envelopesummary") || fn.Contains("envelope_summary")) return 6;
