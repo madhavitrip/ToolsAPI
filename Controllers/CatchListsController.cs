@@ -367,6 +367,8 @@ namespace Tools.Controllers
                 SubjectName = source.SubjectName,
                 CollegeName = source.CollegeName,
                 CollegeCode = source.CollegeCode,
+                CenterCode = source.CenterCode,
+                CenterName = source.CenterName,
                 PaperCode = source.PaperCode,
                 NRQuantity = source.NRQuantity,
                 CatchNo = catchNo,
