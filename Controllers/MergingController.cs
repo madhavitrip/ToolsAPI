@@ -487,55 +487,12 @@ namespace Tools.Controllers
                     return $"center_{n.Id}";
                 }
 
-                // Rule 1 Validation
-                var groupedByCollegeGender = nodalLists
-                    .GroupBy(n => new { CollegeKey = GetEffectiveCollegeCode(n), Gender = n.Gender?.ToUpper() ?? "ALL" })
-                    .ToList();
-
-                var multiCenterColleges = groupedByCollegeGender
-                    .Where(g => g.Select(x => GetEffectiveCenterCode(x)).Distinct().Count() > 1)
-                    .ToList();
-
-                var multiNodalCenters = nodalLists
-                    .GroupBy(n => GetEffectiveCenterCode(n))
-                    .Where(g => g.Select(x => x.NodalCode).Distinct().Count() > 1)
-                    .ToList();
-
+                // Rule 1 Validation (Legacy hardcoded checks removed as they are now handled dynamically via CheckDynamicRule1)
                 var rule1Errors = new List<string>();
-                if (multiCenterColleges.Any())
-                {
-                    var msg = string.Join("; ", multiCenterColleges.Select(g => $"College {g.Key.CollegeKey} ({g.Key.Gender}) assigned to {g.Select(x => GetEffectiveCenterCode(x)).Distinct().Count()} centers"));
-                    rule1Errors.Add($"Rule 1 Failed: Multiple exam centers for same college/gender - {msg}");
-                }
-                if (multiNodalCenters.Any())
-                {
-                    var msg = string.Join("; ", multiNodalCenters.Select(g => $"Center {g.Key} assigned to {g.Select(x => x.NodalCode).Distinct().Count()} nodal codes"));
-                    rule1Errors.Add($"Rule 1 Failed: Multiple nodal codes for same exam center - {msg}");
-                }
-
-                var multiCenterDetails = multiCenterColleges.Select(g => new
-                {
-                    collegeCode = g.Key.CollegeKey,
-                    gender = g.Key.Gender,
-                    collegeNames = g.Select(x => x.CollegeName).Where(x => !string.IsNullOrEmpty(x)).Distinct().ToList(),
-                    centerCount = g.Select(x => GetEffectiveCenterCode(x)).Distinct().Count(),
-                    centerCodes = g.Select(x => GetEffectiveCenterCode(x)).Distinct().ToList(),
-                    centerNames = g.Select(x => x.ExamCenterName).Where(x => !string.IsNullOrEmpty(x)).Distinct().ToList(),
-                    nodalCodes = g.Select(x => x.NodalCode).Distinct().ToList(),
-                    nodalNames = g.Select(x => x.NodalName).Where(x => !string.IsNullOrEmpty(x)).Distinct().ToList(),
-                    description = $"College {g.Key.CollegeKey} ({g.Key.Gender}) assigned to {g.Select(x => GetEffectiveCenterCode(x)).Distinct().Count()} centers: {string.Join(", ", g.Select(x => GetEffectiveCenterCode(x)).Distinct())}"
-                }).ToList();
-
-                var multiNodalDetails = multiNodalCenters.Select(g => new
-                {
-                    centerCode = g.Key,
-                    centerNames = g.Select(x => x.ExamCenterName).Where(x => !string.IsNullOrEmpty(x)).Distinct().ToList(),
-                    nodalCount = g.Select(x => x.NodalCode).Distinct().Count(),
-                    nodalCodes = g.Select(x => x.NodalCode).Distinct().ToList(),
-                    nodalNames = g.Select(x => x.NodalName).Where(x => !string.IsNullOrEmpty(x)).Distinct().ToList(),
-                    collegeCodes = g.Select(x => GetEffectiveCollegeCode(x)).Distinct().ToList(),
-                    description = $"Center {g.Key} assigned to {g.Select(x => x.NodalCode).Distinct().Count()} nodal codes: {string.Join(", ", g.Select(x => x.NodalCode).Distinct())}"
-                }).ToList();
+                var multiCenterDetails = new List<object>();
+                var multiNodalDetails = new List<object>();
+                var multiCenterColleges = new List<string>();
+                var multiNodalCenters = new List<string>();
 
                 // Rule 2 Validation
                 var mode = (mergeBy ?? "CollegeCode").Trim();
@@ -603,7 +560,7 @@ namespace Tools.Controllers
                     ? new List<string> { $"Rule 2 Failed: {rule2CollegeCodes.Count} college(s) are not assigned to an exam center: {string.Join(", ", rule2CollegeCodes)}" }
                     : new List<string>();
 
-                bool rule1Passed = !dynamicConflicts.Any() && !multiCenterColleges.Any() && !multiNodalCenters.Any();
+                bool rule1Passed = !dynamicConflicts.Any();
                 bool rule2Passed = !unassignedCatchItems.Any();
 
                 return Ok(new
@@ -612,8 +569,8 @@ namespace Tools.Controllers
                     rule1Errors,
                     multiCenterDetails,
                     multiNodalDetails,
-                    rule1CollegeCodes = multiCenterColleges.Select(g => g.Key.CollegeKey).Distinct().ToList(),
-                    rule1CenterCodes = multiNodalCenters.Select(g => g.Key).Distinct().ToList(),
+                    rule1CollegeCodes = multiCenterColleges,
+                    rule1CenterCodes = multiNodalCenters,
 
                     rule2Passed,
                     rule2Errors,
@@ -623,6 +580,22 @@ namespace Tools.Controllers
 
                     dynamicConflicts
                 });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, $"Internal server error: {ex.Message}");
+            }
+        }
+
+        [HttpGet("CheckAllConflictsResolved/{projectId}")]
+        public async Task<IActionResult> CheckAllConflictsResolved(int projectId)
+        {
+            try
+            {
+                var pendingCount = await _context.ConflictingFields
+                    .CountAsync(c => c.ProjectId == projectId && c.Status == 1);
+
+                return Ok(new { allResolved = pendingCount == 0 });
             }
             catch (Exception ex)
             {
