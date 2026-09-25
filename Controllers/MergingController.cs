@@ -3,6 +3,8 @@ using Microsoft.EntityFrameworkCore;
 using Tools.Models;
 using ERPToolsAPI.Data;
 using System.Text.Json;
+using System.Text;
+using System.Globalization;
 
 namespace Tools.Controllers
 {
@@ -11,6 +13,16 @@ namespace Tools.Controllers
         public List<string> Level1 { get; set; } = new List<string>();
         public List<string> Level2 { get; set; } = new List<string>();
         public List<string> Level3 { get; set; } = new List<string>();
+    }
+
+    public class ResolveDynamicConflictDto
+    {
+        public int ProjectId { get; set; }
+        public int ConflictId { get; set; }
+        public string TargetField { get; set; } = "";
+        public string TargetValue { get; set; } = "";
+        public string MatchField { get; set; } = "";
+        public string MatchValue { get; set; } = "";
     }
 
     [Route("api/[controller]")]
@@ -29,19 +41,58 @@ namespace Tools.Controllers
         {
             try
             {
+                // Check if any unresolved active dynamic conflicts exist in database
+                var activeConflicts = await _context.ConflictingFields
+                    .AsNoTracking()
+                    .Where(c => c.ProjectId == projectId && c.Status == 1)
+                    .AnyAsync();
+
+                if (activeConflicts)
+                {
+                    return BadRequest(new
+                    {
+                        message = "Validation failed: Unresolved conflicts exist in Conflict Report. Please resolve them first.",
+                        errors = new List<string> { "Please resolve all pending conflicts in the Conflict Report tab before generating preview." }
+                    });
+                }
+
                 var nodalLists = await _context.NodalList.AsNoTracking().Where(x => x.ProjectId == projectId && x.Status).ToListAsync();
+
+                static string GetEffectiveCollegeCode(NodalList n)
+                {
+                    if (n.CollegeCode != 0) return n.CollegeCode.ToString();
+                    if (!string.IsNullOrEmpty(n.CollegeName))
+                    {
+                        var m = System.Text.RegularExpressions.Regex.Match(n.CollegeName, @"^(\d+)");
+                        if (m.Success) return m.Groups[1].Value;
+                        return n.CollegeName.Trim().ToLowerInvariant();
+                    }
+                    return $"row_{n.Id}";
+                }
+
+                static string GetEffectiveCenterCode(NodalList n)
+                {
+                    if (n.ExamCenterCode != 0) return n.ExamCenterCode.ToString();
+                    if (!string.IsNullOrEmpty(n.ExamCenterName))
+                    {
+                        var m = System.Text.RegularExpressions.Regex.Match(n.ExamCenterName, @"^(\d+)");
+                        if (m.Success) return m.Groups[1].Value;
+                        return n.ExamCenterName.Trim().ToLowerInvariant();
+                    }
+                    return $"center_{n.Id}";
+                }
 
                 // Rule 1 Validation: One college -> one center, One center -> one nodal
                 var groupedByCollegeGender = nodalLists
-                    .GroupBy(n => new { n.CollegeCode, Gender = n.Gender?.ToUpper() ?? "ALL" })
+                    .GroupBy(n => new { CollegeKey = GetEffectiveCollegeCode(n), Gender = n.Gender?.ToUpper() ?? "ALL" })
                     .ToList();
 
                 var multiCenterColleges = groupedByCollegeGender
-                    .Where(g => g.Select(x => x.ExamCenterCode).Distinct().Count() > 1)
+                    .Where(g => g.Select(x => GetEffectiveCenterCode(x)).Distinct().Count() > 1)
                     .ToList();
 
                 var multiNodalCenters = nodalLists
-                    .GroupBy(n => n.ExamCenterCode)
+                    .GroupBy(n => GetEffectiveCenterCode(n))
                     .Where(g => g.Select(x => x.NodalCode).Distinct().Count() > 1)
                     .ToList();
 
@@ -50,7 +101,7 @@ namespace Tools.Controllers
                     var rule1Errors = new List<string>();
                     if (multiCenterColleges.Any())
                     {
-                        var msg = string.Join("; ", multiCenterColleges.Select(g => $"College {g.Key.CollegeCode} ({g.Key.Gender}) assigned to {g.Select(x => x.ExamCenterCode).Distinct().Count()} centers"));
+                        var msg = string.Join("; ", multiCenterColleges.Select(g => $"College {g.Key.CollegeKey} ({g.Key.Gender}) assigned to {g.Select(x => GetEffectiveCenterCode(x)).Distinct().Count()} centers"));
                         rule1Errors.Add($"Rule 1 Failed: Multiple exam centers for same college/gender - {msg}");
                     }
                     if (multiNodalCenters.Any())
@@ -61,16 +112,16 @@ namespace Tools.Controllers
 
                     var multiCenterDetails = multiCenterColleges.Select(g => new
                     {
-                        collegeCode = g.Key.CollegeCode,
+                        collegeCode = g.Key.CollegeKey,
                         gender = g.Key.Gender,
                         collegeNames = g.Select(x => x.CollegeName).Where(x => !string.IsNullOrEmpty(x)).Distinct().ToList(),
-                        centerCount = g.Select(x => x.ExamCenterCode).Distinct().Count(),
-                        centerCodes = g.Select(x => x.ExamCenterCode).Distinct().ToList(),
+                        centerCount = g.Select(x => GetEffectiveCenterCode(x)).Distinct().Count(),
+                        centerCodes = g.Select(x => GetEffectiveCenterCode(x)).Distinct().ToList(),
                         centerNames = g.Select(x => x.ExamCenterName).Where(x => !string.IsNullOrEmpty(x)).Distinct().ToList(),
                         nodalCodes = g.Select(x => x.NodalCode).Distinct().ToList(),
                         nodalNames = g.Select(x => x.NodalName).Where(x => !string.IsNullOrEmpty(x)).Distinct().ToList(),
                         records = g.Select(x => new { x.Id, x.CollegeCode, x.CollegeName, x.ExamCenterCode, x.ExamCenterName, x.NodalCode, x.NodalName, x.Gender }).ToList(),
-                        description = $"College {g.Key.CollegeCode} ({g.Key.Gender}) assigned to {g.Select(x => x.ExamCenterCode).Distinct().Count()} centers: {string.Join(", ", g.Select(x => x.ExamCenterCode).Distinct())}"
+                        description = $"College {g.Key.CollegeKey} ({g.Key.Gender}) assigned to {g.Select(x => GetEffectiveCenterCode(x)).Distinct().Count()} centers: {string.Join(", ", g.Select(x => GetEffectiveCenterCode(x)).Distinct())}"
                     }).ToList();
 
                     var multiNodalDetails = multiNodalCenters.Select(g => new
@@ -80,7 +131,7 @@ namespace Tools.Controllers
                         nodalCount = g.Select(x => x.NodalCode).Distinct().Count(),
                         nodalCodes = g.Select(x => x.NodalCode).Distinct().ToList(),
                         nodalNames = g.Select(x => x.NodalName).Where(x => !string.IsNullOrEmpty(x)).Distinct().ToList(),
-                        collegeCodes = g.Select(x => x.CollegeCode).Distinct().ToList(),
+                        collegeCodes = g.Select(x => GetEffectiveCollegeCode(x)).Distinct().ToList(),
                         records = g.Select(x => new { x.Id, x.CollegeCode, x.CollegeName, x.ExamCenterCode, x.ExamCenterName, x.NodalCode, x.NodalName, x.Gender }).ToList(),
                         description = $"Center {g.Key} assigned to {g.Select(x => x.NodalCode).Distinct().Count()} nodal codes: {string.Join(", ", g.Select(x => x.NodalCode).Distinct())}"
                     }).ToList();
@@ -89,8 +140,8 @@ namespace Tools.Controllers
                     {
                         message = "Rule 1 validation failed: One college code must belong to one exam center, and one exam center must belong to one nodal code.",
                         errors = rule1Errors,
-                        rule1CollegeCodes = multiCenterColleges.Select(g => g.Key.CollegeCode.ToString()).Distinct().ToList(),
-                        rule1CenterCodes = multiNodalCenters.Select(g => g.Key.ToString()).Distinct().ToList(),
+                        rule1CollegeCodes = multiCenterColleges.Select(g => g.Key.CollegeKey).Distinct().ToList(),
+                        rule1CenterCodes = multiNodalCenters.Select(g => g.Key).Distinct().ToList(),
                         multiCenterDetails,
                         multiNodalDetails
                     });
@@ -112,8 +163,8 @@ namespace Tools.Controllers
                         getNodalKey = n => (n.CollegeName ?? "").Trim().ToLowerInvariant();
                         break;
                     case "centercode":
-                        getCatchKey = c => c.CollegeCode.ToString().Trim();
-                        getNodalKey = n => n.ExamCenterCode.ToString().Trim();
+                        getCatchKey = c => (c.CenterCode != 0 ? c.CenterCode.ToString() : c.CollegeCode.ToString()).Trim();
+                        getNodalKey = n => GetEffectiveCenterCode(n);
                         break;
                     case "centername":
                         getCatchKey = c => (c.CollegeName ?? "").Trim().ToLowerInvariant();
@@ -121,8 +172,12 @@ namespace Tools.Controllers
                         break;
                     case "collegecode":
                     default:
-                        getCatchKey = c => c.CollegeCode.ToString().Trim();
-                        getNodalKey = n => n.CollegeCode.ToString().Trim();
+                        getCatchKey = c => {
+                            if (c.CollegeCode != 0) return c.CollegeCode.ToString();
+                            var m = System.Text.RegularExpressions.Regex.Match(c.CollegeName ?? "", @"^(\d+)");
+                            return m.Success ? m.Groups[1].Value : (c.CollegeName ?? "").Trim().ToLowerInvariant();
+                        };
+                        getNodalKey = n => GetEffectiveCollegeCode(n);
                         break;
                 }
 
@@ -130,7 +185,7 @@ namespace Tools.Controllers
                     .Where(n => !string.IsNullOrEmpty(getNodalKey(n)))
                     .ToLookup(n => getNodalKey(n));
 
-                var tempDatas = new List<TemporaryNrDatas>();
+                var tempDatas = new List<TemporaryNrDatas>(catchLists.Count);
 
                 foreach (var catchItem in catchLists)
                 {
@@ -195,10 +250,7 @@ namespace Tools.Controllers
                     }
                 }
 
-                _context.ChangeTracker.AutoDetectChangesEnabled = false;
-                await _context.TemporaryNrDatas.AddRangeAsync(tempDatas);
-                await _context.SaveChangesAsync();
-                _context.ChangeTracker.AutoDetectChangesEnabled = true;
+                await BulkInsertTemporaryNrDatasAsync(tempDatas);
 
                 return Ok(new { message = "Data merged into temporary staging successfully", count = tempDatas.Count });
             }
@@ -213,16 +265,11 @@ namespace Tools.Controllers
         {
             try
             {
-                // Clear existing dynamic conflicts
-                await _context.ConflictingFields
-                    .Where(c => c.ProjectId == projectId)
-                    .ExecuteDeleteAsync();
-
                 var nodalLists = await _context.NodalList.AsNoTracking().Where(x => x.ProjectId == projectId && x.Status).ToListAsync();
                 var catchLists = await _context.CatchList.AsNoTracking().Where(x => x.ProjectId == projectId && x.Status).ToListAsync();
 
-                // Merge lists for dynamic fields using full outer join on CollegeCode
-                var unifiedList = new List<dynamic>();
+                // Build pair list
+                var unifiedList = new List<(CatchList? Catch, NodalList? Nodal)>();
                 var catchGroup = catchLists.GroupBy(c => c.CollegeCode).ToDictionary(g => g.Key, g => g.ToList());
                 var nodalGroup = nodalLists.GroupBy(n => n.CollegeCode).ToDictionary(g => g.Key, g => g.ToList());
                 var allCollegeCodes = catchGroup.Keys.Union(nodalGroup.Keys).ToList();
@@ -232,49 +279,107 @@ namespace Tools.Controllers
                     var cList = catchGroup.ContainsKey(code) ? catchGroup[code] : new List<CatchList>();
                     var nList = nodalGroup.ContainsKey(code) ? nodalGroup[code] : new List<NodalList>();
 
-                    if (cList.Any() && nList.Any())
+                    if (nList.Any())
                     {
-                        foreach (var c in cList)
-                            foreach (var n in nList)
-                                unifiedList.Add(new { Catch = c, Nodal = n });
+                        var firstCatch = cList.FirstOrDefault();
+                        foreach (var n in nList)
+                        {
+                            unifiedList.Add((firstCatch, n));
+                        }
                     }
                     else if (cList.Any())
                     {
                         foreach (var c in cList)
-                            unifiedList.Add(new { Catch = c, Nodal = (NodalList)null });
-                    }
-                    else if (nList.Any())
-                    {
-                        foreach (var n in nList)
-                            unifiedList.Add(new { Catch = (CatchList)null, Nodal = n });
-                    }
-                }
-
-                string GetVal(object catchObj, object nodalObj, string field)
-                {
-                    if (string.Equals(field, "NRQuantity", StringComparison.OrdinalIgnoreCase))
-                    {
-                        if (catchObj != null)
                         {
-                            var p = catchObj.GetType().GetProperty(field, System.Reflection.BindingFlags.IgnoreCase | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
-                            if (p != null) return p.GetValue(catchObj)?.ToString() ?? "";
+                            unifiedList.Add((c, null));
                         }
                     }
-
-                    if (nodalObj != null)
-                    {
-                        var p = nodalObj.GetType().GetProperty(field, System.Reflection.BindingFlags.IgnoreCase | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
-                        if (p != null) return p.GetValue(nodalObj)?.ToString() ?? "";
-                    }
-                    if (catchObj != null)
-                    {
-                        var p = catchObj.GetType().GetProperty(field, System.Reflection.BindingFlags.IgnoreCase | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
-                        if (p != null) return p.GetValue(catchObj)?.ToString() ?? "";
-                    }
-                    return "";
                 }
 
-                string GetKey(object c, object n, List<string> fields)
+                static string GetVal(CatchList? c, NodalList? n, string field)
+                {
+                    var f = field.Trim().ToLowerInvariant().Replace(" ", "").Replace("_", "");
+                    switch (f)
+                    {
+                        case "collegecode":
+                            if (n != null && n.CollegeCode != 0) return n.CollegeCode.ToString();
+                            if (c != null && c.CollegeCode != 0) return c.CollegeCode.ToString();
+                            if (n != null && !string.IsNullOrEmpty(n.CollegeName))
+                            {
+                                var match = System.Text.RegularExpressions.Regex.Match(n.CollegeName, @"^(\d+)");
+                                if (match.Success) return match.Groups[1].Value;
+                            }
+                            return "";
+                        case "collegename":
+                            if (n != null && !string.IsNullOrEmpty(n.CollegeName)) return n.CollegeName;
+                            if (c != null && !string.IsNullOrEmpty(c.CollegeName)) return c.CollegeName;
+                            return "";
+                        case "examcentercode":
+                        case "centercode":
+                            if (n != null && n.ExamCenterCode != 0) return n.ExamCenterCode.ToString();
+                            if (c != null && c.CenterCode != 0) return c.CenterCode.ToString();
+                            if (n != null && !string.IsNullOrEmpty(n.ExamCenterName))
+                            {
+                                var match = System.Text.RegularExpressions.Regex.Match(n.ExamCenterName, @"^(\d+)");
+                                if (match.Success) return match.Groups[1].Value;
+                            }
+                            return "";
+                        case "examcentername":
+                        case "centername":
+                            if (n != null && !string.IsNullOrEmpty(n.ExamCenterName)) return n.ExamCenterName;
+                            if (c != null && !string.IsNullOrEmpty(c.CenterName)) return c.CenterName;
+                            return "";
+                        case "gender":
+                            if (n != null && !string.IsNullOrEmpty(n.Gender)) return n.Gender.Trim().ToUpper();
+                            return "";
+                        case "nodalcode":
+                            if (n != null && n.NodalCode != 0) return n.NodalCode.ToString();
+                            if (n != null && !string.IsNullOrEmpty(n.NodalName))
+                            {
+                                var match = System.Text.RegularExpressions.Regex.Match(n.NodalName, @"^(\d+)");
+                                if (match.Success) return match.Groups[1].Value;
+                            }
+                            return "";
+                        case "nodalname":
+                            if (n != null && !string.IsNullOrEmpty(n.NodalName)) return n.NodalName;
+                            return "";
+                        case "catchno":
+                            if (c != null && !string.IsNullOrEmpty(c.CatchNo)) return c.CatchNo;
+                            return "";
+                        case "nrquantity":
+                        case "quantity":
+                            if (c != null) return c.NRQuantity.ToString();
+                            return "";
+                        case "coursename":
+                        case "course":
+                            if (c != null && !string.IsNullOrEmpty(c.CourseName)) return c.CourseName;
+                            return "";
+                        case "subjectname":
+                        case "subject":
+                            if (c != null && !string.IsNullOrEmpty(c.SubjectName)) return c.SubjectName;
+                            return "";
+                        case "examdate":
+                            if (c != null && !string.IsNullOrEmpty(c.ExamDate)) return c.ExamDate;
+                            return "";
+                        case "examtime":
+                            if (c != null && !string.IsNullOrEmpty(c.ExamTime)) return c.ExamTime;
+                            return "";
+                        default:
+                            if (n != null)
+                            {
+                                var p = typeof(NodalList).GetProperty(field, System.Reflection.BindingFlags.IgnoreCase | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                                if (p != null) return p.GetValue(n)?.ToString() ?? "";
+                            }
+                            if (c != null)
+                            {
+                                var p = typeof(CatchList).GetProperty(field, System.Reflection.BindingFlags.IgnoreCase | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                                if (p != null) return p.GetValue(c)?.ToString() ?? "";
+                            }
+                            return "";
+                    }
+                }
+
+                static string GetKey(CatchList? c, NodalList? n, List<string> fields)
                 {
                     return string.Join("|", fields.Select(f => GetVal(c, n, f)));
                 }
@@ -323,6 +428,7 @@ namespace Tools.Controllers
                     }
                 }
 
+                await _context.ConflictingFields.Where(c => c.ProjectId == projectId).ExecuteDeleteAsync();
                 if (newConflicts.Any())
                 {
                     _context.ConflictingFields.AddRange(newConflicts);
@@ -342,7 +448,7 @@ namespace Tools.Controllers
         {
             try
             {
-                var dynamicConflicts = await _context.ConflictingFields.AsNoTracking().Where(c => c.ProjectId == projectId).ToListAsync();
+                var dynamicConflicts = await _context.ConflictingFields.AsNoTracking().Where(c => c.ProjectId == projectId && c.Status == 1).ToListAsync();
 
                 return Ok(new
                 {
@@ -357,62 +463,220 @@ namespace Tools.Controllers
             }
         }
 
-        [HttpPost("PushToMain/{projectId}")]
-        public async Task<IActionResult> PushToMain(int projectId)
+        [HttpPost("ResolveConflict/{conflictId}")]
+        public async Task<IActionResult> ResolveConflict(int conflictId)
         {
             try
             {
-                var tempDatas = await _context.TemporaryNrDatas.AsNoTracking().Where(x => x.ProjectId == projectId).ToListAsync();
-
-                if (!tempDatas.Any())
+                var conflict = await _context.ConflictingFields.FirstOrDefaultAsync(c => c.Id == conflictId);
+                if (conflict != null)
                 {
-                    return BadRequest("No temporary data found to push.");
+                    conflict.Status = 0;
+                    await _context.SaveChangesAsync();
                 }
-
-                var nrDatas = tempDatas.Select(t => new NRData
-                {
-                    ProjectId = t.ProjectId,
-                    CourseName = t.CourseName,
-                    SubjectName = t.SubjectName,
-                    CenterCode = t.CenterCode,
-                    NRQuantity = t.NRQuantity,
-                    Quantity = t.NRQuantity,
-                    CatchNo = t.CatchNo,
-                    ExamDate = t.ExamDate,
-                    ExamTime = t.ExamTime,
-                    Day = t.Day,
-                    NRDatas = t.NRDatas,
-                    NodalCode = t.NodalCode,
-                    Pages = t.Pages,
-                    Route = t.Route,
-                    RouteSort = t.RouteSort,
-                    CenterSort = t.CenterSort,
-                    NodalSort = t.NodalSort,
-                    Symbol = t.Symbol,
-                    Status = t.Status,
-                    District = t.District,
-                    DistrictSort = t.DistrictSort
-                }).ToList();
-
-                // Clear existing NRDatas for this project, maybe? 
-                // Or does it append? Usually uploading fresh means clear first. Let's clear to be safe, 
-                // or just insert if it's supposed to append. Usually it's clear first for a fresh upload.
-                await _context.NRDatas.Where(x => x.ProjectId == projectId).ExecuteDeleteAsync();
-
-                _context.ChangeTracker.AutoDetectChangesEnabled = false;
-                await _context.NRDatas.AddRangeAsync(nrDatas);
-                await _context.SaveChangesAsync();
-                _context.ChangeTracker.AutoDetectChangesEnabled = true;
-                
-                // Clean up temp table
-                await _context.TemporaryNrDatas.Where(x => x.ProjectId == projectId).ExecuteDeleteAsync();
-
-                return Ok(new { message = "Data pushed to main table successfully." });
+                return Ok(new { message = "Conflict resolved successfully" });
             }
             catch (Exception ex)
             {
                 return StatusCode(500, $"Internal server error: {ex.Message}");
             }
+        }
+
+        [HttpPost("ResolveDynamicConflict")]
+        public async Task<IActionResult> ResolveDynamicConflict([FromBody] ResolveDynamicConflictDto dto)
+        {
+            try
+            {
+                var conflict = await _context.ConflictingFields.FirstOrDefaultAsync(c => c.Id == dto.ConflictId);
+                if (conflict != null)
+                {
+                    conflict.Status = 0;
+                }
+
+                var nodalLists = await _context.NodalList.Where(n => n.ProjectId == dto.ProjectId && n.Status).ToListAsync();
+
+                var targetF = (dto.TargetField ?? "").Trim().ToLowerInvariant().Replace(" ", "").Replace("_", "");
+                var matchF = (dto.MatchField ?? "").Trim().ToLowerInvariant().Replace(" ", "").Replace("_", "");
+                var matchVal = (dto.MatchValue ?? "").Trim();
+                int parsedTargetInt = int.TryParse(dto.TargetValue, out int ti) ? ti : 0;
+                int parsedMatchInt = int.TryParse(matchVal, out int mi) ? mi : 0;
+
+                if (parsedMatchInt == 0 && !string.IsNullOrEmpty(matchVal))
+                {
+                    var matchReg = System.Text.RegularExpressions.Regex.Match(matchVal, @"^(\d+)");
+                    if (matchReg.Success) parsedMatchInt = int.Parse(matchReg.Groups[1].Value);
+                }
+
+                bool updatedAny = false;
+                foreach (var n in nodalLists)
+                {
+                    bool isMatch = false;
+                    if (matchF.Contains("college"))
+                    {
+                        isMatch = (parsedMatchInt > 0 && n.CollegeCode == parsedMatchInt) ||
+                                  (!string.IsNullOrEmpty(n.CollegeName) && (n.CollegeName.Contains(matchVal) || (parsedMatchInt > 0 && n.CollegeName.StartsWith(parsedMatchInt.ToString()))));
+                    }
+                    else if (matchF.Contains("center") || matchF.Contains("examcenter"))
+                    {
+                        isMatch = (parsedMatchInt > 0 && n.ExamCenterCode == parsedMatchInt) ||
+                                  (!string.IsNullOrEmpty(n.ExamCenterName) && (n.ExamCenterName.Contains(matchVal) || (parsedMatchInt > 0 && n.ExamCenterName.StartsWith(parsedMatchInt.ToString()))));
+                    }
+                    else if (matchF.Contains("nodal"))
+                    {
+                        isMatch = (parsedMatchInt > 0 && n.NodalCode == parsedMatchInt) ||
+                                  (!string.IsNullOrEmpty(n.NodalName) && (n.NodalName.Contains(matchVal) || (parsedMatchInt > 0 && n.NodalName.StartsWith(parsedMatchInt.ToString()))));
+                    }
+                    else
+                    {
+                        isMatch = (parsedMatchInt > 0 && (n.CollegeCode == parsedMatchInt || n.ExamCenterCode == parsedMatchInt || n.NodalCode == parsedMatchInt));
+                    }
+
+                    if (isMatch)
+                    {
+                        if (targetF.Contains("nodal"))
+                        {
+                            n.NodalCode = parsedTargetInt > 0 ? parsedTargetInt : n.NodalCode;
+                            updatedAny = true;
+                        }
+                        else if (targetF.Contains("center") || targetF.Contains("examcenter"))
+                        {
+                            n.ExamCenterCode = parsedTargetInt > 0 ? parsedTargetInt : n.ExamCenterCode;
+                            updatedAny = true;
+                        }
+                        else if (targetF.Contains("college"))
+                        {
+                            n.CollegeCode = parsedTargetInt > 0 ? parsedTargetInt : n.CollegeCode;
+                            updatedAny = true;
+                        }
+                    }
+                }
+
+                await _context.SaveChangesAsync();
+                return Ok(new { message = "Dynamic conflict resolved successfully", updatedAny });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, $"Internal server error: {ex.Message}");
+            }
+        }
+
+        [HttpPost("PushToMain/{projectId}")]
+        public async Task<IActionResult> PushToMain(int projectId)
+        {
+            try
+            {
+                var hasTempData = await _context.TemporaryNrDatas.AsNoTracking().AnyAsync(x => x.ProjectId == projectId);
+
+                if (!hasTempData)
+                {
+                    return BadRequest("No temporary data found to push.");
+                }
+
+                using var transaction = await _context.Database.BeginTransactionAsync();
+                try
+                {
+                    // Clear existing NRDatas for this project
+                    await _context.NRDatas.Where(x => x.ProjectId == projectId).ExecuteDeleteAsync();
+
+                    // Direct set-based SQL copy from TemporaryNrDatas into NRDatas
+                    await _context.Database.ExecuteSqlInterpolatedAsync($@"
+                        INSERT INTO `NRDatas` (
+                            `ProjectId`, `CourseName`, `SubjectName`, `CenterCode`, `Quantity`, `NRQuantity`, 
+                            `CatchNo`, `ExamDate`, `ExamTime`, `Day`, `NRDatas`, `NodalCode`, `Pages`, `Route`, 
+                            `RouteSort`, `CenterSort`, `NodalSort`, `Symbol`, `Status`, `District`, `DistrictSort`, `Batch`,
+                            `NRDataId`, `LotNo`, `Steps`, `UploadList`, `EnvLotNo`, `VerificationStatus`, `VerifiedBy`
+                        )
+                        SELECT 
+                            `ProjectId`, `CourseName`, `SubjectName`, `CenterCode`, `NRQuantity`, `NRQuantity`, 
+                            `CatchNo`, `ExamDate`, `ExamTime`, `Day`, `NRDatas`, `NodalCode`, `Pages`, `Route`, 
+                            `RouteSort`, `CenterSort`, `NodalSort`, `Symbol`, `Status`, `District`, `DistrictSort`, 1,
+                            0, 0, 0, '[]', 0, 0, 0
+                        FROM `TemporaryNrDatas`
+                        WHERE `ProjectId` = {projectId}");
+
+                    // Clean up temp table
+                    await _context.TemporaryNrDatas.Where(x => x.ProjectId == projectId).ExecuteDeleteAsync();
+
+                    await transaction.CommitAsync();
+
+                    return Ok(new { message = "Data pushed to main table successfully." });
+                }
+                catch
+                {
+                    await transaction.RollbackAsync();
+                    throw;
+                }
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, $"Internal server error: {ex.Message}");
+            }
+        }
+
+        private async Task BulkInsertTemporaryNrDatasAsync(List<TemporaryNrDatas> tempDatas)
+        {
+            if (tempDatas == null || !tempDatas.Any()) return;
+
+            const int chunkSize = 1000;
+            var connection = _context.Database.GetDbConnection();
+            bool wasOpen = connection.State == System.Data.ConnectionState.Open;
+            if (!wasOpen) await connection.OpenAsync();
+
+            try
+            {
+                for (int i = 0; i < tempDatas.Count; i += chunkSize)
+                {
+                    var chunk = tempDatas.Skip(i).Take(chunkSize).ToList();
+                    var sb = new StringBuilder();
+                    sb.Append(@"INSERT INTO `TemporaryNrDatas` 
+                        (`ProjectId`, `CatchNo`, `NRQuantity`, `CollegeCode`, `CollegeName`, `CenterCode`, `NodalCode`, `CourseName`, `SubjectName`, `ExamDate`, `ExamTime`, `Day`, `NRDatas`, `Pages`, `Route`, `RouteSort`, `CenterSort`, `NodalSort`, `Symbol`, `Status`, `District`, `DistrictSort`) 
+                        VALUES ");
+
+                    for (int j = 0; j < chunk.Count; j++)
+                    {
+                        var item = chunk[j];
+                        if (j > 0) sb.Append(",");
+
+                        sb.Append($"({item.ProjectId}," +
+                                  $"{EscapeSql(item.CatchNo)}," +
+                                  $"{item.NRQuantity}," +
+                                  $"{item.CollegeCode}," +
+                                  $"{EscapeSql(item.CollegeName)}," +
+                                  $"{EscapeSql(item.CenterCode)}," +
+                                  $"{EscapeSql(item.NodalCode)}," +
+                                  $"{EscapeSql(item.CourseName)}," +
+                                  $"{EscapeSql(item.SubjectName)}," +
+                                  $"{EscapeSql(item.ExamDate)}," +
+                                  $"{EscapeSql(item.ExamTime)}," +
+                                  $"{EscapeSql(item.Day)}," +
+                                  $"{EscapeSql(item.NRDatas)}," +
+                                  $"{item.Pages}," +
+                                  $"{EscapeSql(item.Route)}," +
+                                  $"{item.RouteSort}," +
+                                  $"{item.CenterSort.ToString(CultureInfo.InvariantCulture)}," +
+                                  $"{item.NodalSort.ToString(CultureInfo.InvariantCulture)}," +
+                                  $"{EscapeSql(item.Symbol)}," +
+                                  $"{(item.Status ? 1 : 0)}," +
+                                  $"{EscapeSql(item.District)}," +
+                                  $"{item.DistrictSort})");
+                    }
+
+                    using var cmd = connection.CreateCommand();
+                    cmd.CommandText = sb.ToString();
+                    cmd.CommandTimeout = 300;
+                    await cmd.ExecuteNonQueryAsync();
+                }
+            }
+            finally
+            {
+                if (!wasOpen) await connection.CloseAsync();
+            }
+        }
+
+        private static string EscapeSql(string? str)
+        {
+            if (str == null) return "NULL";
+            return "'" + str.Replace(@"\", @"\\").Replace("'", "''") + "'";
         }
     }
 }
