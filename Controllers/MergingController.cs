@@ -181,6 +181,55 @@ namespace Tools.Controllers
                         break;
                 }
 
+                // Rule 2 Validation: Every college in CatchList must be assigned an exam center in NodalList
+                var nodalSet = nodalLists
+                    .Select(getNodalKey)
+                    .Where(k => !string.IsNullOrEmpty(k))
+                    .ToHashSet();
+
+                var unassignedCatchItems = catchLists
+                    .Where(c => {
+                        var key = getCatchKey(c);
+                        return string.IsNullOrEmpty(key) || !nodalSet.Contains(key);
+                    })
+                    .ToList();
+
+                if (unassignedCatchItems.Any())
+                {
+                    var rule2CollegeCodes = unassignedCatchItems
+                        .Select(c => c.CollegeCode != 0 ? c.CollegeCode.ToString() : (string.IsNullOrWhiteSpace(c.CollegeName) ? "Unknown" : c.CollegeName))
+                        .Where(k => !string.IsNullOrEmpty(k))
+                        .Distinct()
+                        .ToList();
+
+                    var unassignedDetails = unassignedCatchItems
+                        .GroupBy(c => c.CollegeCode != 0 ? c.CollegeCode.ToString() : (c.CollegeName ?? "Unknown"))
+                        .Select(g => new
+                        {
+                            collegeCode = g.Key,
+                            collegeName = g.First().CollegeName ?? "",
+                            catchNos = g.Select(x => x.CatchNo).Where(x => !string.IsNullOrEmpty(x)).Distinct().ToList(),
+                            courses = g.Select(x => x.CourseName).Where(x => !string.IsNullOrEmpty(x)).Distinct().ToList(),
+                            subjects = g.Select(x => x.SubjectName).Where(x => !string.IsNullOrEmpty(x)).Distinct().ToList(),
+                            totalQuantity = g.Sum(x => x.NRQuantity),
+                            description = $"College {g.Key} ({(string.IsNullOrEmpty(g.First().CollegeName) ? "Unknown" : g.First().CollegeName)}) is not assigned to any Exam Center in Nodal List."
+                        })
+                        .ToList();
+
+                    var rule2Errors = new List<string> { $"Rule 2 Failed: {rule2CollegeCodes.Count} college(s) are not assigned to an exam center: {string.Join(", ", rule2CollegeCodes)}" };
+
+                    return BadRequest(new
+                    {
+                        message = "Rule 2 validation failed: Every college must be assigned an exam center before generating preview.",
+                        rule1Passed = true,
+                        rule2Passed = false,
+                        rule2Errors = rule2Errors,
+                        rule2CollegeCodes = rule2CollegeCodes,
+                        unassignedDetails = unassignedDetails,
+                        errors = rule2Errors
+                    });
+                }
+
                 var nodalLookup = nodalLists
                     .Where(n => !string.IsNullOrEmpty(getNodalKey(n)))
                     .ToLookup(n => getNodalKey(n));
