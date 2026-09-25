@@ -687,7 +687,7 @@ WHERE ProjectId = {0};", ProjectId);
 
             // Step 3: Fetch EnvelopeBreakages data and group by NRDataIds, then sum in-memory
             var innerEnvData = await _context.EnvelopeBreakages
-                .Where(p => p.ProjectId == ProjectId)
+                .Where(p => p.ProjectId == ProjectId && (p.Status == 1 || p.Status == null))
                 .ToListAsync();
 
             var processedInnerEnv = innerEnvData

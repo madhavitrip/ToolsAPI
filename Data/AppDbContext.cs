@@ -67,8 +67,7 @@ namespace ERPToolsAPI.Data
                 .HasIndex(e => new { e.NodalCode, e.ExtraId, e.ProjectId})
                 .IsUnique();
             modelBuilder.Entity<EnvelopeBreakage>()
-                .HasIndex(e => new { e.NrDataId, e.ProjectId })
-                .IsUnique();
+                .HasIndex(e => new { e.NrDataId, e.ProjectId, e.Status });
             modelBuilder.Entity<ExtrasConfiguration>()
                 .HasIndex(e => new { e.ExtraType, e.ProjectId })
                 .IsUnique();

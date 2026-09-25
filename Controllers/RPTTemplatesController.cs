@@ -261,7 +261,7 @@ namespace Tools.Controllers
             }
 
             // EnvBreakage JSON keys
-            var ebQuery = _context.EnvelopeBreakages.AsQueryable();
+            var ebQuery = _context.EnvelopeBreakages.Where(e => e.Status == 1 || e.Status == null).AsQueryable();
             if (projectIds.Count > 0) ebQuery = ebQuery.Where(e => projectIds.Contains(e.ProjectId));
             foreach (var json in await ebQuery.Where(e => !string.IsNullOrWhiteSpace(e.InnerEnvelope)).Select(e => e.InnerEnvelope).ToListAsync())
             {

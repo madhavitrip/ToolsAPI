@@ -1,4 +1,4 @@
-﻿using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 
 namespace Tools.Models
@@ -13,5 +13,6 @@ namespace Tools.Models
         public string InnerEnvelope {  get; set; }
         public string OuterEnvelope { get; set; }
         public int TotalEnvelope { get; set; }
+        public int Status { get; set; } = 1;
     }
 }
