@@ -220,9 +220,12 @@ namespace Tools.Controllers
         {
             public int ProjectId { get; set; }
             public int CollegeCode { get; set; }
+            public string? CollegeName { get; set; }
             public string? Gender { get; set; }
             public int CorrectCenterCode { get; set; }
             public string? CorrectCenterName { get; set; }
+            public int NodalCode { get; set; }
+            public string? NodalName { get; set; }
         }
 
         [HttpPost("resolve-college-center")]
@@ -231,24 +234,63 @@ namespace Tools.Controllers
             try
             {
                 await EnsureSchemaAsync();
-                var query = _context.NodalList
-                    .Where(x => x.ProjectId == req.ProjectId && x.CollegeCode == req.CollegeCode && x.Status);
+                var allNodals = await _context.NodalList
+                    .Where(x => x.ProjectId == req.ProjectId && x.Status)
+                    .ToListAsync();
 
-                if (!string.IsNullOrEmpty(req.Gender) && req.Gender.ToUpper() != "ALL")
+                static string GetEffectiveCollegeCode(NodalList n)
                 {
-                    query = query.Where(x => (x.Gender ?? "").ToUpper() == req.Gender.ToUpper());
+                    if (n.CollegeCode != 0) return n.CollegeCode.ToString();
+                    if (!string.IsNullOrEmpty(n.CollegeName))
+                    {
+                        var m = System.Text.RegularExpressions.Regex.Match(n.CollegeName, @"^(\d+)");
+                        if (m.Success) return m.Groups[1].Value;
+                        return n.CollegeName.Trim().ToLowerInvariant();
+                    }
+                    return $"row_{n.Id}";
                 }
 
-                var records = await query.ToListAsync();
-                if (!records.Any()) return NotFound(new { message = "No matching records found to update" });
+                var reqCodeStr = req.CollegeCode.ToString();
+                var records = allNodals.Where(n => {
+                    var cCode = GetEffectiveCollegeCode(n);
+                    if (req.CollegeCode != 0 && cCode == reqCodeStr) return true;
+                    if (req.CollegeCode != 0 && n.CollegeCode == req.CollegeCode) return true;
+                    if (!string.IsNullOrEmpty(req.CollegeName) && !string.IsNullOrEmpty(n.CollegeName) && (n.CollegeName.Trim().Equals(req.CollegeName.Trim(), StringComparison.OrdinalIgnoreCase) || (req.CollegeCode != 0 && n.CollegeName.StartsWith(reqCodeStr)))) return true;
+                    return false;
+                }).ToList();
+
+                var centerNameStr = !string.IsNullOrWhiteSpace(req.CorrectCenterName) ? req.CorrectCenterName : $"Center {req.CorrectCenterCode}";
+                var collegeNameStr = !string.IsNullOrWhiteSpace(req.CollegeName) ? req.CollegeName : (req.CollegeCode != 0 ? $"College {req.CollegeCode}" : "Unknown College");
+                var nodalCodeInt = req.NodalCode != 0 ? req.NodalCode : (req.CorrectCenterCode != 0 ? req.CorrectCenterCode : 1);
+                var nodalNameStr = !string.IsNullOrWhiteSpace(req.NodalName) ? req.NodalName : $"Nodal {nodalCodeInt}";
+
+                if (!records.Any())
+                {
+                    var newRecord = new NodalList
+                    {
+                        ProjectId = req.ProjectId,
+                        CollegeCode = req.CollegeCode,
+                        CollegeName = collegeNameStr,
+                        ExamCenterCode = req.CorrectCenterCode,
+                        ExamCenterName = centerNameStr,
+                        NodalCode = nodalCodeInt,
+                        NodalName = nodalNameStr,
+                        Gender = !string.IsNullOrWhiteSpace(req.Gender) ? req.Gender : "ALL",
+                        Status = true
+                    };
+                    _context.NodalList.Add(newRecord);
+                    await _context.SaveChangesAsync();
+                    return Ok(new { message = $"Added College {req.CollegeCode} assigned to Center {req.CorrectCenterCode}", count = 1 });
+                }
 
                 foreach (var r in records)
                 {
+                    if (r.CollegeCode == 0 && req.CollegeCode != 0) r.CollegeCode = req.CollegeCode;
                     r.ExamCenterCode = req.CorrectCenterCode;
-                    if (!string.IsNullOrEmpty(req.CorrectCenterName))
-                    {
-                        r.ExamCenterName = req.CorrectCenterName;
-                    }
+                    r.ExamCenterName = centerNameStr;
+                    if (string.IsNullOrWhiteSpace(r.CollegeName)) r.CollegeName = collegeNameStr;
+                    if (r.NodalCode == 0) r.NodalCode = nodalCodeInt;
+                    if (string.IsNullOrWhiteSpace(r.NodalName)) r.NodalName = nodalNameStr;
                 }
 
                 await _context.SaveChangesAsync();
@@ -297,6 +339,8 @@ namespace Tools.Controllers
                 return StatusCode(500, $"Internal server error: {ex.Message}");
             }
         }
+
+
 
         [HttpPost]
         public async Task<IActionResult> CreateNodalList([FromBody] NodalList newRecord)

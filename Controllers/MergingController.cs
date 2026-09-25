@@ -181,29 +181,78 @@ namespace Tools.Controllers
                         break;
                 }
 
-                // Rule 2 Validation: Every college in CatchList must be assigned an exam center in NodalList
-                var nodalSet = nodalLists
-                    .Select(getNodalKey)
-                    .Where(k => !string.IsNullOrEmpty(k))
-                    .ToHashSet();
+                static string? GetValidCenterCode(NodalList n)
+                {
+                    if (n.ExamCenterCode != 0) return n.ExamCenterCode.ToString();
+                    if (!string.IsNullOrWhiteSpace(n.ExamCenterName))
+                    {
+                        var trimmed = n.ExamCenterName.Trim();
+                        if (trimmed != "0")
+                        {
+                            var m = System.Text.RegularExpressions.Regex.Match(trimmed, @"^(\d+)");
+                            if (m.Success) return m.Groups[1].Value;
+                            return trimmed.ToLowerInvariant();
+                        }
+                    }
+                    return null;
+                }
+
+                // Rule 2 Validation: Every college in CatchList must be assigned a valid exam center in NodalList
+                var nodalLookup = nodalLists
+                    .Where(n => !string.IsNullOrEmpty(getNodalKey(n)))
+                    .ToLookup(n => getNodalKey(n));
 
                 var unassignedCatchItems = catchLists
                     .Where(c => {
                         var key = getCatchKey(c);
-                        return string.IsNullOrEmpty(key) || !nodalSet.Contains(key);
+                        if (string.IsNullOrEmpty(key)) return true;
+
+                        var nodals = nodalLookup[key].ToList();
+                        if (!nodals.Any()) return true;
+
+                        // Filter to nodals that actually have a valid non-zero/non-empty Exam Center
+                        var validNodals = nodals
+                            .Where(n => GetValidCenterCode(n) != null)
+                            .ToList();
+
+                        if (!validNodals.Any()) return true;
+
+                        // Gender coverage check
+                        bool needsMale = c.Male > 0;
+                        bool needsFemale = c.Female > 0;
+
+                        if (needsMale)
+                        {
+                            bool maleOk = validNodals.Any(n => 
+                                string.Equals(n.Gender, "MALE", StringComparison.OrdinalIgnoreCase) || 
+                                string.Equals(n.Gender, "ALL", StringComparison.OrdinalIgnoreCase) || 
+                                string.IsNullOrWhiteSpace(n.Gender));
+                            if (!maleOk) return true;
+                        }
+
+                        if (needsFemale)
+                        {
+                            bool femaleOk = validNodals.Any(n => 
+                                string.Equals(n.Gender, "FEMALE", StringComparison.OrdinalIgnoreCase) || 
+                                string.Equals(n.Gender, "ALL", StringComparison.OrdinalIgnoreCase) || 
+                                string.IsNullOrWhiteSpace(n.Gender));
+                            if (!femaleOk) return true;
+                        }
+
+                        return false;
                     })
                     .ToList();
 
                 if (unassignedCatchItems.Any())
                 {
                     var rule2CollegeCodes = unassignedCatchItems
-                        .Select(c => c.CollegeCode != 0 ? c.CollegeCode.ToString() : (string.IsNullOrWhiteSpace(c.CollegeName) ? "Unknown" : c.CollegeName))
+                        .Select(c => getCatchKey(c))
                         .Where(k => !string.IsNullOrEmpty(k))
                         .Distinct()
                         .ToList();
 
                     var unassignedDetails = unassignedCatchItems
-                        .GroupBy(c => c.CollegeCode != 0 ? c.CollegeCode.ToString() : (c.CollegeName ?? "Unknown"))
+                        .GroupBy(c => getCatchKey(c))
                         .Select(g => new
                         {
                             collegeCode = g.Key,
@@ -212,7 +261,7 @@ namespace Tools.Controllers
                             courses = g.Select(x => x.CourseName).Where(x => !string.IsNullOrEmpty(x)).Distinct().ToList(),
                             subjects = g.Select(x => x.SubjectName).Where(x => !string.IsNullOrEmpty(x)).Distinct().ToList(),
                             totalQuantity = g.Sum(x => x.NRQuantity),
-                            description = $"College {g.Key} ({(string.IsNullOrEmpty(g.First().CollegeName) ? "Unknown" : g.First().CollegeName)}) is not assigned to any Exam Center in Nodal List."
+                            description = $"College {g.Key} - {(string.IsNullOrEmpty(g.First().CollegeName) ? "Unknown" : g.First().CollegeName)} is not assigned to any Exam Center in Nodal List."
                         })
                         .ToList();
 
@@ -230,9 +279,7 @@ namespace Tools.Controllers
                     });
                 }
 
-                var nodalLookup = nodalLists
-                    .Where(n => !string.IsNullOrEmpty(getNodalKey(n)))
-                    .ToLookup(n => getNodalKey(n));
+
 
                 var tempDatas = new List<TemporaryNrDatas>(catchLists.Count);
 
@@ -536,12 +583,60 @@ namespace Tools.Controllers
                     return $"center_{n.Id}";
                 }
 
-                // Rule 1 Validation (Legacy hardcoded checks removed as they are now handled dynamically via CheckDynamicRule1)
+                // Rule 1 Validation: One college -> one center, One center -> one nodal
+                var groupedByCollegeGender = nodalLists
+                    .GroupBy(n => new { CollegeKey = GetEffectiveCollegeCode(n), Gender = n.Gender?.ToUpper() ?? "ALL" })
+                    .ToList();
+
+                var multiCenterCollegesGroup = groupedByCollegeGender
+                    .Where(g => g.Select(x => GetEffectiveCenterCode(x)).Distinct().Count() > 1)
+                    .ToList();
+
+                var multiNodalCentersGroup = nodalLists
+                    .GroupBy(n => GetEffectiveCenterCode(n))
+                    .Where(g => g.Select(x => x.NodalCode).Distinct().Count() > 1)
+                    .ToList();
+
                 var rule1Errors = new List<string>();
-                var multiCenterDetails = new List<object>();
-                var multiNodalDetails = new List<object>();
-                var multiCenterColleges = new List<string>();
-                var multiNodalCenters = new List<string>();
+                if (multiCenterCollegesGroup.Any())
+                {
+                    var msg = string.Join("; ", multiCenterCollegesGroup.Select(g => $"College {g.Key.CollegeKey} ({g.Key.Gender}) assigned to {g.Select(x => GetEffectiveCenterCode(x)).Distinct().Count()} centers"));
+                    rule1Errors.Add($"Rule 1 Failed: Multiple exam centers for same college/gender - {msg}");
+                }
+                if (multiNodalCentersGroup.Any())
+                {
+                    var msg = string.Join("; ", multiNodalCentersGroup.Select(g => $"Center {g.Key} assigned to {g.Select(x => x.NodalCode).Distinct().Count()} nodal codes"));
+                    rule1Errors.Add($"Rule 1 Failed: Multiple nodal codes for same exam center - {msg}");
+                }
+
+                var multiCenterDetails = multiCenterCollegesGroup.Select(g => new
+                {
+                    collegeCode = g.Key.CollegeKey,
+                    gender = g.Key.Gender,
+                    collegeNames = g.Select(x => x.CollegeName).Where(x => !string.IsNullOrEmpty(x)).Distinct().ToList(),
+                    centerCount = g.Select(x => GetEffectiveCenterCode(x)).Distinct().Count(),
+                    centerCodes = g.Select(x => GetEffectiveCenterCode(x)).Distinct().ToList(),
+                    centerNames = g.Select(x => x.ExamCenterName).Where(x => !string.IsNullOrEmpty(x)).Distinct().ToList(),
+                    nodalCodes = g.Select(x => x.NodalCode).Distinct().ToList(),
+                    nodalNames = g.Select(x => x.NodalName).Where(x => !string.IsNullOrEmpty(x)).Distinct().ToList(),
+                    records = g.Select(x => new { x.Id, x.CollegeCode, x.CollegeName, x.ExamCenterCode, x.ExamCenterName, x.NodalCode, x.NodalName, x.Gender }).ToList(),
+                    description = $"College {g.Key.CollegeKey} ({g.Key.Gender}) assigned to {g.Select(x => GetEffectiveCenterCode(x)).Distinct().Count()} centers: {string.Join(", ", g.Select(x => GetEffectiveCenterCode(x)).Distinct())}"
+                }).Cast<object>().ToList();
+
+                var multiNodalDetails = multiNodalCentersGroup.Select(g => new
+                {
+                    centerCode = g.Key,
+                    centerNames = g.Select(x => x.ExamCenterName).Where(x => !string.IsNullOrEmpty(x)).Distinct().ToList(),
+                    nodalCount = g.Select(x => x.NodalCode).Distinct().Count(),
+                    nodalCodes = g.Select(x => x.NodalCode).Distinct().ToList(),
+                    nodalNames = g.Select(x => x.NodalName).Where(x => !string.IsNullOrEmpty(x)).Distinct().ToList(),
+                    collegeCodes = g.Select(x => GetEffectiveCollegeCode(x)).Distinct().ToList(),
+                    records = g.Select(x => new { x.Id, x.CollegeCode, x.CollegeName, x.ExamCenterCode, x.ExamCenterName, x.NodalCode, x.NodalName, x.Gender }).ToList(),
+                    description = $"Center {g.Key} assigned to {g.Select(x => x.NodalCode).Distinct().Count()} nodal codes: {string.Join(", ", g.Select(x => x.NodalCode).Distinct())}"
+                }).Cast<object>().ToList();
+
+                var multiCenterColleges = multiCenterCollegesGroup.Select(g => g.Key.CollegeKey).Distinct().ToList();
+                var multiNodalCenters = multiNodalCentersGroup.Select(g => g.Key).Distinct().ToList();
 
                 // Rule 2 Validation
                 var mode = (mergeBy ?? "CollegeCode").Trim();
@@ -573,26 +668,74 @@ namespace Tools.Controllers
                         break;
                 }
 
-                var nodalSet = nodalLists
-                    .Select(getNodalKey)
-                    .Where(k => !string.IsNullOrEmpty(k))
-                    .ToHashSet();
+                static string? GetValidCenterCode(NodalList n)
+                {
+                    if (n.ExamCenterCode != 0) return n.ExamCenterCode.ToString();
+                    if (!string.IsNullOrWhiteSpace(n.ExamCenterName))
+                    {
+                        var trimmed = n.ExamCenterName.Trim();
+                        if (trimmed != "0")
+                        {
+                            var m = System.Text.RegularExpressions.Regex.Match(trimmed, @"^(\d+)");
+                            if (m.Success) return m.Groups[1].Value;
+                            return trimmed.ToLowerInvariant();
+                        }
+                    }
+                    return null;
+                }
+
+                // Rule 2 Validation
+                var nodalLookup = nodalLists
+                    .Where(n => !string.IsNullOrEmpty(getNodalKey(n)))
+                    .ToLookup(n => getNodalKey(n));
 
                 var unassignedCatchItems = catchLists
                     .Where(c => {
                         var key = getCatchKey(c);
-                        return string.IsNullOrEmpty(key) || !nodalSet.Contains(key);
+                        if (string.IsNullOrEmpty(key)) return true;
+
+                        var nodals = nodalLookup[key].ToList();
+                        if (!nodals.Any()) return true;
+
+                        var validNodals = nodals
+                            .Where(n => GetValidCenterCode(n) != null)
+                            .ToList();
+
+                        if (!validNodals.Any()) return true;
+
+                        bool needsMale = c.Male > 0;
+                        bool needsFemale = c.Female > 0;
+
+                        if (needsMale)
+                        {
+                            bool maleOk = validNodals.Any(n => 
+                                string.Equals(n.Gender, "MALE", StringComparison.OrdinalIgnoreCase) || 
+                                string.Equals(n.Gender, "ALL", StringComparison.OrdinalIgnoreCase) || 
+                                string.IsNullOrWhiteSpace(n.Gender));
+                            if (!maleOk) return true;
+                        }
+
+                        if (needsFemale)
+                        {
+                            bool femaleOk = validNodals.Any(n => 
+                                string.Equals(n.Gender, "FEMALE", StringComparison.OrdinalIgnoreCase) || 
+                                string.Equals(n.Gender, "ALL", StringComparison.OrdinalIgnoreCase) || 
+                                string.IsNullOrWhiteSpace(n.Gender));
+                            if (!femaleOk) return true;
+                        }
+
+                        return false;
                     })
                     .ToList();
 
                 var rule2CollegeCodes = unassignedCatchItems
-                    .Select(c => c.CollegeCode != 0 ? c.CollegeCode.ToString() : (string.IsNullOrWhiteSpace(c.CollegeName) ? "Unknown" : c.CollegeName))
+                    .Select(c => getCatchKey(c))
                     .Where(k => !string.IsNullOrEmpty(k))
                     .Distinct()
                     .ToList();
 
                 var unassignedDetails = unassignedCatchItems
-                    .GroupBy(c => c.CollegeCode != 0 ? c.CollegeCode.ToString() : (c.CollegeName ?? "Unknown"))
+                    .GroupBy(c => getCatchKey(c))
                     .Select(g => new
                     {
                         collegeCode = g.Key,
@@ -601,7 +744,7 @@ namespace Tools.Controllers
                         courses = g.Select(x => x.CourseName).Where(x => !string.IsNullOrEmpty(x)).Distinct().ToList(),
                         subjects = g.Select(x => x.SubjectName).Where(x => !string.IsNullOrEmpty(x)).Distinct().ToList(),
                         totalQuantity = g.Sum(x => x.NRQuantity),
-                        description = $"College {g.Key} ({(string.IsNullOrEmpty(g.First().CollegeName) ? "Unknown" : g.First().CollegeName)}) is not assigned to any Exam Center in Nodal List."
+                        description = $"College {g.Key} - {(string.IsNullOrEmpty(g.First().CollegeName) ? "Unknown" : g.First().CollegeName)} is not assigned to any Exam Center in Nodal List."
                     })
                     .ToList();
 
@@ -609,7 +752,7 @@ namespace Tools.Controllers
                     ? new List<string> { $"Rule 2 Failed: {rule2CollegeCodes.Count} college(s) are not assigned to an exam center: {string.Join(", ", rule2CollegeCodes)}" }
                     : new List<string>();
 
-                bool rule1Passed = !dynamicConflicts.Any();
+                bool rule1Passed = !rule1Errors.Any() && !dynamicConflicts.Any();
                 bool rule2Passed = !unassignedCatchItems.Any();
 
                 return Ok(new
