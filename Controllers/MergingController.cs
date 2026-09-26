@@ -648,31 +648,9 @@ namespace Tools.Controllers
                 await _context.ConflictingFields.Where(c => c.ProjectId == projectId && c.Rule == 1).ExecuteDeleteAsync();
                 if (newConflicts.Any())
                 {
-                    var match = existingConflicts.FirstOrDefault(e => e.UniqueField == nc.UniqueField);
-                    if (match != null)
-                    {
-                        match.ConflictingField = nc.ConflictingField;
-                        match.Status = 1;
-                    }
-                    else
-                    {
-                        _context.ConflictingFields.Add(nc);
-                    }
+                    _context.ConflictingFields.AddRange(newConflicts);
+                    await _context.SaveChangesAsync();
                 }
-
-                var newUniqueKeys = new HashSet<string>(newConflicts.Select(nc => nc.UniqueField));
-                foreach (var ec in existingConflicts)
-                {
-                    if (ec.UniqueField != null && !ec.UniqueField.StartsWith("Rule1_") && !ec.UniqueField.StartsWith("Rule2_"))
-                    {
-                        if (!newUniqueKeys.Contains(ec.UniqueField) && ec.Status == 1)
-                        {
-                            ec.Status = 0; // Soft resolve
-                        }
-                    }
-                }
-
-                await _context.SaveChangesAsync();
 
                 return Ok(new { message = "Dynamic Rule 1 validated", conflicts = newConflicts.Count });
             }
@@ -1010,10 +988,6 @@ namespace Tools.Controllers
                 // Sync all calculated Rule 1 & Rule 2 conflicts to ConflictingFields table in DB (soft resolving fixed ones by setting Status = 0)
                 await SyncConflictsToDbAsync(projectId, multiCenterDetails, multiNodalDetails, unassignedDetails);
 
-                var dynamicConflicts = await _context.ConflictingFields
-                    .AsNoTracking()
-                    .Where(c => c.ProjectId == projectId && c.Status == 1 && !c.UniqueField.StartsWith("Rule1_") && !c.UniqueField.StartsWith("Rule2_"))
-                    .ToListAsync();
 
                 bool rule1Passed = !rule1Errors.Any() && !dynamicConflicts.Any();
 
