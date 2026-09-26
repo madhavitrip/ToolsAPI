@@ -278,7 +278,7 @@ namespace Tools.Controllers
                             CollegeCode = catchItem.CollegeCode,
                             CollegeName = catchItem.CollegeName,
                             CenterCode = centerCodeStr,
-                            NodalCode = centerCodeStr,
+                            NodalCode = "", // Not assigned to any nodal center!
                             CourseName = catchItem.CourseName,
                             SubjectName = catchItem.SubjectName,
                             ExamDate = catchItem.ExamDate,
@@ -333,62 +333,28 @@ namespace Tools.Controllers
                 await BulkInsertTemporaryNrDatasAsync(tempDatas);
 
                 // Rule 2 Validation: Check if every college is assigned an exam center and nodal
-                var unassignedCatchItems = catchLists
-                    .Where(c => {
-                        var key = getCatchKey(c);
-                        var nodals = !string.IsNullOrEmpty(key) ? nodalLookup[key].ToList() : new List<NodalList>();
+                Func<TemporaryNrDatas, string> getTempKey = t => {
+                    if (t.CollegeCode != 0) return t.CollegeCode.ToString();
+                    var code = ExtractCodeNumber(t.CollegeName);
+                    if (!string.IsNullOrEmpty(code) && code != "0") return code;
+                    if (!string.IsNullOrEmpty(t.CenterCode) && t.CenterCode != "0") return t.CenterCode;
+                    return "Unknown";
+                };
 
-                        if (!nodals.Any() && allCatchCollegeCodesZero)
+                var unassignedCatchItems = tempDatas
+                    .Where(t => {
+                        var key = getTempKey(t);
+                        if (key == "Unknown") return false;
+
+                        bool hasCenter = !string.IsNullOrWhiteSpace(t.CenterCode) && t.CenterCode != "0";
+                        bool hasNodal = !string.IsNullOrWhiteSpace(t.NodalCode) && t.NodalCode != "0";
+
+                        if (hasCenter && hasNodal)
                         {
-                            var catchCenterKey = c.CenterCode != 0 ? c.CenterCode.ToString() : ExtractCodeNumber(c.CenterName);
-                            if (!string.IsNullOrEmpty(catchCenterKey))
-                            {
-                                var centerNodals = nodalLists.Where(n => 
-                                    GetEffectiveCenterCode(n) == catchCenterKey || 
-                                    n.ExamCenterCode.ToString() == catchCenterKey || 
-                                    GetValidCenterCode(n) == catchCenterKey ||
-                                    GetEffectiveCollegeCode(n) == catchCenterKey
-                                ).ToList();
-                                if (centerNodals.Any())
-                                {
-                                    nodals = centerNodals;
-                                }
-                            }
+                            return false; // Assigned in TemporaryNrDatas!
                         }
 
-                        if (!nodals.Any())
-                        {
-                            return true;
-                        }
-
-                        var validNodals = nodals
-                            .Where(n => GetValidCenterCode(n) != null || GetValidNodalCode(n) != null || n.ExamCenterCode != 0 || n.NodalCode != 0)
-                            .ToList();
-
-                        if (!validNodals.Any()) return true;
-
-                        bool needsMale = c.Male > 0;
-                        bool needsFemale = c.Female > 0;
-
-                        if (needsMale)
-                        {
-                            bool maleOk = validNodals.Any(n => 
-                                string.Equals(n.Gender, "MALE", StringComparison.OrdinalIgnoreCase) || 
-                                string.Equals(n.Gender, "ALL", StringComparison.OrdinalIgnoreCase) || 
-                                string.IsNullOrWhiteSpace(n.Gender));
-                            if (!maleOk) return true;
-                        }
-
-                        if (needsFemale)
-                        {
-                            bool femaleOk = validNodals.Any(n => 
-                                string.Equals(n.Gender, "FEMALE", StringComparison.OrdinalIgnoreCase) || 
-                                string.Equals(n.Gender, "ALL", StringComparison.OrdinalIgnoreCase) || 
-                                string.IsNullOrWhiteSpace(n.Gender));
-                            if (!femaleOk) return true;
-                        }
-
-                        return false;
+                        return true; // Missing CenterCode or NodalCode
                     })
                     .ToList();
 
@@ -397,46 +363,49 @@ namespace Tools.Controllers
                 if (!rule2Passed)
                 {
                     var rule2CollegeCodes = unassignedCatchItems
-                        .Select(c => {
-                            var k = getCatchKey(c);
-                            if (!string.IsNullOrEmpty(k) && k != "0") return k;
-                            return c.CenterCode != 0 ? c.CenterCode.ToString() : (ExtractCodeNumber(c.CenterName) ?? k);
+                        .Select(t => {
+                            var k = getTempKey(t);
+                            if (!string.IsNullOrEmpty(k) && k != "Unknown") return k;
+                            return !string.IsNullOrEmpty(t.CenterCode) && t.CenterCode != "0" ? t.CenterCode : k;
                         })
-                        .Where(k => !string.IsNullOrEmpty(k) && k != "0")
+                        .Where(k => !string.IsNullOrEmpty(k) && k != "Unknown")
                         .Distinct()
                         .ToList();
 
                     var unassignedDetails = unassignedCatchItems
-                        .GroupBy(c => getCatchKey(c))
+                        .GroupBy(t => getTempKey(t))
                         .Select(g => {
                             var firstItem = g.First();
                             var keyVal = g.Key ?? "";
-                            var cKey = (keyVal == "0" || string.IsNullOrEmpty(keyVal)) 
-                                ? (firstItem.CenterCode != 0 ? firstItem.CenterCode.ToString() : (ExtractCodeNumber(firstItem.CenterName) ?? "")) 
+                            var rawKey = (keyVal == "0" || string.IsNullOrEmpty(keyVal)) 
+                                ? (!string.IsNullOrEmpty(firstItem.CenterCode) && firstItem.CenterCode != "0" ? firstItem.CenterCode : (ExtractCodeNumber(firstItem.CollegeName) ?? "")) 
                                 : keyVal;
-                            var cName = !string.IsNullOrEmpty(firstItem.CollegeName) ? firstItem.CollegeName : (firstItem.CenterName ?? "");
+                            var cKey = string.IsNullOrEmpty(rawKey) || rawKey == "0" ? "Unknown" : rawKey;
+                            var cName = !string.IsNullOrEmpty(firstItem.CollegeName) ? firstItem.CollegeName : (!string.IsNullOrEmpty(firstItem.CenterCode) && firstItem.CenterCode != "0" ? $"Center {firstItem.CenterCode}" : "Unassigned Catch Record");
                             
                             string displayCollege;
-                            if (string.IsNullOrEmpty(cName))
+                            if (cKey == "Unknown" || string.IsNullOrEmpty(cKey))
                             {
-                                displayCollege = !string.IsNullOrEmpty(cKey) ? $"Center {cKey}" : "Unassigned Record";
+                                displayCollege = "Unassigned Catch Record (Missing College/Center Code)";
                             }
-                            else if (!string.IsNullOrEmpty(cKey) && cName.ToLowerInvariant().Contains(cKey.ToLowerInvariant()))
+                            else if (string.IsNullOrEmpty(cName))
+                            {
+                                displayCollege = $"Center {cKey}";
+                            }
+                            else if (cName.ToLowerInvariant().Contains(cKey.ToLowerInvariant()))
                             {
                                 displayCollege = cName;
                             }
-                            else if (!string.IsNullOrEmpty(cKey) && cKey.ToLowerInvariant().Contains(cName.ToLowerInvariant()))
+                            else if (cKey.ToLowerInvariant().Contains(cName.ToLowerInvariant()))
                             {
                                 displayCollege = cKey;
                             }
-                            else if (!string.IsNullOrEmpty(cKey))
+                            else
                             {
                                 displayCollege = $"{cKey} - {cName}";
                             }
-                            else
-                            {
-                                displayCollege = cName;
-                            }
+                            bool isCenterItem = displayCollege.StartsWith("Center ", StringComparison.OrdinalIgnoreCase) || firstItem.CollegeCode == 0;
+                            string targetCenterType = isCenterItem ? "Nodal Center" : "Exam Center";
                             return new
                             {
                                 collegeCode = cKey,
@@ -444,10 +413,10 @@ namespace Tools.Controllers
                                 catchNos = g.Select(x => x.CatchNo).Where(x => !string.IsNullOrEmpty(x)).Distinct().ToList(),
                                 courses = g.Select(x => x.CourseName).Where(x => !string.IsNullOrEmpty(x)).Distinct().ToList(),
                                 subjects = g.Select(x => x.SubjectName).Where(x => !string.IsNullOrEmpty(x)).Distinct().ToList(),
-                                centerCodes = g.Select(x => x.CenterCode != 0 ? x.CenterCode.ToString() : ExtractCodeNumber(x.CenterName)).Where(x => !string.IsNullOrEmpty(x) && x != "0").Distinct().ToList(),
-                                centerNames = g.Select(x => !string.IsNullOrEmpty(x.CenterName) ? x.CenterName : (x.CenterCode != 0 ? $"Center {x.CenterCode}" : "")).Where(x => !string.IsNullOrEmpty(x)).Distinct().ToList(),
+                                centerCodes = g.Select(x => x.CenterCode).Where(x => !string.IsNullOrEmpty(x) && x != "0").Distinct().ToList(),
+                                centerNames = g.Select(x => !string.IsNullOrEmpty(x.CenterCode) ? $"Center {x.CenterCode}" : "").Where(x => !string.IsNullOrEmpty(x)).Distinct().ToList(),
                                 totalQuantity = g.Sum(x => x.NRQuantity),
-                                description = $"{displayCollege} is not assigned to any Exam Center in Nodal List."
+                                description = $"{displayCollege} is not assigned to any {targetCenterType} in Nodal List."
                             };
                         })
                         .ToList();
@@ -456,7 +425,7 @@ namespace Tools.Controllers
 
                     return Ok(new
                     {
-                        message = "Data merged into temporary staging with Rule 2 warnings. Every college must be assigned an exam center before pushing to main NR Data.",
+                        // message = "Data merged into temporary staging with Rule 2 warnings. Every college must be assigned an exam center before pushing to main NR Data.",
                         count = tempDatas.Count,
                         rule1Passed = true,
                         rule2Passed = false,
@@ -861,7 +830,10 @@ namespace Tools.Controllers
                             var matchedByCollege = nodalLists.Where(n => 
                                 GetEffectiveCollegeCode(n) == collegeKey || 
                                 n.CollegeCode.ToString() == collegeKey ||
-                                (n.CollegeName ?? "").Trim().ToLowerInvariant() == collegeKey.ToLowerInvariant()
+                                (n.CollegeName ?? "").Trim().ToLowerInvariant() == collegeKey.ToLowerInvariant() ||
+                                GetEffectiveCenterCode(n) == collegeKey ||
+                                n.ExamCenterCode.ToString() == collegeKey ||
+                                n.NodalCode.ToString() == collegeKey
                             ).ToList();
 
                             if (matchedByCollege.Any()) return matchedByCollege;
@@ -879,7 +851,8 @@ namespace Tools.Controllers
                                 n.ExamCenterCode.ToString() == catchCenterKey || 
                                 GetValidCenterCode(n) == catchCenterKey ||
                                 GetEffectiveCollegeCode(n) == catchCenterKey ||
-                                n.CollegeCode.ToString() == catchCenterKey
+                                n.CollegeCode.ToString() == catchCenterKey ||
+                                n.NodalCode.ToString() == catchCenterKey
                             ).ToList();
 
                             if (matchedByCenter.Any()) return matchedByCenter;
@@ -898,20 +871,31 @@ namespace Tools.Controllers
 
                     var unassignedTempItems = tempDatas
                         .Where(t => {
+                            var key = getTempKey(t);
+                            // Exclude records with missing College & Center Code ("Unknown" key) from Rule 2 nodal center assignment validation
+                            if (key == "Unknown")
+                            {
+                                return false;
+                            }
+
+                            // Verify if a matching active NodalList entry exists in DB table
                             var nodals = FindMatchingNodals(t);
 
                             if (!nodals.Any())
                             {
-                                return true;
+                                return true; // Unassigned! (e.g. Center 222 deleted from NodalList)
                             }
 
                             var validNodals = nodals
                                 .Where(n => GetValidCenterCode(n) != null || GetValidNodalCode(n) != null || n.ExamCenterCode != 0 || n.NodalCode != 0)
                                 .ToList();
 
-                            if (!validNodals.Any()) return true;
+                            if (!validNodals.Any())
+                            {
+                                return true; // Unassigned!
+                            }
 
-                            return false;
+                            return false; // Assigned and valid in NodalList!
                         })
                         .ToList();
 
@@ -1095,7 +1079,7 @@ namespace Tools.Controllers
                     using var doc = JsonDocument.Parse(json);
                     var root = doc.RootElement;
                     string cCode = root.TryGetProperty("collegeCode", out var cc) ? cc.GetString() ?? "" : "";
-                    if (string.IsNullOrEmpty(cCode) || cCode == "0") cCode = "Unknown";
+                    if (string.IsNullOrEmpty(cCode) || cCode == "0" || cCode == "Unknown") continue;
 
                     string uniqueKey = $"Rule2_Unassigned_{cCode}";
                     activeUniqueKeys.Add(uniqueKey);
@@ -1393,7 +1377,14 @@ namespace Tools.Controllers
 
                 // Rule 2 Validation Check: Ensure every college has an assigned exam center AND every exam center is assigned to a nodal code
                 var unassignedTempRecords = tempDatas
-                    .Where(x => string.IsNullOrWhiteSpace(x.CenterCode) || x.CenterCode == "0" || string.IsNullOrWhiteSpace(x.NodalCode) || x.NodalCode == "0")
+                    .Where(x => {
+                        bool hasCollegeCode = x.CollegeCode != 0 || ExtractCodeNumber(x.CollegeName) != null;
+                        bool hasCenterCode = !string.IsNullOrWhiteSpace(x.CenterCode) && x.CenterCode != "0";
+                        // Ignore records with missing required college and center codes
+                        if (!hasCollegeCode && !hasCenterCode) return false;
+
+                        return string.IsNullOrWhiteSpace(x.CenterCode) || x.CenterCode == "0" || string.IsNullOrWhiteSpace(x.NodalCode) || x.NodalCode == "0";
+                    })
                     .ToList();
 
                 if (unassignedTempRecords.Any())
