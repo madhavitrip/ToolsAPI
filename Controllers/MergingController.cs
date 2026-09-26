@@ -743,6 +743,8 @@ namespace Tools.Controllers
                         catchNos = g.Select(x => x.CatchNo).Where(x => !string.IsNullOrEmpty(x)).Distinct().ToList(),
                         courses = g.Select(x => x.CourseName).Where(x => !string.IsNullOrEmpty(x)).Distinct().ToList(),
                         subjects = g.Select(x => x.SubjectName).Where(x => !string.IsNullOrEmpty(x)).Distinct().ToList(),
+                        centerCodes = g.Select(x => x.CenterCode).Where(x => x != 0).Distinct().ToList(),
+                        centerNames = g.Select(x => x.CenterName).Where(x => !string.IsNullOrEmpty(x)).Distinct().ToList(),
                         totalQuantity = g.Sum(x => x.NRQuantity),
                         description = $"College {g.Key} - {(string.IsNullOrEmpty(g.First().CollegeName) ? "Unknown" : g.First().CollegeName)} is not assigned to any Exam Center in Nodal List."
                     })
