@@ -17,6 +17,7 @@ namespace Tools.Models
         public string? CenterName { get; set; }
         public int CollegeCode { get; set; }
         public string? PaperCode { get; set; }
+        [Required]
         public int NRQuantity { get; set; }
         [Required]
         public string? CatchNo { get; set; }

@@ -1,4 +1,4 @@
-﻿namespace Tools.Models
+namespace Tools.Models
 {
     public class ConflictingFields
     {
@@ -8,5 +8,6 @@
         public string UniqueField { get; set; }
         public string ConflictingField { get; set; }
         public int Status { get; set; }
+        public int? Rule { get; set; }
     }
 }

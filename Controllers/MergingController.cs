@@ -580,7 +580,8 @@ namespace Tools.Controllers
                                 ProjectId = projectId,
                                 UniqueField = JsonSerializer.Serialize(new { fields = req.Level1, value = g.Key }),
                                 ConflictingField = JsonSerializer.Serialize(new { fields = req.Level2, values = l2Keys }),
-                                Status = 1
+                                Status = 1,
+                                Rule = 1
                             });
                         }
                     }
@@ -601,13 +602,14 @@ namespace Tools.Controllers
                                 ProjectId = projectId,
                                 UniqueField = JsonSerializer.Serialize(new { fields = req.Level2, value = g.Key }),
                                 ConflictingField = JsonSerializer.Serialize(new { fields = req.Level3, values = l3Keys }),
-                                Status = 1
+                                Status = 1,
+                                Rule = 1
                             });
                         }
                     }
                 }
 
-                await _context.ConflictingFields.Where(c => c.ProjectId == projectId).ExecuteDeleteAsync();
+                await _context.ConflictingFields.Where(c => c.ProjectId == projectId && c.Rule == 1).ExecuteDeleteAsync();
                 if (newConflicts.Any())
                 {
                     _context.ConflictingFields.AddRange(newConflicts);
@@ -627,7 +629,7 @@ namespace Tools.Controllers
         {
             try
             {
-                await _context.ConflictingFields.Where(c => c.ProjectId == projectId).ExecuteDeleteAsync();
+                await _context.ConflictingFields.Where(c => c.ProjectId == projectId && c.Rule == 1).ExecuteDeleteAsync();
                 return Ok(new { message = "Dynamic conflicts cleared successfully" });
             }
             catch (Exception ex)
@@ -643,7 +645,7 @@ namespace Tools.Controllers
             {
                 var dynamicConflicts = await _context.ConflictingFields
                     .AsNoTracking()
-                    .Where(c => c.ProjectId == projectId && c.Status == 1)
+                    .Where(c => c.ProjectId == projectId && c.Status == 1 && c.Rule == 1)
                     .ToListAsync();
 
                 var catchLists = await _context.CatchList
