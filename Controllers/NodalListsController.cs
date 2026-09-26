@@ -293,6 +293,15 @@ namespace Tools.Controllers
                     if (string.IsNullOrWhiteSpace(r.NodalName)) r.NodalName = nodalNameStr;
                 }
 
+                var conflictsToResolve = await _context.ConflictingFields
+                    .Where(c => c.ProjectId == req.ProjectId && c.Status == 1 &&
+                               (c.UniqueField.Contains($"Rule1_MultiCenter_{reqCodeStr}") || c.UniqueField.Contains($"Rule2_Unassigned_{reqCodeStr}") || c.UniqueField.Contains(reqCodeStr)))
+                    .ToListAsync();
+                foreach (var conf in conflictsToResolve)
+                {
+                    conf.Status = 0;
+                }
+
                 await _context.SaveChangesAsync();
                 return Ok(new { message = $"Updated {records.Count} record(s) to Center {req.CorrectCenterCode}", count = records.Count });
             }
@@ -329,6 +338,16 @@ namespace Tools.Controllers
                     {
                         r.NodalName = req.CorrectNodalName;
                     }
+                }
+
+                var centerCodeStr = req.CenterCode.ToString();
+                var nodalsToResolve = await _context.ConflictingFields
+                    .Where(c => c.ProjectId == req.ProjectId && c.Status == 1 &&
+                               (c.UniqueField.Contains($"Rule1_MultiNodal_{centerCodeStr}") || c.UniqueField.Contains(centerCodeStr)))
+                    .ToListAsync();
+                foreach (var conf in nodalsToResolve)
+                {
+                    conf.Status = 0;
                 }
 
                 await _context.SaveChangesAsync();
