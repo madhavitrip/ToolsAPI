@@ -279,18 +279,39 @@ namespace Tools.Controllers
                         Status = true
                     };
                     _context.NodalList.Add(newRecord);
-                    await _context.SaveChangesAsync();
-                    return Ok(new { message = $"Added College {req.CollegeCode} assigned to Center {req.CorrectCenterCode}", count = 1 });
+                }
+                else
+                {
+                    foreach (var r in records)
+                    {
+                        if (r.CollegeCode == 0 && req.CollegeCode != 0) r.CollegeCode = req.CollegeCode;
+                        r.ExamCenterCode = req.CorrectCenterCode;
+                        r.ExamCenterName = centerNameStr;
+                        if (string.IsNullOrWhiteSpace(r.CollegeName)) r.CollegeName = collegeNameStr;
+                        if (r.NodalCode == 0) r.NodalCode = nodalCodeInt;
+                        if (string.IsNullOrWhiteSpace(r.NodalName)) r.NodalName = nodalNameStr;
+                    }
                 }
 
-                foreach (var r in records)
+                // Update TemporaryNrDatas staging table for matching records
+                var tempDatasToUpdate = await _context.TemporaryNrDatas
+                    .Where(x => x.ProjectId == req.ProjectId)
+                    .ToListAsync();
+
+                foreach (var t in tempDatasToUpdate)
                 {
-                    if (r.CollegeCode == 0 && req.CollegeCode != 0) r.CollegeCode = req.CollegeCode;
-                    r.ExamCenterCode = req.CorrectCenterCode;
-                    r.ExamCenterName = centerNameStr;
-                    if (string.IsNullOrWhiteSpace(r.CollegeName)) r.CollegeName = collegeNameStr;
-                    if (r.NodalCode == 0) r.NodalCode = nodalCodeInt;
-                    if (string.IsNullOrWhiteSpace(r.NodalName)) r.NodalName = nodalNameStr;
+                    bool match = (req.CollegeCode != 0 && t.CollegeCode == req.CollegeCode) ||
+                                 (!string.IsNullOrWhiteSpace(req.CollegeName) && !string.IsNullOrWhiteSpace(t.CollegeName) && t.CollegeName.Trim().Equals(req.CollegeName.Trim(), StringComparison.OrdinalIgnoreCase)) ||
+                                 (!string.IsNullOrWhiteSpace(t.CenterCode) && t.CenterCode == reqCodeStr) ||
+                                 (!string.IsNullOrWhiteSpace(t.CollegeName) && t.CollegeName.Contains(reqCodeStr));
+
+                    if (match)
+                    {
+                        t.CenterCode = req.CorrectCenterCode.ToString();
+                        t.NodalCode = nodalCodeInt.ToString();
+                        if (t.CollegeCode == 0 && req.CollegeCode != 0) t.CollegeCode = req.CollegeCode;
+                        if (string.IsNullOrWhiteSpace(t.CollegeName) && !string.IsNullOrWhiteSpace(collegeNameStr)) t.CollegeName = collegeNameStr;
+                    }
                 }
 
                 var conflictsToResolve = await _context.ConflictingFields
@@ -303,7 +324,7 @@ namespace Tools.Controllers
                 }
 
                 await _context.SaveChangesAsync();
-                return Ok(new { message = $"Updated {records.Count} record(s) to Center {req.CorrectCenterCode}", count = records.Count });
+                return Ok(new { message = $"Updated records to Center {req.CorrectCenterCode} & Nodal {nodalCodeInt} in Nodal List and Temporary Staging", count = records.Count });
             }
             catch (Exception ex)
             {
@@ -341,6 +362,20 @@ namespace Tools.Controllers
                 }
 
                 var centerCodeStr = req.CenterCode.ToString();
+
+                // Update TemporaryNrDatas staging table for matching records
+                var tempDatasToUpdate = await _context.TemporaryNrDatas
+                    .Where(x => x.ProjectId == req.ProjectId)
+                    .ToListAsync();
+
+                foreach (var t in tempDatasToUpdate)
+                {
+                    if (t.CenterCode == centerCodeStr)
+                    {
+                        t.NodalCode = req.CorrectNodalCode.ToString();
+                    }
+                }
+
                 var nodalsToResolve = await _context.ConflictingFields
                     .Where(c => c.ProjectId == req.ProjectId && c.Status == 1 &&
                                (c.UniqueField.Contains($"Rule1_MultiNodal_{centerCodeStr}") || c.UniqueField.Contains(centerCodeStr)))
@@ -351,7 +386,7 @@ namespace Tools.Controllers
                 }
 
                 await _context.SaveChangesAsync();
-                return Ok(new { message = $"Updated {records.Count} record(s) to Nodal {req.CorrectNodalCode}", count = records.Count });
+                return Ok(new { message = $"Updated records to Nodal {req.CorrectNodalCode} in Nodal List and Temporary Staging", count = records.Count });
             }
             catch (Exception ex)
             {
