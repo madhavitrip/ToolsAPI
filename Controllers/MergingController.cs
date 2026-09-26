@@ -21,6 +21,7 @@ namespace Tools.Controllers
         public int ConflictId { get; set; }
         public string TargetField { get; set; } = "";
         public string TargetValue { get; set; } = "";
+        public string TargetName { get; set; } = "";
         public string MatchField { get; set; } = "";
         public string MatchValue { get; set; } = "";
     }
@@ -842,6 +843,29 @@ namespace Tools.Controllers
                 }
 
                 bool updatedAny = false;
+                
+                // Calculate names outside the loop so we look at the original un-modified list
+                string resolvedNodalName = dto.TargetName;
+                if (string.IsNullOrWhiteSpace(resolvedNodalName) && targetF.Contains("nodal") && parsedTargetInt > 0)
+                {
+                    var matching = nodalLists.FirstOrDefault(x => x.NodalCode == parsedTargetInt && !string.IsNullOrWhiteSpace(x.NodalName));
+                    if (matching != null) resolvedNodalName = matching.NodalName;
+                }
+
+                string resolvedCenterName = dto.TargetName;
+                if (string.IsNullOrWhiteSpace(resolvedCenterName) && (targetF.Contains("center") || targetF.Contains("examcenter")) && parsedTargetInt > 0)
+                {
+                    var matching = nodalLists.FirstOrDefault(x => x.ExamCenterCode == parsedTargetInt && !string.IsNullOrWhiteSpace(x.ExamCenterName));
+                    if (matching != null) resolvedCenterName = matching.ExamCenterName;
+                }
+
+                string resolvedCollegeName = dto.TargetName;
+                if (string.IsNullOrWhiteSpace(resolvedCollegeName) && targetF.Contains("college") && parsedTargetInt > 0)
+                {
+                    var matching = nodalLists.FirstOrDefault(x => x.CollegeCode == parsedTargetInt && !string.IsNullOrWhiteSpace(x.CollegeName));
+                    if (matching != null) resolvedCollegeName = matching.CollegeName;
+                }
+
                 foreach (var n in nodalLists)
                 {
                     bool isMatch = false;
@@ -870,16 +894,28 @@ namespace Tools.Controllers
                         if (targetF.Contains("nodal"))
                         {
                             n.NodalCode = parsedTargetInt > 0 ? parsedTargetInt : n.NodalCode;
+                            if (!string.IsNullOrWhiteSpace(resolvedNodalName))
+                            {
+                                n.NodalName = resolvedNodalName;
+                            }
                             updatedAny = true;
                         }
                         else if (targetF.Contains("center") || targetF.Contains("examcenter"))
                         {
                             n.ExamCenterCode = parsedTargetInt > 0 ? parsedTargetInt : n.ExamCenterCode;
+                            if (!string.IsNullOrWhiteSpace(resolvedCenterName))
+                            {
+                                n.ExamCenterName = resolvedCenterName;
+                            }
                             updatedAny = true;
                         }
                         else if (targetF.Contains("college"))
                         {
                             n.CollegeCode = parsedTargetInt > 0 ? parsedTargetInt : n.CollegeCode;
+                            if (!string.IsNullOrWhiteSpace(resolvedCollegeName))
+                            {
+                                n.CollegeName = resolvedCollegeName;
+                            }
                             updatedAny = true;
                         }
                     }
