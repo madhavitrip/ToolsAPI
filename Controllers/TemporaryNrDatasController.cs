@@ -99,26 +99,60 @@ namespace Tools.Controllers
             }
         }
 
-        [HttpPut("{id}")]
-        public async Task<IActionResult> UpdateTemporaryData(int id, [FromBody] TemporaryNrDatas updatedRecord)
+        public class UpdateTemporaryDataDto
         {
-            if (id != updatedRecord.Id) return BadRequest("ID mismatch");
+            public int Id { get; set; }
+            public int ProjectId { get; set; }
+            public string? CourseName { get; set; }
+            public string? SubjectName { get; set; }
+            public System.Text.Json.JsonElement? CenterCode { get; set; }
+            public int CollegeCode { get; set; }
+            public string? CollegeName { get; set; }
+            public int NRQuantity { get; set; }
+            public System.Text.Json.JsonElement? CatchNo { get; set; }
+            public string? ExamDate { get; set; }
+            public string? ExamTime { get; set; }
+            public string? Day { get; set; }
+            public System.Text.Json.JsonElement? NodalCode { get; set; }
+        }
+
+        private static string? JsonElementToString(System.Text.Json.JsonElement? element)
+        {
+            if (!element.HasValue) return null;
+            var e = element.Value;
+            if (e.ValueKind == System.Text.Json.JsonValueKind.Null || e.ValueKind == System.Text.Json.JsonValueKind.Undefined) return null;
+            if (e.ValueKind == System.Text.Json.JsonValueKind.Number) return e.GetRawText();
+            if (e.ValueKind == System.Text.Json.JsonValueKind.String) return e.GetString();
+            return e.ToString();
+        }
+
+        [HttpPut("{id}")]
+        public async Task<IActionResult> UpdateTemporaryData(int id, [FromBody] UpdateTemporaryDataDto updatedRecord)
+        {
+            if (id != updatedRecord.Id && updatedRecord.Id != 0)
+            {
+                return BadRequest("ID mismatch");
+            }
 
             var existingRecord = await _context.TemporaryNrDatas.FindAsync(id);
             if (existingRecord == null) return NotFound("Record not found");
 
-            // Update allowed fields
-            existingRecord.CenterCode = updatedRecord.CenterCode;
-            existingRecord.NodalCode = updatedRecord.NodalCode;
-            existingRecord.CollegeCode = updatedRecord.CollegeCode;
-            existingRecord.CollegeName = updatedRecord.CollegeName;
-            existingRecord.CourseName = updatedRecord.CourseName;
-            existingRecord.SubjectName = updatedRecord.SubjectName;
-            existingRecord.CatchNo = updatedRecord.CatchNo;
-            existingRecord.NRQuantity = updatedRecord.NRQuantity;
-            existingRecord.ExamDate = updatedRecord.ExamDate;
-            existingRecord.ExamTime = updatedRecord.ExamTime;
-            existingRecord.Day = updatedRecord.Day;
+            var cCode = JsonElementToString(updatedRecord.CenterCode);
+            var nCode = JsonElementToString(updatedRecord.NodalCode);
+            var catchNo = JsonElementToString(updatedRecord.CatchNo);
+
+            if (cCode != null) existingRecord.CenterCode = cCode;
+            if (nCode != null) existingRecord.NodalCode = nCode;
+            if (catchNo != null) existingRecord.CatchNo = catchNo;
+
+            if (updatedRecord.CollegeCode != 0) existingRecord.CollegeCode = updatedRecord.CollegeCode;
+            if (updatedRecord.CollegeName != null) existingRecord.CollegeName = updatedRecord.CollegeName;
+            if (updatedRecord.CourseName != null) existingRecord.CourseName = updatedRecord.CourseName;
+            if (updatedRecord.SubjectName != null) existingRecord.SubjectName = updatedRecord.SubjectName;
+            if (updatedRecord.NRQuantity != 0) existingRecord.NRQuantity = updatedRecord.NRQuantity;
+            if (updatedRecord.ExamDate != null) existingRecord.ExamDate = updatedRecord.ExamDate;
+            if (updatedRecord.ExamTime != null) existingRecord.ExamTime = updatedRecord.ExamTime;
+            if (updatedRecord.Day != null) existingRecord.Day = updatedRecord.Day;
 
             try
             {
