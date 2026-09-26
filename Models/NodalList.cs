@@ -10,7 +10,6 @@ namespace Tools.Models
         public int Id { get; set; }
         public int ProjectId { get; set; }
         public int CollegeCode { get; set; }
-        [Required]
         public string? CollegeName { get; set; }
         public int ExamCenterCode { get; set; }
         [Required]
