@@ -62,6 +62,12 @@ namespace Tools.Controllers
                         (x.SubjectName != null && x.SubjectName.ToLower().Contains(search)) ||
                         (x.PaperCode != null && x.PaperCode.ToLower().Contains(search)) ||
                         x.CollegeCode.ToString().Contains(search) ||
+                        x.CenterCode.ToString().Contains(search) ||
+                        (x.CenterName != null && x.CenterName.ToLower().Contains(search)) ||
+                        x.Transgender.ToString().Contains(search) ||
+                        x.Male.ToString().Contains(search) ||
+                        x.Female.ToString().Contains(search) ||
+                        (x.Semester != null && x.Semester.ToLower().Contains(search)) ||
                         (x.NRDatas != null && x.NRDatas.ToLower().Contains(search))
                     );
                 }
@@ -83,6 +89,8 @@ namespace Tools.Controllers
                                     "catchno" => query.Where(x => x.CatchNo != null && x.CatchNo.ToLower().Contains(val)),
                                     "collegecode" => query.Where(x => x.CollegeCode.ToString().Contains(val)),
                                     "collegename" => query.Where(x => x.CollegeName != null && x.CollegeName.ToLower().Contains(val)),
+                                    "centercode" => query.Where(x => x.CenterCode.ToString().Contains(val)),
+                                    "centername" => query.Where(x => x.CenterName != null && x.CenterName.ToLower().Contains(val)),
                                     "papercode" => query.Where(x => x.PaperCode != null && x.PaperCode.ToLower().Contains(val)),
                                     "coursename" => query.Where(x => x.CourseName != null && x.CourseName.ToLower().Contains(val)),
                                     "subjectname" => query.Where(x => x.SubjectName != null && x.SubjectName.ToLower().Contains(val)),
@@ -109,12 +117,18 @@ namespace Tools.Controllers
                         "catchno" => isAsc ? query.OrderBy(x => x.CatchNo) : query.OrderByDescending(x => x.CatchNo),
                         "collegecode" => isAsc ? query.OrderBy(x => x.CollegeCode) : query.OrderByDescending(x => x.CollegeCode),
                         "collegename" => isAsc ? query.OrderBy(x => x.CollegeName) : query.OrderByDescending(x => x.CollegeName),
+                        "centercode" => isAsc ? query.OrderBy(x => x.CenterCode) : query.OrderByDescending(x => x.CenterCode),
+                        "centername" => isAsc ? query.OrderBy(x => x.CenterName) : query.OrderByDescending(x => x.CenterName),
                         "coursename" => isAsc ? query.OrderBy(x => x.CourseName) : query.OrderByDescending(x => x.CourseName),
                         "subjectname" => isAsc ? query.OrderBy(x => x.SubjectName) : query.OrderByDescending(x => x.SubjectName),
                         "papercode" => isAsc ? query.OrderBy(x => x.PaperCode) : query.OrderByDescending(x => x.PaperCode),
                         "nrquantity" => isAsc ? query.OrderBy(x => x.NRQuantity) : query.OrderByDescending(x => x.NRQuantity),
                         "examdate" => isAsc ? query.OrderBy(x => x.ExamDate) : query.OrderByDescending(x => x.ExamDate),
                         "examtime" => isAsc ? query.OrderBy(x => x.ExamTime) : query.OrderByDescending(x => x.ExamTime),
+                        "transgender" => isAsc ? query.OrderBy(x => x.Transgender) : query.OrderByDescending(x => x.Transgender),
+                        "male" => isAsc ? query.OrderBy(x => x.Male) : query.OrderByDescending(x => x.Male),
+                        "female" => isAsc ? query.OrderBy(x => x.Female) : query.OrderByDescending(x => x.Female),
+                        "semester" => isAsc ? query.OrderBy(x => x.Semester) : query.OrderByDescending(x => x.Semester),
                         _ => query.OrderBy(x => x.Id)
                     };
                 }
