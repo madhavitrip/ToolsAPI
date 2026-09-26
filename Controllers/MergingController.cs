@@ -93,10 +93,9 @@ namespace Tools.Controllers
                     if (!string.IsNullOrEmpty(n.CollegeName))
                     {
                         var code = ExtractCodeNumber(n.CollegeName);
-                        if (code != null) return code;
-                        return n.CollegeName.Trim().ToLowerInvariant();
+                        if (code != null && code != "0") return code;
                     }
-                    return $"row_{n.Id}";
+                    return GetEffectiveCenterCode(n);
                 }
 
                 static string GetEffectiveCenterCode(NodalList n)
@@ -181,7 +180,12 @@ namespace Tools.Controllers
 
                 var catchLists = await _context.CatchList.AsNoTracking().Where(x => x.ProjectId == projectId && x.Status).ToListAsync();
 
-                var mode = (mergeBy ?? "CollegeCode").Trim();
+                bool allCatchCollegeCodesZero = catchLists.Any() && catchLists.All(c => c.CollegeCode == 0 && string.IsNullOrEmpty(ExtractCodeNumber(c.CollegeName)));
+                var requestedMode = (mergeBy ?? "CollegeCode").Trim();
+                var mode = (allCatchCollegeCodesZero && (string.Equals(requestedMode, "collegecode", StringComparison.OrdinalIgnoreCase) || string.IsNullOrEmpty(requestedMode)))
+                    ? "centercode"
+                    : requestedMode;
+
                 Func<CatchList, string> getCatchKey;
                 Func<NodalList, string> getNodalKey;
 
@@ -192,7 +196,7 @@ namespace Tools.Controllers
                         getNodalKey = n => (n.CollegeName ?? "").Trim().ToLowerInvariant();
                         break;
                     case "centercode":
-                        getCatchKey = c => (c.CenterCode != 0 ? c.CenterCode.ToString() : c.CollegeCode.ToString()).Trim();
+                        getCatchKey = c => (c.CenterCode != 0 ? c.CenterCode.ToString() : (ExtractCodeNumber(c.CenterName) ?? c.CollegeCode.ToString())).Trim();
                         getNodalKey = n => GetEffectiveCenterCode(n);
                         break;
                     case "centername":
@@ -204,7 +208,8 @@ namespace Tools.Controllers
                         getCatchKey = c => {
                             if (c.CollegeCode != 0) return c.CollegeCode.ToString();
                             var code = ExtractCodeNumber(c.CollegeName);
-                            return code ?? (c.CollegeName ?? "").Trim().ToLowerInvariant();
+                            if (!string.IsNullOrEmpty(code) && code != "0") return code;
+                            return (c.CollegeName ?? "").Trim().ToLowerInvariant();
                         };
                         getNodalKey = n => GetEffectiveCollegeCode(n);
                         break;
@@ -243,12 +248,21 @@ namespace Tools.Controllers
                     var key = getCatchKey(catchItem);
                     var matchingNodals = !string.IsNullOrEmpty(key) ? nodalLookup[key].ToList() : new List<NodalList>();
 
-                    if (!matchingNodals.Any())
+                    if (!matchingNodals.Any() && allCatchCollegeCodesZero)
                     {
                         var catchCenterKey = catchItem.CenterCode != 0 ? catchItem.CenterCode.ToString() : ExtractCodeNumber(catchItem.CenterName);
                         if (!string.IsNullOrEmpty(catchCenterKey))
                         {
-                            matchingNodals = nodalLists.Where(n => GetEffectiveCenterCode(n) == catchCenterKey).ToList();
+                            var centerNodals = nodalLists.Where(n => 
+                                GetEffectiveCenterCode(n) == catchCenterKey || 
+                                n.ExamCenterCode.ToString() == catchCenterKey || 
+                                GetValidCenterCode(n) == catchCenterKey ||
+                                GetEffectiveCollegeCode(n) == catchCenterKey
+                            ).ToList();
+                            if (centerNodals.Any())
+                            {
+                                matchingNodals = centerNodals;
+                            }
                         }
                     }
 
@@ -323,24 +337,31 @@ namespace Tools.Controllers
                         var key = getCatchKey(c);
                         var nodals = !string.IsNullOrEmpty(key) ? nodalLookup[key].ToList() : new List<NodalList>();
 
-                        if (!nodals.Any())
+                        if (!nodals.Any() && allCatchCollegeCodesZero)
                         {
                             var catchCenterKey = c.CenterCode != 0 ? c.CenterCode.ToString() : ExtractCodeNumber(c.CenterName);
                             if (!string.IsNullOrEmpty(catchCenterKey))
                             {
-                                nodals = nodalLists.Where(n => GetEffectiveCenterCode(n) == catchCenterKey).ToList();
+                                var centerNodals = nodalLists.Where(n => 
+                                    GetEffectiveCenterCode(n) == catchCenterKey || 
+                                    n.ExamCenterCode.ToString() == catchCenterKey || 
+                                    GetValidCenterCode(n) == catchCenterKey ||
+                                    GetEffectiveCollegeCode(n) == catchCenterKey
+                                ).ToList();
+                                if (centerNodals.Any())
+                                {
+                                    nodals = centerNodals;
+                                }
                             }
                         }
 
                         if (!nodals.Any())
                         {
-                            var catchCenter = c.CenterCode != 0 ? c.CenterCode.ToString() : ExtractCodeNumber(c.CenterName);
-                            if (string.IsNullOrEmpty(catchCenter)) return true;
-                            return false;
+                            return true;
                         }
 
                         var validNodals = nodals
-                            .Where(n => GetValidCenterCode(n) != null && GetValidNodalCode(n) != null)
+                            .Where(n => GetValidCenterCode(n) != null || GetValidNodalCode(n) != null || n.ExamCenterCode != 0 || n.NodalCode != 0)
                             .ToList();
 
                         if (!validNodals.Any()) return true;
@@ -375,20 +396,29 @@ namespace Tools.Controllers
                 if (!rule2Passed)
                 {
                     var rule2CollegeCodes = unassignedCatchItems
-                        .Select(c => getCatchKey(c))
-                        .Where(k => !string.IsNullOrEmpty(k))
+                        .Select(c => {
+                            var k = getCatchKey(c);
+                            if (!string.IsNullOrEmpty(k) && k != "0") return k;
+                            return c.CenterCode != 0 ? c.CenterCode.ToString() : (ExtractCodeNumber(c.CenterName) ?? k);
+                        })
+                        .Where(k => !string.IsNullOrEmpty(k) && k != "0")
                         .Distinct()
                         .ToList();
 
                     var unassignedDetails = unassignedCatchItems
                         .GroupBy(c => getCatchKey(c))
                         .Select(g => {
-                            var cName = g.First().CollegeName ?? "";
-                            var cKey = g.Key ?? "";
+                            var firstItem = g.First();
+                            var keyVal = g.Key ?? "";
+                            var cKey = (keyVal == "0" || string.IsNullOrEmpty(keyVal)) 
+                                ? (firstItem.CenterCode != 0 ? firstItem.CenterCode.ToString() : (ExtractCodeNumber(firstItem.CenterName) ?? "")) 
+                                : keyVal;
+                            var cName = !string.IsNullOrEmpty(firstItem.CollegeName) ? firstItem.CollegeName : (firstItem.CenterName ?? "");
+                            
                             string displayCollege;
                             if (string.IsNullOrEmpty(cName))
                             {
-                                displayCollege = $"College {cKey}";
+                                displayCollege = !string.IsNullOrEmpty(cKey) ? $"Center {cKey}" : "Unassigned Record";
                             }
                             else if (!string.IsNullOrEmpty(cKey) && cName.ToLowerInvariant().Contains(cKey.ToLowerInvariant()))
                             {
@@ -398,17 +428,23 @@ namespace Tools.Controllers
                             {
                                 displayCollege = cKey;
                             }
+                            else if (!string.IsNullOrEmpty(cKey))
+                            {
+                                displayCollege = $"{cKey} - {cName}";
+                            }
                             else
                             {
-                                displayCollege = $"College {cKey} - {cName}";
+                                displayCollege = cName;
                             }
                             return new
                             {
-                                collegeCode = g.Key,
+                                collegeCode = cKey,
                                 collegeName = cName,
                                 catchNos = g.Select(x => x.CatchNo).Where(x => !string.IsNullOrEmpty(x)).Distinct().ToList(),
                                 courses = g.Select(x => x.CourseName).Where(x => !string.IsNullOrEmpty(x)).Distinct().ToList(),
                                 subjects = g.Select(x => x.SubjectName).Where(x => !string.IsNullOrEmpty(x)).Distinct().ToList(),
+                                centerCodes = g.Select(x => x.CenterCode != 0 ? x.CenterCode.ToString() : ExtractCodeNumber(x.CenterName)).Where(x => !string.IsNullOrEmpty(x) && x != "0").Distinct().ToList(),
+                                centerNames = g.Select(x => !string.IsNullOrEmpty(x.CenterName) ? x.CenterName : (x.CenterCode != 0 ? $"Center {x.CenterCode}" : "")).Where(x => !string.IsNullOrEmpty(x)).Distinct().ToList(),
                                 totalQuantity = g.Sum(x => x.NRQuantity),
                                 description = $"{displayCollege} is not assigned to any Exam Center in Nodal List."
                             };
@@ -606,12 +642,35 @@ namespace Tools.Controllers
                     }
                 }
 
-                await _context.ConflictingFields.Where(c => c.ProjectId == projectId).ExecuteDeleteAsync();
-                if (newConflicts.Any())
+                var existingConflicts = await _context.ConflictingFields.Where(c => c.ProjectId == projectId).ToListAsync();
+
+                foreach (var nc in newConflicts)
                 {
-                    _context.ConflictingFields.AddRange(newConflicts);
-                    await _context.SaveChangesAsync();
+                    var match = existingConflicts.FirstOrDefault(e => e.UniqueField == nc.UniqueField);
+                    if (match != null)
+                    {
+                        match.ConflictingField = nc.ConflictingField;
+                        match.Status = 1;
+                    }
+                    else
+                    {
+                        _context.ConflictingFields.Add(nc);
+                    }
                 }
+
+                var newUniqueKeys = new HashSet<string>(newConflicts.Select(nc => nc.UniqueField));
+                foreach (var ec in existingConflicts)
+                {
+                    if (ec.UniqueField != null && !ec.UniqueField.StartsWith("Rule1_") && !ec.UniqueField.StartsWith("Rule2_"))
+                    {
+                        if (!newUniqueKeys.Contains(ec.UniqueField) && ec.Status == 1)
+                        {
+                            ec.Status = 0; // Soft resolve
+                        }
+                    }
+                }
+
+                await _context.SaveChangesAsync();
 
                 return Ok(new { message = "Dynamic Rule 1 validated", conflicts = newConflicts.Count });
             }
@@ -626,11 +685,6 @@ namespace Tools.Controllers
         {
             try
             {
-                var dynamicConflicts = await _context.ConflictingFields
-                    .AsNoTracking()
-                    .Where(c => c.ProjectId == projectId && c.Status == 1)
-                    .ToListAsync();
-
                 var catchLists = await _context.CatchList
                     .AsNoTracking()
                     .Where(x => x.ProjectId == projectId && x.Status)
@@ -647,10 +701,9 @@ namespace Tools.Controllers
                     if (!string.IsNullOrEmpty(n.CollegeName))
                     {
                         var code = ExtractCodeNumber(n.CollegeName);
-                        if (code != null) return code;
-                        return n.CollegeName.Trim().ToLowerInvariant();
+                        if (code != null && code != "0") return code;
                     }
-                    return $"row_{n.Id}";
+                    return GetEffectiveCenterCode(n);
                 }
 
                 static string GetEffectiveCenterCode(NodalList n)
@@ -721,7 +774,12 @@ namespace Tools.Controllers
                 var multiNodalCenters = multiNodalCentersGroup.Select(g => g.Key).Distinct().ToList();
 
                 // Rule 2 Validation
-                var mode = (mergeBy ?? "CollegeCode").Trim();
+                bool allCatchCollegeCodesZero = catchLists.Any() && catchLists.All(c => c.CollegeCode == 0 && string.IsNullOrEmpty(ExtractCodeNumber(c.CollegeName)));
+                var requestedMode = (mergeBy ?? "CollegeCode").Trim();
+                var mode = (allCatchCollegeCodesZero && (string.Equals(requestedMode, "collegecode", StringComparison.OrdinalIgnoreCase) || string.IsNullOrEmpty(requestedMode)))
+                    ? "centercode"
+                    : requestedMode;
+
                 Func<CatchList, string> getCatchKey;
                 Func<NodalList, string> getNodalKey;
 
@@ -732,7 +790,7 @@ namespace Tools.Controllers
                         getNodalKey = n => (n.CollegeName ?? "").Trim().ToLowerInvariant();
                         break;
                     case "centercode":
-                        getCatchKey = c => (c.CenterCode != 0 ? c.CenterCode.ToString() : c.CollegeCode.ToString()).Trim();
+                        getCatchKey = c => (c.CenterCode != 0 ? c.CenterCode.ToString() : (ExtractCodeNumber(c.CenterName) ?? c.CollegeCode.ToString())).Trim();
                         getNodalKey = n => GetEffectiveCenterCode(n);
                         break;
                     case "centername":
@@ -744,7 +802,8 @@ namespace Tools.Controllers
                         getCatchKey = c => {
                             if (c.CollegeCode != 0) return c.CollegeCode.ToString();
                             var code = ExtractCodeNumber(c.CollegeName);
-                            return code ?? (c.CollegeName ?? "").Trim().ToLowerInvariant();
+                            if (!string.IsNullOrEmpty(code) && code != "0") return code;
+                            return (c.CollegeName ?? "").Trim().ToLowerInvariant();
                         };
                         getNodalKey = n => GetEffectiveCollegeCode(n);
                         break;
@@ -786,73 +845,84 @@ namespace Tools.Controllers
                         .Where(n => !string.IsNullOrEmpty(getNodalKey(n)))
                         .ToLookup(n => getNodalKey(n));
 
-                    var unassignedCatchItems = catchLists
-                        .Where(c => {
-                            var key = getCatchKey(c);
+                    var tempDatas = await _context.TemporaryNrDatas.AsNoTracking().Where(x => x.ProjectId == projectId).ToListAsync();
+                    bool allTempCollegeCodesZero = tempDatas.Any() && tempDatas.All(t => t.CollegeCode == 0 && string.IsNullOrEmpty(ExtractCodeNumber(t.CollegeName)));
+
+                    Func<TemporaryNrDatas, string> getTempKey = t => {
+                        if (!allTempCollegeCodesZero && t.CollegeCode != 0) return t.CollegeCode.ToString();
+                        if (!allTempCollegeCodesZero)
+                        {
+                            var code = ExtractCodeNumber(t.CollegeName);
+                            if (!string.IsNullOrEmpty(code) && code != "0") return code;
+                        }
+                        if (!string.IsNullOrEmpty(t.CenterCode) && t.CenterCode != "0") return t.CenterCode;
+                        var centerCode = ExtractCodeNumber(t.CollegeName);
+                        if (!string.IsNullOrEmpty(centerCode) && centerCode != "0") return centerCode;
+                        return (t.CollegeName ?? "").Trim().ToLowerInvariant();
+                    };
+
+                    var unassignedTempItems = tempDatas
+                        .Where(t => {
+                            var key = getTempKey(t);
                             var nodals = !string.IsNullOrEmpty(key) ? nodalLookup[key].ToList() : new List<NodalList>();
 
-                            if (!nodals.Any())
+                            if (!nodals.Any() && allTempCollegeCodesZero)
                             {
-                                var catchCenterKey = c.CenterCode != 0 ? c.CenterCode.ToString() : ExtractCodeNumber(c.CenterName);
+                                var catchCenterKey = !string.IsNullOrEmpty(t.CenterCode) && t.CenterCode != "0" ? t.CenterCode : ExtractCodeNumber(t.CollegeName);
                                 if (!string.IsNullOrEmpty(catchCenterKey))
                                 {
-                                    nodals = nodalLists.Where(n => GetEffectiveCenterCode(n) == catchCenterKey).ToList();
+                                    var centerNodals = nodalLists.Where(n => 
+                                        GetEffectiveCenterCode(n) == catchCenterKey || 
+                                        n.ExamCenterCode.ToString() == catchCenterKey || 
+                                        GetValidCenterCode(n) == catchCenterKey ||
+                                        GetEffectiveCollegeCode(n) == catchCenterKey
+                                    ).ToList();
+                                    if (centerNodals.Any())
+                                    {
+                                        nodals = centerNodals;
+                                    }
                                 }
                             }
 
                             if (!nodals.Any())
                             {
-                                var catchCenter = c.CenterCode != 0 ? c.CenterCode.ToString() : ExtractCodeNumber(c.CenterName);
-                                if (string.IsNullOrEmpty(catchCenter)) return true;
-                                return false;
+                                return true;
                             }
 
                             var validNodals = nodals
-                                .Where(n => GetValidCenterCode(n) != null && GetValidNodalCode(n) != null)
+                                .Where(n => GetValidCenterCode(n) != null || GetValidNodalCode(n) != null || n.ExamCenterCode != 0 || n.NodalCode != 0)
                                 .ToList();
 
                             if (!validNodals.Any()) return true;
-
-                            bool needsMale = c.Male > 0;
-                            bool needsFemale = c.Female > 0;
-
-                            if (needsMale)
-                            {
-                                bool maleOk = validNodals.Any(n => 
-                                    string.Equals(n.Gender, "MALE", StringComparison.OrdinalIgnoreCase) || 
-                                    string.Equals(n.Gender, "ALL", StringComparison.OrdinalIgnoreCase) || 
-                                    string.IsNullOrWhiteSpace(n.Gender));
-                                if (!maleOk) return true;
-                            }
-
-                            if (needsFemale)
-                            {
-                                bool femaleOk = validNodals.Any(n => 
-                                    string.Equals(n.Gender, "FEMALE", StringComparison.OrdinalIgnoreCase) || 
-                                    string.Equals(n.Gender, "ALL", StringComparison.OrdinalIgnoreCase) || 
-                                    string.IsNullOrWhiteSpace(n.Gender));
-                                if (!femaleOk) return true;
-                            }
 
                             return false;
                         })
                         .ToList();
 
-                    rule2CollegeCodes = unassignedCatchItems
-                        .Select(c => getCatchKey(c))
-                        .Where(k => !string.IsNullOrEmpty(k))
+                    rule2CollegeCodes = unassignedTempItems
+                        .Select(t => {
+                            var k = getTempKey(t);
+                            if (!string.IsNullOrEmpty(k) && k != "0") return k;
+                            return !string.IsNullOrEmpty(t.CenterCode) && t.CenterCode != "0" ? t.CenterCode : (ExtractCodeNumber(t.CollegeName) ?? k);
+                        })
+                        .Where(k => !string.IsNullOrEmpty(k) && k != "0")
                         .Distinct()
                         .ToList();
 
-                    unassignedDetails = unassignedCatchItems
-                        .GroupBy(c => getCatchKey(c))
+                    unassignedDetails = unassignedTempItems
+                        .GroupBy(t => getTempKey(t))
                         .Select(g => {
-                            var cName = g.First().CollegeName ?? "";
-                            var cKey = g.Key ?? "";
+                            var firstItem = g.First();
+                            var keyVal = g.Key ?? "";
+                            var cKey = (keyVal == "0" || string.IsNullOrEmpty(keyVal)) 
+                                ? (!string.IsNullOrEmpty(firstItem.CenterCode) && firstItem.CenterCode != "0" ? firstItem.CenterCode : (ExtractCodeNumber(firstItem.CollegeName) ?? "")) 
+                                : keyVal;
+                            var cName = !string.IsNullOrEmpty(firstItem.CollegeName) ? firstItem.CollegeName : (!string.IsNullOrEmpty(firstItem.CenterCode) ? $"Center {firstItem.CenterCode}" : "");
+                            
                             string displayCollege;
                             if (string.IsNullOrEmpty(cName))
                             {
-                                displayCollege = $"College {cKey}";
+                                displayCollege = !string.IsNullOrEmpty(cKey) ? $"Center {cKey}" : "Unassigned Record";
                             }
                             else if (!string.IsNullOrEmpty(cKey) && cName.ToLowerInvariant().Contains(cKey.ToLowerInvariant()))
                             {
@@ -862,19 +932,27 @@ namespace Tools.Controllers
                             {
                                 displayCollege = cKey;
                             }
+                            else if (!string.IsNullOrEmpty(cKey))
+                            {
+                                displayCollege = $"{cKey} - {cName}";
+                            }
                             else
                             {
-                                displayCollege = $"College {cKey} - {cName}";
+                                displayCollege = cName;
                             }
                             return new
                             {
-                                collegeCode = g.Key,
+                                collegeCode = cKey,
                                 collegeName = cName,
                                 catchNos = g.Select(x => x.CatchNo).Where(x => !string.IsNullOrEmpty(x)).Distinct().ToList(),
                                 courses = g.Select(x => x.CourseName).Where(x => !string.IsNullOrEmpty(x)).Distinct().ToList(),
                                 subjects = g.Select(x => x.SubjectName).Where(x => !string.IsNullOrEmpty(x)).Distinct().ToList(),
-                                centerCodes = g.Select(x => x.CenterCode).Where(x => x != 0).Distinct().ToList(),
-                                centerNames = g.Select(x => x.CenterName).Where(x => !string.IsNullOrEmpty(x)).Distinct().ToList(),
+                                centerCodes = g.Select(x => x.CenterCode).Where(x => !string.IsNullOrEmpty(x) && x != "0").Distinct().ToList(),
+                                centerNames = g.Select(x => {
+                                    var cCode = x.CenterCode;
+                                    var nMatch = nodalLists.FirstOrDefault(n => GetEffectiveCenterCode(n) == cCode || n.ExamCenterCode.ToString() == cCode);
+                                    return nMatch != null && !string.IsNullOrEmpty(nMatch.ExamCenterName) ? nMatch.ExamCenterName : $"Center {cCode}";
+                                }).Distinct().ToList(),
                                 totalQuantity = g.Sum(x => x.NRQuantity),
                                 description = $"{displayCollege} is not assigned to any Exam Center in Nodal List."
                             };
@@ -882,12 +960,20 @@ namespace Tools.Controllers
                         .Cast<object>()
                         .ToList();
 
-                    rule2Errors = unassignedCatchItems.Any()
+                    rule2Errors = unassignedTempItems.Any()
                         ? new List<string> { $"Rule 2 Failed: {rule2CollegeCodes.Count} college(s) are not assigned to an exam center: {string.Join(", ", rule2CollegeCodes)}" }
                         : new List<string>();
 
-                    rule2Passed = !unassignedCatchItems.Any();
+                    rule2Passed = !unassignedTempItems.Any();
                 }
+
+                // Sync all calculated Rule 1 & Rule 2 conflicts to ConflictingFields table in DB (soft resolving fixed ones by setting Status = 0)
+                await SyncConflictsToDbAsync(projectId, multiCenterDetails, multiNodalDetails, unassignedDetails);
+
+                var dynamicConflicts = await _context.ConflictingFields
+                    .AsNoTracking()
+                    .Where(c => c.ProjectId == projectId && c.Status == 1 && !c.UniqueField.StartsWith("Rule1_") && !c.UniqueField.StartsWith("Rule2_"))
+                    .ToListAsync();
 
                 bool rule1Passed = !rule1Errors.Any() && !dynamicConflicts.Any();
 
@@ -912,6 +998,128 @@ namespace Tools.Controllers
             catch (Exception ex)
             {
                 return StatusCode(500, $"Internal server error: {ex.Message}");
+            }
+        }
+
+        private async Task SyncConflictsToDbAsync(
+            int projectId,
+            List<object> multiCenterDetails,
+            List<object> multiNodalDetails,
+            List<object> unassignedDetails)
+        {
+            try
+            {
+                var existingInDb = await _context.ConflictingFields
+                    .Where(c => c.ProjectId == projectId)
+                    .ToListAsync();
+
+                var activeUniqueKeys = new HashSet<string>();
+
+                // 1. Rule 1: Multi-Center Colleges
+                foreach (var item in multiCenterDetails)
+                {
+                    var json = JsonSerializer.Serialize(item);
+                    using var doc = JsonDocument.Parse(json);
+                    var root = doc.RootElement;
+                    string cCode = root.TryGetProperty("collegeCode", out var cc) ? cc.GetString() ?? "" : "";
+                    string gender = root.TryGetProperty("gender", out var g) ? g.GetString() ?? "ALL" : "ALL";
+
+                    string uniqueKey = $"Rule1_MultiCenter_{cCode}_{gender}";
+                    activeUniqueKeys.Add(uniqueKey);
+
+                    var match = existingInDb.FirstOrDefault(e => e.UniqueField == uniqueKey);
+                    if (match != null)
+                    {
+                        match.ConflictingField = json;
+                        match.Status = 1;
+                    }
+                    else
+                    {
+                        _context.ConflictingFields.Add(new ConflictingFields
+                        {
+                            ProjectId = projectId,
+                            UniqueField = uniqueKey,
+                            ConflictingField = json,
+                            Status = 1
+                        });
+                    }
+                }
+
+                // 2. Rule 1: Multi-Nodal Centers
+                foreach (var item in multiNodalDetails)
+                {
+                    var json = JsonSerializer.Serialize(item);
+                    using var doc = JsonDocument.Parse(json);
+                    var root = doc.RootElement;
+                    string cCode = root.TryGetProperty("centerCode", out var cc) ? cc.GetString() ?? "" : "";
+
+                    string uniqueKey = $"Rule1_MultiNodal_{cCode}";
+                    activeUniqueKeys.Add(uniqueKey);
+
+                    var match = existingInDb.FirstOrDefault(e => e.UniqueField == uniqueKey);
+                    if (match != null)
+                    {
+                        match.ConflictingField = json;
+                        match.Status = 1;
+                    }
+                    else
+                    {
+                        _context.ConflictingFields.Add(new ConflictingFields
+                        {
+                            ProjectId = projectId,
+                            UniqueField = uniqueKey,
+                            ConflictingField = json,
+                            Status = 1
+                        });
+                    }
+                }
+
+                // 3. Rule 2: Unassigned Colleges / Centers
+                foreach (var item in unassignedDetails)
+                {
+                    var json = JsonSerializer.Serialize(item);
+                    using var doc = JsonDocument.Parse(json);
+                    var root = doc.RootElement;
+                    string cCode = root.TryGetProperty("collegeCode", out var cc) ? cc.GetString() ?? "" : "";
+
+                    string uniqueKey = $"Rule2_Unassigned_{cCode}";
+                    activeUniqueKeys.Add(uniqueKey);
+
+                    var match = existingInDb.FirstOrDefault(e => e.UniqueField == uniqueKey);
+                    if (match != null)
+                    {
+                        match.ConflictingField = json;
+                        match.Status = 1;
+                    }
+                    else
+                    {
+                        _context.ConflictingFields.Add(new ConflictingFields
+                        {
+                            ProjectId = projectId,
+                            UniqueField = uniqueKey,
+                            ConflictingField = json,
+                            Status = 1
+                        });
+                    }
+                }
+
+                // 4. Soft-resolve (Status = 0) any existing Rule 1 / Rule 2 conflicts in DB that are no longer failing. NEVER DELETE!
+                foreach (var ec in existingInDb)
+                {
+                    if (ec.UniqueField != null && (ec.UniqueField.StartsWith("Rule1_") || ec.UniqueField.StartsWith("Rule2_")))
+                    {
+                        if (!activeUniqueKeys.Contains(ec.UniqueField) && ec.Status == 1)
+                        {
+                            ec.Status = 0;
+                        }
+                    }
+                }
+
+                await _context.SaveChangesAsync();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"SyncConflictsToDbAsync error: {ex.Message}");
             }
         }
 
