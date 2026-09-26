@@ -622,6 +622,20 @@ namespace Tools.Controllers
             }
         }
 
+        [HttpDelete("ClearDynamicRule1/{projectId}")]
+        public async Task<IActionResult> ClearDynamicRule1(int projectId)
+        {
+            try
+            {
+                await _context.ConflictingFields.Where(c => c.ProjectId == projectId).ExecuteDeleteAsync();
+                return Ok(new { message = "Dynamic conflicts cleared successfully" });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, $"Internal server error: {ex.Message}");
+            }
+        }
+
         [HttpGet("Reports/{projectId}")]
         public async Task<IActionResult> GetReports(int projectId, [FromQuery] string? mergeBy = "CollegeCode")
         {
