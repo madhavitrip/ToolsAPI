@@ -336,18 +336,30 @@ namespace Tools.Controllers
                 var unassignedCatchItems = catchLists
                     .Where(c => {
                         var key = getCatchKey(c);
+                        var catchCenterKey = c.CenterCode != 0 ? c.CenterCode.ToString() : ExtractCodeNumber(c.CenterName);
+
+                        bool hasCollegeCode = c.CollegeCode != 0 || (!string.IsNullOrEmpty(key) && key != "0" && key != "unknown" && key != "unassigned record");
+                        bool hasCenterCode = !string.IsNullOrEmpty(catchCenterKey) && catchCenterKey != "0";
+
+                        // Skip catch records with missing college and center codes (required fields validation will handle them later)
+                        if (!hasCollegeCode && !hasCenterCode)
+                        {
+                            return false;
+                        }
+
                         var nodals = !string.IsNullOrEmpty(key) ? nodalLookup[key].ToList() : new List<NodalList>();
 
                         if (!nodals.Any() && allCatchCollegeCodesZero)
                         {
-                            var catchCenterKey = c.CenterCode != 0 ? c.CenterCode.ToString() : ExtractCodeNumber(c.CenterName);
                             if (!string.IsNullOrEmpty(catchCenterKey))
                             {
                                 var centerNodals = nodalLists.Where(n => 
                                     GetEffectiveCenterCode(n) == catchCenterKey || 
                                     n.ExamCenterCode.ToString() == catchCenterKey || 
                                     GetValidCenterCode(n) == catchCenterKey ||
-                                    GetEffectiveCollegeCode(n) == catchCenterKey
+                                    GetEffectiveCollegeCode(n) == catchCenterKey ||
+                                    n.CollegeCode.ToString() == catchCenterKey ||
+                                    n.NodalCode.ToString() == catchCenterKey
                                 ).ToList();
                                 if (centerNodals.Any())
                                 {
@@ -456,7 +468,7 @@ namespace Tools.Controllers
 
                     return Ok(new
                     {
-                        message = "Data merged into temporary staging with Rule 2 warnings. Every college must be assigned an exam center before pushing to main NR Data.",
+                        // message = "Data merged into temporary staging with Rule 2 warnings. Every college must be assigned an exam center before pushing to main NR Data.",
                         count = tempDatas.Count,
                         rule1Passed = true,
                         rule2Passed = false,
@@ -861,7 +873,10 @@ namespace Tools.Controllers
                             var matchedByCollege = nodalLists.Where(n => 
                                 GetEffectiveCollegeCode(n) == collegeKey || 
                                 n.CollegeCode.ToString() == collegeKey ||
-                                (n.CollegeName ?? "").Trim().ToLowerInvariant() == collegeKey.ToLowerInvariant()
+                                (n.CollegeName ?? "").Trim().ToLowerInvariant() == collegeKey.ToLowerInvariant() ||
+                                GetEffectiveCenterCode(n) == collegeKey ||
+                                n.ExamCenterCode.ToString() == collegeKey ||
+                                n.NodalCode.ToString() == collegeKey
                             ).ToList();
 
                             if (matchedByCollege.Any()) return matchedByCollege;
@@ -879,7 +894,8 @@ namespace Tools.Controllers
                                 n.ExamCenterCode.ToString() == catchCenterKey || 
                                 GetValidCenterCode(n) == catchCenterKey ||
                                 GetEffectiveCollegeCode(n) == catchCenterKey ||
-                                n.CollegeCode.ToString() == catchCenterKey
+                                n.CollegeCode.ToString() == catchCenterKey ||
+                                n.NodalCode.ToString() == catchCenterKey
                             ).ToList();
 
                             if (matchedByCenter.Any()) return matchedByCenter;
@@ -896,22 +912,64 @@ namespace Tools.Controllers
                         return "Unknown";
                     };
 
+                    bool allTempCollegeCodesZero = tempDatas.All(t => t.CollegeCode == 0 && string.IsNullOrEmpty(ExtractCodeNumber(t.CollegeName)));
+
                     var unassignedTempItems = tempDatas
                         .Where(t => {
-                            var nodals = FindMatchingNodals(t);
-
-                            if (!nodals.Any())
+                            var key = getTempKey(t);
+                            // Exclude records with missing College & Center Code ("Unknown" key) from Rule 2 nodal center assignment validation
+                            if (key == "Unknown")
                             {
+                                return false;
+                            }
+
+                            bool hasCenter = !string.IsNullOrWhiteSpace(t.CenterCode) && t.CenterCode != "0";
+                            bool hasNodal = !string.IsNullOrWhiteSpace(t.NodalCode) && t.NodalCode != "0";
+                            bool hasCollegeCode = t.CollegeCode != 0 || ExtractCodeNumber(t.CollegeName) != null;
+
+                            // If all records in dataset have 0 in college field, check center and nodal assignment in TemporaryNrDatas
+                            if (allTempCollegeCodesZero)
+                            {
+                                if (hasCenter && hasNodal)
+                                {
+                                    return false; // Assigned!
+                                }
                                 return true;
                             }
 
-                            var validNodals = nodals
-                                .Where(n => GetValidCenterCode(n) != null || GetValidNodalCode(n) != null || n.ExamCenterCode != 0 || n.NodalCode != 0)
-                                .ToList();
+                            // If college field has value, check college assignment in NodalList as well
+                            if (hasCollegeCode)
+                            {
+                                var nodals = FindMatchingNodals(t);
+                                if (!nodals.Any())
+                                {
+                                    return true; // Unassigned college!
+                                }
 
-                            if (!validNodals.Any()) return true;
+                                var validNodals = nodals
+                                    .Where(n => GetValidCenterCode(n) != null || GetValidNodalCode(n) != null || n.ExamCenterCode != 0 || n.NodalCode != 0)
+                                    .ToList();
 
-                            return false;
+                                if (!validNodals.Any())
+                                {
+                                    return true; // Unassigned college!
+                                }
+
+                                if (hasCenter && hasNodal)
+                                {
+                                    return false; // Assigned!
+                                }
+
+                                return true;
+                            }
+                            else
+                            {
+                                if (hasCenter && hasNodal)
+                                {
+                                    return false; // Assigned!
+                                }
+                                return true;
+                            }
                         })
                         .ToList();
 
@@ -1095,7 +1153,7 @@ namespace Tools.Controllers
                     using var doc = JsonDocument.Parse(json);
                     var root = doc.RootElement;
                     string cCode = root.TryGetProperty("collegeCode", out var cc) ? cc.GetString() ?? "" : "";
-                    if (string.IsNullOrEmpty(cCode) || cCode == "0") cCode = "Unknown";
+                    if (string.IsNullOrEmpty(cCode) || cCode == "0" || cCode == "Unknown") continue;
 
                     string uniqueKey = $"Rule2_Unassigned_{cCode}";
                     activeUniqueKeys.Add(uniqueKey);
@@ -1393,7 +1451,14 @@ namespace Tools.Controllers
 
                 // Rule 2 Validation Check: Ensure every college has an assigned exam center AND every exam center is assigned to a nodal code
                 var unassignedTempRecords = tempDatas
-                    .Where(x => string.IsNullOrWhiteSpace(x.CenterCode) || x.CenterCode == "0" || string.IsNullOrWhiteSpace(x.NodalCode) || x.NodalCode == "0")
+                    .Where(x => {
+                        bool hasCollegeCode = x.CollegeCode != 0 || ExtractCodeNumber(x.CollegeName) != null;
+                        bool hasCenterCode = !string.IsNullOrWhiteSpace(x.CenterCode) && x.CenterCode != "0";
+                        // Ignore records with missing required college and center codes
+                        if (!hasCollegeCode && !hasCenterCode) return false;
+
+                        return string.IsNullOrWhiteSpace(x.CenterCode) || x.CenterCode == "0" || string.IsNullOrWhiteSpace(x.NodalCode) || x.NodalCode == "0";
+                    })
                     .ToList();
 
                 if (unassignedTempRecords.Any())
