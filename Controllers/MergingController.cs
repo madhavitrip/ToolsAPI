@@ -614,12 +614,35 @@ namespace Tools.Controllers
                     }
                 }
 
-                await _context.ConflictingFields.Where(c => c.ProjectId == projectId && c.Rule == 1).ExecuteDeleteAsync();
-                if (newConflicts.Any())
+                var existingInDb = await _context.ConflictingFields
+                    .Where(c => c.ProjectId == projectId && c.Rule == 1)
+                    .ToListAsync();
+                var activeUniqueKeys = new HashSet<string>();
+
+                foreach (var nc in newConflicts)
                 {
-                    _context.ConflictingFields.AddRange(newConflicts);
-                    await _context.SaveChangesAsync();
+                    activeUniqueKeys.Add(nc.UniqueField);
+                    var match = existingInDb.FirstOrDefault(e => e.UniqueField == nc.UniqueField);
+                    if (match != null)
+                    {
+                        match.ConflictingField = nc.ConflictingField;
+                        match.Status = 1;
+                    }
+                    else
+                    {
+                        _context.ConflictingFields.Add(nc);
+                    }
                 }
+
+                foreach (var c in existingInDb)
+                {
+                    if (!activeUniqueKeys.Contains(c.UniqueField))
+                    {
+                        c.Status = 0;
+                    }
+                }
+
+                await _context.SaveChangesAsync();
 
                 return Ok(new { message = "Dynamic Rule 1 validated", conflicts = newConflicts.Count });
             }
@@ -634,7 +657,9 @@ namespace Tools.Controllers
         {
             try
             {
-                await _context.ConflictingFields.Where(c => c.ProjectId == projectId && c.Rule == 1).ExecuteDeleteAsync();
+                await _context.ConflictingFields
+                    .Where(c => c.ProjectId == projectId && c.Rule == 1)
+                    .ExecuteUpdateAsync(s => s.SetProperty(c => c.Status, 0));
                 return Ok(new { message = "Dynamic conflicts cleared successfully" });
             }
             catch (Exception ex)
@@ -648,9 +673,14 @@ namespace Tools.Controllers
         {
             try
             {
-                var dynamicConflicts = await _context.ConflictingFields
+                var dbRule1Conflicts = await _context.ConflictingFields
                     .AsNoTracking()
                     .Where(c => c.ProjectId == projectId && c.Status == 1 && c.Rule == 1)
+                    .ToListAsync();
+
+                var dbRule2Conflicts = await _context.ConflictingFields
+                    .AsNoTracking()
+                    .Where(c => c.ProjectId == projectId && c.Status == 1 && c.Rule == 2)
                     .ToListAsync();
 
                 var catchLists = await _context.CatchList
@@ -973,7 +1003,7 @@ namespace Tools.Controllers
                 await SyncConflictsToDbAsync(projectId, multiCenterDetails, multiNodalDetails, unassignedDetails);
 
 
-                bool rule1Passed = !rule1Errors.Any() && !dynamicConflicts.Any();
+                bool rule1Passed = !rule1Errors.Any() && !dbRule1Conflicts.Any();
 
                 return Ok(new
                 {
@@ -990,7 +1020,8 @@ namespace Tools.Controllers
                     unassignedCount = unassignedDetails.Count,
                     unassignedDetails,
 
-                    dynamicConflicts
+                    dbRule1Conflicts,
+                    dbRule2Conflicts
                 });
             }
             catch (Exception ex)
@@ -1013,64 +1044,7 @@ namespace Tools.Controllers
 
                 var activeUniqueKeys = new HashSet<string>();
 
-                // 1. Rule 1: Multi-Center Colleges
-                foreach (var item in multiCenterDetails)
-                {
-                    var json = JsonSerializer.Serialize(item);
-                    using var doc = JsonDocument.Parse(json);
-                    var root = doc.RootElement;
-                    string cCode = root.TryGetProperty("collegeCode", out var cc) ? cc.GetString() ?? "" : "";
-                    string gender = root.TryGetProperty("gender", out var g) ? g.GetString() ?? "ALL" : "ALL";
 
-                    string uniqueKey = $"Rule1_MultiCenter_{cCode}_{gender}";
-                    activeUniqueKeys.Add(uniqueKey);
-
-                    var match = existingInDb.FirstOrDefault(e => e.UniqueField == uniqueKey);
-                    if (match != null)
-                    {
-                        match.ConflictingField = json;
-                        match.Status = 1;
-                    }
-                    else
-                    {
-                        _context.ConflictingFields.Add(new ConflictingFields
-                        {
-                            ProjectId = projectId,
-                            UniqueField = uniqueKey,
-                            ConflictingField = json,
-                            Status = 1
-                        });
-                    }
-                }
-
-                // 2. Rule 1: Multi-Nodal Centers
-                foreach (var item in multiNodalDetails)
-                {
-                    var json = JsonSerializer.Serialize(item);
-                    using var doc = JsonDocument.Parse(json);
-                    var root = doc.RootElement;
-                    string cCode = root.TryGetProperty("centerCode", out var cc) ? cc.GetString() ?? "" : "";
-
-                    string uniqueKey = $"Rule1_MultiNodal_{cCode}";
-                    activeUniqueKeys.Add(uniqueKey);
-
-                    var match = existingInDb.FirstOrDefault(e => e.UniqueField == uniqueKey);
-                    if (match != null)
-                    {
-                        match.ConflictingField = json;
-                        match.Status = 1;
-                    }
-                    else
-                    {
-                        _context.ConflictingFields.Add(new ConflictingFields
-                        {
-                            ProjectId = projectId,
-                            UniqueField = uniqueKey,
-                            ConflictingField = json,
-                            Status = 1
-                        });
-                    }
-                }
 
                 // 3. Rule 2: Unassigned Colleges / Centers
                 foreach (var item in unassignedDetails)
@@ -1097,7 +1071,8 @@ namespace Tools.Controllers
                             ProjectId = projectId,
                             UniqueField = uniqueKey,
                             ConflictingField = json,
-                            Status = 1
+                            Status = 1,
+                            Rule = 2
                         });
                     }
                 }
