@@ -190,30 +190,31 @@ namespace Tools.Controllers
                 Func<CatchList, string> getCatchKey;
                 Func<NodalList, string> getNodalKey;
 
-                switch (mode.ToLowerInvariant())
+                var modeLower = mode.ToLowerInvariant();
+                if (modeLower.Contains("centercode") || modeLower.Contains("examcentercode") || modeLower.Contains("center_code"))
                 {
-                    case "collegename":
-                        getCatchKey = c => (c.CollegeName ?? "").Trim().ToLowerInvariant();
-                        getNodalKey = n => (n.CollegeName ?? "").Trim().ToLowerInvariant();
-                        break;
-                    case "centercode":
-                        getCatchKey = c => (c.CenterCode != 0 ? c.CenterCode.ToString() : (ExtractCodeNumber(c.CenterName) ?? c.CollegeCode.ToString())).Trim();
-                        getNodalKey = n => GetEffectiveCenterCode(n);
-                        break;
-                    case "centername":
-                        getCatchKey = c => (c.CollegeName ?? "").Trim().ToLowerInvariant();
-                        getNodalKey = n => (n.ExamCenterName ?? "").Trim().ToLowerInvariant();
-                        break;
-                    case "collegecode":
-                    default:
-                        getCatchKey = c => {
-                            if (c.CollegeCode != 0) return c.CollegeCode.ToString();
-                            var code = ExtractCodeNumber(c.CollegeName);
-                            if (!string.IsNullOrEmpty(code) && code != "0") return code;
-                            return (c.CollegeName ?? "").Trim().ToLowerInvariant();
-                        };
-                        getNodalKey = n => GetEffectiveCollegeCode(n);
-                        break;
+                    getCatchKey = c => (c.CenterCode != 0 ? c.CenterCode.ToString() : (ExtractCodeNumber(c.CenterName) ?? c.CollegeCode.ToString())).Trim();
+                    getNodalKey = n => GetEffectiveCenterCode(n);
+                }
+                else if (modeLower.Contains("collegename"))
+                {
+                    getCatchKey = c => (c.CollegeName ?? "").Trim().ToLowerInvariant();
+                    getNodalKey = n => (n.CollegeName ?? "").Trim().ToLowerInvariant();
+                }
+                else if (modeLower.Contains("centername"))
+                {
+                    getCatchKey = c => (c.CollegeName ?? "").Trim().ToLowerInvariant();
+                    getNodalKey = n => (n.ExamCenterName ?? "").Trim().ToLowerInvariant();
+                }
+                else
+                {
+                    getCatchKey = c => {
+                        if (c.CollegeCode != 0) return c.CollegeCode.ToString();
+                        var code = ExtractCodeNumber(c.CollegeName);
+                        if (!string.IsNullOrEmpty(code) && code != "0") return code;
+                        return (c.CollegeName ?? "").Trim().ToLowerInvariant();
+                    };
+                    getNodalKey = n => GetEffectiveCollegeCode(n);
                 }
 
                 static string? GetValidCenterCode(NodalList n)
@@ -908,12 +909,18 @@ namespace Tools.Controllers
                                 return false;
                             }
 
+                            // If CenterCode or NodalCode in TemporaryNrDatas is empty/unassigned, it fails Rule 2!
+                            if (string.IsNullOrWhiteSpace(t.CenterCode) || t.CenterCode == "0" || string.IsNullOrWhiteSpace(t.NodalCode) || t.NodalCode == "0")
+                            {
+                                return true; // Unassigned!
+                            }
+
                             // Verify if a matching active NodalList entry exists in DB table
                             var nodals = FindMatchingNodals(t);
 
                             if (!nodals.Any())
                             {
-                                return true; // Unassigned! (e.g. Center 222 deleted from NodalList)
+                                return true; // Unassigned! (e.g. Center or Gender deleted/missing from NodalList)
                             }
 
                             var validNodals = nodals
