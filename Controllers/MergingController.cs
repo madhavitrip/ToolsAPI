@@ -66,6 +66,24 @@ namespace Tools.Controllers
             return trimmed.ToLowerInvariant();
         }
 
+        private static bool IsGenderMatch(string? g1, string? g2)
+        {
+            if (string.IsNullOrWhiteSpace(g1) || string.IsNullOrWhiteSpace(g2)) return true;
+            var s1 = g1.Trim().ToUpperInvariant();
+            var s2 = g2.Trim().ToUpperInvariant();
+            if (s1 == "ALL" || s2 == "ALL" || s1 == "CO-ED" || s2 == "CO-ED" || s1 == "BOTH" || s2 == "BOTH") return true;
+
+            bool isMale1 = s1 == "M" || s1 == "MALE" || s1 == "B" || s1 == "BOYS";
+            bool isMale2 = s2 == "M" || s2 == "MALE" || s2 == "B" || s2 == "BOYS";
+            if (isMale1 && isMale2) return true;
+
+            bool isFem1 = s1 == "F" || s1 == "FEMALE" || s1 == "G" || s1 == "GIRLS";
+            bool isFem2 = s2 == "F" || s2 == "FEMALE" || s2 == "G" || s2 == "GIRLS";
+            if (isFem1 && isFem2) return true;
+
+            return false;
+        }
+
         [HttpPost("MergeToTemporary/{projectId}")]
         public async Task<IActionResult> MergeToTemporary(int projectId, [FromQuery] string? mergeBy = "CollegeCode")
         {
@@ -193,7 +211,7 @@ namespace Tools.Controllers
                 var modeLower = mode.ToLowerInvariant();
                 if (modeLower.Contains("centercode") || modeLower.Contains("examcentercode") || modeLower.Contains("center_code"))
                 {
-                    getCatchKey = c => (c.CenterCode != 0 ? c.CenterCode.ToString() : (ExtractCodeNumber(c.CenterName) ?? c.CollegeCode.ToString())).Trim();
+                    getCatchKey = c => ((!string.IsNullOrWhiteSpace(c.CenterCode)) ? c.CenterCode : (ExtractCodeNumber(c.CenterName) ?? c.CollegeCode.ToString())).Trim();
                     getNodalKey = n => GetEffectiveCenterCode(n);
                 }
                 else if (modeLower.Contains("collegename"))
@@ -289,26 +307,29 @@ namespace Tools.Controllers
                         continue;
                     }
 
+                    bool matchedAnyGender = false;
+
                     foreach (var nodalItem in matchingNodals)
                     {
                         var gender = nodalItem.Gender?.ToUpper() ?? "ALL";
                         int quantity = 0;
 
-                        if (gender == "ALL")
+                        if (gender == "ALL" || gender == "CO-ED" || gender == "BOTH")
                         {
                             quantity = catchItem.NRQuantity;
                         }
-                        else if (gender == "MALE")
+                        else if (gender == "MALE" || gender == "M" || gender == "BOYS" || gender == "B")
                         {
                             quantity = catchItem.Male;
                         }
-                        else if (gender == "FEMALE")
+                        else if (gender == "FEMALE" || gender == "F" || gender == "GIRLS" || gender == "G")
                         {
                             quantity = catchItem.Female;
                         }
 
-                        if (quantity > 0 || gender == "ALL")
+                        if (quantity > 0 || gender == "ALL" || gender == "CO-ED")
                         {
+                            matchedAnyGender = true;
                             var centerCodeStr = GetValidCenterCode(nodalItem) ?? (nodalItem.ExamCenterCode != 0 ? nodalItem.ExamCenterCode.ToString() : ((!string.IsNullOrWhiteSpace(catchItem.CenterCode)) ? catchItem.CenterCode : ""));
                             var nodalCodeStr = GetValidNodalCode(nodalItem) ?? ((!string.IsNullOrWhiteSpace(nodalItem.NodalCode)) ? nodalItem.NodalCode : centerCodeStr);
 
@@ -321,6 +342,77 @@ namespace Tools.Controllers
                                 CollegeName = catchItem.CollegeName,
                                 CenterCode = centerCodeStr,
                                 NodalCode = nodalCodeStr,
+                                CourseName = catchItem.CourseName,
+                                SubjectName = catchItem.SubjectName,
+                                ExamDate = catchItem.ExamDate,
+                                ExamTime = catchItem.ExamTime,
+                                NRDatas = catchItem.NRDatas
+                            });
+                        }
+                    }
+
+                    if (!matchedAnyGender)
+                    {
+                        var centerCodeStr = (!string.IsNullOrWhiteSpace(catchItem.CenterCode)) ? catchItem.CenterCode : (ExtractCodeNumber(catchItem.CenterName) ?? "");
+                        tempDatas.Add(new TemporaryNrDatas
+                        {
+                            ProjectId = projectId,
+                            CatchNo = catchItem.CatchNo,
+                            NRQuantity = catchItem.NRQuantity,
+                            CollegeCode = catchItem.CollegeCode,
+                            CollegeName = catchItem.CollegeName,
+                            CenterCode = centerCodeStr,
+                            NodalCode = "", // Unassigned!
+                            CourseName = catchItem.CourseName,
+                            SubjectName = catchItem.SubjectName,
+                            ExamDate = catchItem.ExamDate,
+                            ExamTime = catchItem.ExamTime,
+                            NRDatas = catchItem.NRDatas
+                        });
+                    }
+                    else
+                    {
+                        bool hasMaleMatched = matchingNodals.Any(n => {
+                            var g = n.Gender?.ToUpper() ?? "ALL";
+                            return g == "ALL" || g == "CO-ED" || g == "BOTH" || g == "MALE" || g == "M" || g == "BOYS" || g == "B";
+                        });
+                        bool hasFemaleMatched = matchingNodals.Any(n => {
+                            var g = n.Gender?.ToUpper() ?? "ALL";
+                            return g == "ALL" || g == "CO-ED" || g == "BOTH" || g == "FEMALE" || g == "F" || g == "GIRLS" || g == "G";
+                        });
+
+                        if (catchItem.Male > 0 && !hasMaleMatched)
+                        {
+                            var centerCodeStr = (!string.IsNullOrWhiteSpace(catchItem.CenterCode)) ? catchItem.CenterCode : (ExtractCodeNumber(catchItem.CenterName) ?? "");
+                            tempDatas.Add(new TemporaryNrDatas
+                            {
+                                ProjectId = projectId,
+                                CatchNo = catchItem.CatchNo,
+                                NRQuantity = catchItem.Male,
+                                CollegeCode = catchItem.CollegeCode,
+                                CollegeName = catchItem.CollegeName,
+                                CenterCode = centerCodeStr,
+                                NodalCode = "", // Unassigned Male!
+                                CourseName = catchItem.CourseName,
+                                SubjectName = catchItem.SubjectName,
+                                ExamDate = catchItem.ExamDate,
+                                ExamTime = catchItem.ExamTime,
+                                NRDatas = catchItem.NRDatas
+                            });
+                        }
+
+                        if (catchItem.Female > 0 && !hasFemaleMatched)
+                        {
+                            var centerCodeStr = (!string.IsNullOrWhiteSpace(catchItem.CenterCode)) ? catchItem.CenterCode : (ExtractCodeNumber(catchItem.CenterName) ?? "");
+                            tempDatas.Add(new TemporaryNrDatas
+                            {
+                                ProjectId = projectId,
+                                CatchNo = catchItem.CatchNo,
+                                NRQuantity = catchItem.Female,
+                                CollegeCode = catchItem.CollegeCode,
+                                CollegeName = catchItem.CollegeName,
+                                CenterCode = centerCodeStr,
+                                NodalCode = "", // Unassigned Female!
                                 CourseName = catchItem.CourseName,
                                 SubjectName = catchItem.SubjectName,
                                 ExamDate = catchItem.ExamDate,
@@ -426,7 +518,6 @@ namespace Tools.Controllers
 
                     return Ok(new
                     {
-                        // message = "Data merged into temporary staging with Rule 2 warnings. Every college must be assigned an exam center before pushing to main NR Data.",
                         count = tempDatas.Count,
                         rule1Passed = true,
                         rule2Passed = false,
@@ -627,7 +718,7 @@ namespace Tools.Controllers
                     if (match != null)
                     {
                         match.ConflictingField = nc.ConflictingField;
-                        match.Status =true;
+                        match.Status = true;
                     }
                     else
                     {
@@ -782,30 +873,31 @@ namespace Tools.Controllers
                 Func<CatchList, string> getCatchKey;
                 Func<NodalList, string> getNodalKey;
 
-                switch (mode.ToLowerInvariant())
+                var modeLower = mode.ToLowerInvariant();
+                if (modeLower.Contains("centercode") || modeLower.Contains("examcentercode") || modeLower.Contains("center_code"))
                 {
-                    case "collegename":
-                        getCatchKey = c => (c.CollegeName ?? "").Trim().ToLowerInvariant();
-                        getNodalKey = n => (n.CollegeName ?? "").Trim().ToLowerInvariant();
-                        break;
-                    case "centercode":
-                        getCatchKey = c => ((!string.IsNullOrWhiteSpace(c.CenterCode)) ? c.CenterCode : (ExtractCodeNumber(c.CenterName) ?? c.CollegeCode.ToString())).Trim();
-                        getNodalKey = n => GetEffectiveCenterCode(n);
-                        break;
-                    case "centername":
-                        getCatchKey = c => (c.CollegeName ?? "").Trim().ToLowerInvariant();
-                        getNodalKey = n => (n.ExamCenterName ?? "").Trim().ToLowerInvariant();
-                        break;
-                    case "collegecode":
-                    default:
-                        getCatchKey = c => {
-                            if (c.CollegeCode != 0) return c.CollegeCode.ToString();
-                            var code = ExtractCodeNumber(c.CollegeName);
-                            if (!string.IsNullOrEmpty(code) && code != "0") return code;
-                            return (c.CollegeName ?? "").Trim().ToLowerInvariant();
-                        };
-                        getNodalKey = n => GetEffectiveCollegeCode(n);
-                        break;
+                    getCatchKey = c => ((!string.IsNullOrWhiteSpace(c.CenterCode)) ? c.CenterCode : (ExtractCodeNumber(c.CenterName) ?? c.CollegeCode.ToString())).Trim();
+                    getNodalKey = n => GetEffectiveCenterCode(n);
+                }
+                else if (modeLower.Contains("collegename"))
+                {
+                    getCatchKey = c => (c.CollegeName ?? "").Trim().ToLowerInvariant();
+                    getNodalKey = n => (n.CollegeName ?? "").Trim().ToLowerInvariant();
+                }
+                else if (modeLower.Contains("centername"))
+                {
+                    getCatchKey = c => (c.CollegeName ?? "").Trim().ToLowerInvariant();
+                    getNodalKey = n => (n.ExamCenterName ?? "").Trim().ToLowerInvariant();
+                }
+                else
+                {
+                    getCatchKey = c => {
+                        if (c.CollegeCode != 0) return c.CollegeCode.ToString();
+                        var code = ExtractCodeNumber(c.CollegeName);
+                        if (!string.IsNullOrEmpty(code) && code != "0") return code;
+                        return (c.CollegeName ?? "").Trim().ToLowerInvariant();
+                    };
+                    getNodalKey = n => GetEffectiveCollegeCode(n);
                 }
 
                 static string? GetValidCenterCode(NodalList n)
@@ -1050,8 +1142,6 @@ namespace Tools.Controllers
                     .ToListAsync();
 
                 var activeUniqueKeys = new HashSet<string>();
-
-
 
                 // 3. Rule 2: Unassigned Colleges / Centers
                 foreach (var item in unassignedDetails)
