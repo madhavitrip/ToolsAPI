@@ -29,9 +29,9 @@ namespace Tools.Controllers
         private const string RequiredFieldEmptyConflict = "required_field_empty";
         private const string ZeroNrQuantityConflict = "zero_nr_quantity";
         private const string NodalCodeDigitMismatchConflict = "nodal_code_digit_mismatch";
-        private const int ConflictStatusPending = 0;
-        private const int ConflictStatusResolved = 1;
-        private const int ConflictStatusIgnored = 2;
+        private const bool ConflictStatusPending = true;
+        private const bool ConflictStatusResolved = false;
+        private const bool ConflictStatusIgnored = false;
 
         private readonly ERPToolsDbContext _context;
         private readonly ILoggerService _loggerService;
@@ -2866,7 +2866,7 @@ namespace Tools.Controllers
             }
 
             var normalizedStatus = NormalizeStatusCode(payload.Status);
-            if (normalizedStatus == ConflictStatusIgnored && !CanIgnoreConflict(payload.ConflictType))
+            if (payload.Status?.ToLowerInvariant() == "ignored" && !CanIgnoreConflict(payload.ConflictType))
             {
                 return BadRequest("Ignore is not allowed for this conflict type.");
             }
@@ -3280,7 +3280,7 @@ namespace Tools.Controllers
             }
         }
 
-        private async Task UpsertConflictStatus(int projectId, ConflictActionDto payload, int status)
+        private async Task UpsertConflictStatus(int projectId, ConflictActionDto payload, bool status)
         {
             var entity = BuildConflictEntity(projectId, payload, status);
             var storageKey = GetConflictStorageKey(entity);
@@ -3305,7 +3305,7 @@ namespace Tools.Controllers
             await _context.SaveChangesAsync();
         }
 
-        private static ConflictingFields BuildConflictEntity(int projectId, ConflictActionDto payload, int status)
+        private static ConflictingFields BuildConflictEntity(int projectId, ConflictActionDto payload, bool status)
         {
             var storagePayload = BuildConflictStoragePayload(payload);
 
@@ -3911,7 +3911,7 @@ namespace Tools.Controllers
             return NormalizeText(value).Count(char.IsDigit);
         }
 
-        private static int NormalizeStatusCode(string? status)
+        private static bool NormalizeStatusCode(string? status)
         {
             var normalized = NormalizeText(status).ToLowerInvariant();
             return normalized switch
@@ -3922,14 +3922,9 @@ namespace Tools.Controllers
             };
         }
 
-        private static string NormalizeStatusLabel(int status)
+        private static string NormalizeStatusLabel(bool status)
         {
-            return status switch
-            {
-                ConflictStatusResolved => "resolved",
-                ConflictStatusIgnored => "ignored",
-                _ => "pending",
-            };
+            return status ? "pending" : "resolved";
         }
 
         // GET: api/NRDatas/unique-catch-data/{projectId}
@@ -4921,7 +4916,7 @@ namespace Tools.Controllers
                         .ToListAsync();
 
                     envelopeBreaking = await _context.EnvelopeBreakages
-                        .Where(e => e.ProjectId == ProjectId && (e.Status == 1 || e.Status == null)).ToListAsync();
+                        .Where(e => e.ProjectId == ProjectId && (e.Status == true)).ToListAsync();
 
                     extra = await _context.ExtrasEnvelope
                         .Where(s => s.ProjectId == ProjectId).ToListAsync();
@@ -4971,7 +4966,7 @@ namespace Tools.Controllers
                 // Soft delete ConflictingFields
                 foreach (var item in conflictList)
                 {
-                    item.Status = 0; // Change to false if Status is bool
+                    item.Status = false; // Change to false if Status is bool
                 }
                 foreach(var item in extra)
                 {

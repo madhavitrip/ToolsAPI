@@ -13,6 +13,6 @@ namespace Tools.Models
         public string InnerEnvelope {  get; set; }
         public string OuterEnvelope { get; set; }
         public int TotalEnvelope { get; set; }
-        public int Status { get; set; } = 1;
+        public bool Status { get; set; } = true;
     }
 }
