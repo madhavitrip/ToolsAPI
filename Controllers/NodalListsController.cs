@@ -43,6 +43,26 @@ namespace Tools.Controllers
             }
         }
 
+        [HttpGet("dumpschema")]
+        public async Task<IActionResult> DumpSchema()
+        {
+            var sb = new System.Text.StringBuilder();
+            using (var cmd = _context.Database.GetDbConnection().CreateCommand())
+            {
+                cmd.CommandText = "DESCRIBE NodalList;";
+                await cmd.Connection.OpenAsync();
+                using (var r = await cmd.ExecuteReaderAsync())
+                {
+                    while (await r.ReadAsync())
+                    {
+                        sb.AppendLine($"{r.GetString(0)} - {r.GetString(1)}");
+                    }
+                }
+            }
+            System.IO.File.WriteAllText("d:\\Tools\\schema.txt", sb.ToString());
+            return Ok("Schema dumped to d:\\Tools\\schema.txt");
+        }
+
         [HttpGet("{projectId}")]
         public async Task<IActionResult> GetNodalLists(int projectId, [FromQuery] int pageNo = 1, [FromQuery] int pageSize = 10, [FromQuery] string? search = null, [FromQuery] string? sortField = null, [FromQuery] string? sortOrder = null, [FromQuery] string? columnFilters = null)
         {
@@ -57,7 +77,7 @@ namespace Tools.Controllers
                     query = query.Where(x => 
                         x.CollegeCode.ToString().Contains(search) ||
                         (x.CollegeName != null && x.CollegeName.ToLower().Contains(search)) ||
-                        x.ExamCenterCode.ToString().Contains(search) ||
+                        x.ExamCenterCode.Contains(search) ||
                         (x.ExamCenterName != null && x.ExamCenterName.ToLower().Contains(search)) ||
                         (x.Gender != null && x.Gender.ToLower().Contains(search)) ||
                         x.NodalCode.Contains(search) ||
@@ -82,7 +102,7 @@ namespace Tools.Controllers
                                 {
                                     "collegecode" => query.Where(x => x.CollegeCode.ToString().Contains(val)),
                                     "collegename" => query.Where(x => x.CollegeName != null && x.CollegeName.ToLower().Contains(val)),
-                                    "examcentercode" => query.Where(x => x.ExamCenterCode.ToString().Contains(val)),
+                                    "examcentercode" => query.Where(x => x.ExamCenterCode.Contains(val)),
                                     "examcentername" => query.Where(x => x.ExamCenterName != null && x.ExamCenterName.ToLower().Contains(val)),
                                     "gender" => query.Where(x => x.Gender != null && x.Gender.ToLower().Contains(val)),
                                     "nodalcode" => query.Where(x => x.NodalCode.Contains(val)),
@@ -271,7 +291,7 @@ namespace Tools.Controllers
                         ProjectId = req.ProjectId,
                         CollegeCode = req.CollegeCode,
                         CollegeName = collegeNameStr,
-                        ExamCenterCode = req.CorrectCenterCode,
+                        ExamCenterCode = req.CorrectCenterCode.ToString(),
                         ExamCenterName = centerNameStr,
                         NodalCode = nodalCodeInt,
                         NodalName = nodalNameStr,
@@ -285,7 +305,7 @@ namespace Tools.Controllers
                     foreach (var r in records)
                     {
                         if (r.CollegeCode == 0 && req.CollegeCode != 0) r.CollegeCode = req.CollegeCode;
-                        r.ExamCenterCode = req.CorrectCenterCode;
+                        r.ExamCenterCode = req.CorrectCenterCode.ToString();
                         r.ExamCenterName = centerNameStr;
                         if (string.IsNullOrWhiteSpace(r.CollegeName)) r.CollegeName = collegeNameStr;
                         if (string.IsNullOrWhiteSpace(r.NodalCode)) r.NodalCode = nodalCodeInt;
@@ -347,7 +367,7 @@ namespace Tools.Controllers
             {
                 await EnsureSchemaAsync();
                 var records = await _context.NodalList
-                    .Where(x => x.ProjectId == req.ProjectId && x.ExamCenterCode.ToString() == req.CenterCode && x.Status)
+                    .Where(x => x.ProjectId == req.ProjectId && x.ExamCenterCode == req.CenterCode && x.Status)
                     .ToListAsync();
 
                 if (!records.Any()) return NotFound(new { message = "No matching records found to update" });
