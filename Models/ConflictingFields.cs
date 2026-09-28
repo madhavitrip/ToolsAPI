@@ -7,7 +7,7 @@ namespace Tools.Models
         public int ProjectId { get; set; }
         public string UniqueField { get; set; }
         public string ConflictingField { get; set; }
-        public int Status { get; set; }
+        public bool Status { get; set; }
         public int? Rule { get; set; }
     }
 }

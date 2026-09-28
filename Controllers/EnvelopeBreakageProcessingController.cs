@@ -118,7 +118,7 @@ namespace Tools.Controllers
 
 
                 var envBreaking = await _context.EnvelopeBreakages
-                    .Where(p => p.ProjectId == ProjectId && (p.Status == 1 || p.Status == null))
+                    .Where(p => p.ProjectId == ProjectId && (p.Status == true))
                     .ToListAsync();
                 
                 if (!envBreaking.Any())

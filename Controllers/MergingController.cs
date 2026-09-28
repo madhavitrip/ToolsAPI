@@ -74,7 +74,7 @@ namespace Tools.Controllers
                 // Check if any unresolved active dynamic conflicts exist in database
                 var activeConflicts = await _context.ConflictingFields
                     .AsNoTracking()
-                    .Where(c => c.ProjectId == projectId && c.Status == 1)
+                    .Where(c => c.ProjectId == projectId && c.Status == true)
                     .AnyAsync();
 
                 if (activeConflicts)
@@ -230,7 +230,7 @@ namespace Tools.Controllers
 
                 static string? GetValidNodalCode(NodalList n)
                 {
-                    if (n.NodalCode != 0) return n.NodalCode.ToString();
+                    if ((!string.IsNullOrWhiteSpace(n.NodalCode))) return n.NodalCode;
                     if (!string.IsNullOrWhiteSpace(n.NodalName))
                     {
                         var code = ExtractCodeNumber(n.NodalName);
@@ -252,7 +252,7 @@ namespace Tools.Controllers
 
                     if (!matchingNodals.Any() && allCatchCollegeCodesZero)
                     {
-                        var catchCenterKey = catchItem.CenterCode != 0 ? catchItem.CenterCode.ToString() : ExtractCodeNumber(catchItem.CenterName);
+                        var catchCenterKey = (!string.IsNullOrWhiteSpace(catchItem.CenterCode)) ? catchItem.CenterCode : ExtractCodeNumber(catchItem.CenterName);
                         if (!string.IsNullOrEmpty(catchCenterKey))
                         {
                             var centerNodals = nodalLists.Where(n => 
@@ -270,7 +270,7 @@ namespace Tools.Controllers
 
                     if (!matchingNodals.Any())
                     {
-                        var centerCodeStr = catchItem.CenterCode != 0 ? catchItem.CenterCode.ToString() : (ExtractCodeNumber(catchItem.CenterName) ?? "");
+                        var centerCodeStr = (!string.IsNullOrWhiteSpace(catchItem.CenterCode)) ? catchItem.CenterCode : (ExtractCodeNumber(catchItem.CenterName) ?? "");
                         tempDatas.Add(new TemporaryNrDatas
                         {
                             ProjectId = projectId,
@@ -309,8 +309,8 @@ namespace Tools.Controllers
 
                         if (quantity > 0 || gender == "ALL")
                         {
-                            var centerCodeStr = GetValidCenterCode(nodalItem) ?? (nodalItem.ExamCenterCode != 0 ? nodalItem.ExamCenterCode.ToString() : (catchItem.CenterCode != 0 ? catchItem.CenterCode.ToString() : ""));
-                            var nodalCodeStr = GetValidNodalCode(nodalItem) ?? (nodalItem.NodalCode != 0 ? nodalItem.NodalCode.ToString() : centerCodeStr);
+                            var centerCodeStr = GetValidCenterCode(nodalItem) ?? (nodalItem.ExamCenterCode != 0 ? nodalItem.ExamCenterCode.ToString() : ((!string.IsNullOrWhiteSpace(catchItem.CenterCode)) ? catchItem.CenterCode : ""));
+                            var nodalCodeStr = GetValidNodalCode(nodalItem) ?? ((!string.IsNullOrWhiteSpace(nodalItem.NodalCode)) ? nodalItem.NodalCode : centerCodeStr);
 
                             tempDatas.Add(new TemporaryNrDatas
                             {
@@ -502,7 +502,7 @@ namespace Tools.Controllers
                         case "examcentercode":
                         case "centercode":
                             if (n != null && n.ExamCenterCode != 0) return n.ExamCenterCode.ToString();
-                            if (c != null && c.CenterCode != 0) return c.CenterCode.ToString();
+                            if (c != null && (!string.IsNullOrWhiteSpace(c.CenterCode))) return c.CenterCode;
                             if (n != null && !string.IsNullOrEmpty(n.ExamCenterName))
                             {
                                 var match = System.Text.RegularExpressions.Regex.Match(n.ExamCenterName, @"^(\d+)");
@@ -518,7 +518,7 @@ namespace Tools.Controllers
                             if (n != null && !string.IsNullOrEmpty(n.Gender)) return n.Gender.Trim().ToUpper();
                             return "";
                         case "nodalcode":
-                            if (n != null && n.NodalCode != 0) return n.NodalCode.ToString();
+                            if (n != null && (!string.IsNullOrWhiteSpace(n.NodalCode))) return n.NodalCode;
                             if (n != null && !string.IsNullOrEmpty(n.NodalName))
                             {
                                 var match = System.Text.RegularExpressions.Regex.Match(n.NodalName, @"^(\d+)");
@@ -586,7 +586,7 @@ namespace Tools.Controllers
                                 ProjectId = projectId,
                                 UniqueField = JsonSerializer.Serialize(new { fields = req.Level1, value = g.Key }),
                                 ConflictingField = JsonSerializer.Serialize(new { fields = req.Level2, values = l2Keys }),
-                                Status = 1,
+                                Status = true,
                                 Rule = 1
                             });
                         }
@@ -608,7 +608,7 @@ namespace Tools.Controllers
                                 ProjectId = projectId,
                                 UniqueField = JsonSerializer.Serialize(new { fields = req.Level2, value = g.Key }),
                                 ConflictingField = JsonSerializer.Serialize(new { fields = req.Level3, values = l3Keys }),
-                                Status = 1,
+                                Status = true,
                                 Rule = 1
                             });
                         }
@@ -627,7 +627,7 @@ namespace Tools.Controllers
                     if (match != null)
                     {
                         match.ConflictingField = nc.ConflictingField;
-                        match.Status = 1;
+                        match.Status =true;
                     }
                     else
                     {
@@ -639,7 +639,7 @@ namespace Tools.Controllers
                 {
                     if (!activeUniqueKeys.Contains(c.UniqueField))
                     {
-                        c.Status = 0;
+                        c.Status = false;
                     }
                 }
 
@@ -660,7 +660,7 @@ namespace Tools.Controllers
             {
                 await _context.ConflictingFields
                     .Where(c => c.ProjectId == projectId && c.Rule == 1)
-                    .ExecuteUpdateAsync(s => s.SetProperty(c => c.Status, 0));
+                    .ExecuteUpdateAsync(s => s.SetProperty(c => c.Status, false));
                 return Ok(new { message = "Dynamic conflicts cleared successfully" });
             }
             catch (Exception ex)
@@ -676,12 +676,12 @@ namespace Tools.Controllers
             {
                 var dbRule1Conflicts = await _context.ConflictingFields
                     .AsNoTracking()
-                    .Where(c => c.ProjectId == projectId && c.Status == 1 && c.Rule == 1)
+                    .Where(c => c.ProjectId == projectId && c.Status == true && c.Rule == 1)
                     .ToListAsync();
 
                 var dbRule2Conflicts = await _context.ConflictingFields
                     .AsNoTracking()
-                    .Where(c => c.ProjectId == projectId && c.Status == 1 && c.Rule == 2)
+                    .Where(c => c.ProjectId == projectId && c.Status == true && c.Rule == 2)
                     .ToListAsync();
 
                 var catchLists = await _context.CatchList
@@ -789,7 +789,7 @@ namespace Tools.Controllers
                         getNodalKey = n => (n.CollegeName ?? "").Trim().ToLowerInvariant();
                         break;
                     case "centercode":
-                        getCatchKey = c => (c.CenterCode != 0 ? c.CenterCode.ToString() : (ExtractCodeNumber(c.CenterName) ?? c.CollegeCode.ToString())).Trim();
+                        getCatchKey = c => ((!string.IsNullOrWhiteSpace(c.CenterCode)) ? c.CenterCode : (ExtractCodeNumber(c.CenterName) ?? c.CollegeCode.ToString())).Trim();
                         getNodalKey = n => GetEffectiveCenterCode(n);
                         break;
                     case "centername":
@@ -821,7 +821,7 @@ namespace Tools.Controllers
 
                 static string? GetValidNodalCode(NodalList n)
                 {
-                    if (n.NodalCode != 0) return n.NodalCode.ToString();
+                    if ((!string.IsNullOrWhiteSpace(n.NodalCode))) return n.NodalCode;
                     if (!string.IsNullOrWhiteSpace(n.NodalName))
                     {
                         var code = ExtractCodeNumber(n.NodalName);
@@ -864,7 +864,7 @@ namespace Tools.Controllers
                                 (n.CollegeName ?? "").Trim().ToLowerInvariant() == collegeKey.ToLowerInvariant() ||
                                 GetEffectiveCenterCode(n) == collegeKey ||
                                 n.ExamCenterCode.ToString() == collegeKey ||
-                                n.NodalCode.ToString() == collegeKey
+                                n.NodalCode == collegeKey
                             ).ToList();
 
                             if (matchedByCollege.Any()) return matchedByCollege;
@@ -883,7 +883,7 @@ namespace Tools.Controllers
                                 GetValidCenterCode(n) == catchCenterKey ||
                                 GetEffectiveCollegeCode(n) == catchCenterKey ||
                                 n.CollegeCode.ToString() == catchCenterKey ||
-                                n.NodalCode.ToString() == catchCenterKey
+                                n.NodalCode == catchCenterKey
                             ).ToList();
 
                             if (matchedByCenter.Any()) return matchedByCenter;
@@ -924,7 +924,7 @@ namespace Tools.Controllers
                             }
 
                             var validNodals = nodals
-                                .Where(n => GetValidCenterCode(n) != null || GetValidNodalCode(n) != null || n.ExamCenterCode != 0 || n.NodalCode != 0)
+                                .Where(n => GetValidCenterCode(n) != null || GetValidNodalCode(n) != null || n.ExamCenterCode != 0 || (!string.IsNullOrWhiteSpace(n.NodalCode)))
                                 .ToList();
 
                             if (!validNodals.Any())
@@ -1069,7 +1069,7 @@ namespace Tools.Controllers
                     if (match != null)
                     {
                         match.ConflictingField = json;
-                        match.Status = 1;
+                        match.Status = true;
                     }
                     else
                     {
@@ -1078,7 +1078,7 @@ namespace Tools.Controllers
                             ProjectId = projectId,
                             UniqueField = uniqueKey,
                             ConflictingField = json,
-                            Status = 1,
+                            Status = true,
                             Rule = 2
                         });
                     }
@@ -1089,9 +1089,9 @@ namespace Tools.Controllers
                 {
                     if (ec.UniqueField != null && (ec.UniqueField.StartsWith("Rule1_") || ec.UniqueField.StartsWith("Rule2_")))
                     {
-                        if (!activeUniqueKeys.Contains(ec.UniqueField) && ec.Status == 1)
+                        if (!activeUniqueKeys.Contains(ec.UniqueField) && ec.Status == true)
                         {
-                            ec.Status = 0;
+                            ec.Status = false;
                         }
                     }
                 }
@@ -1110,7 +1110,7 @@ namespace Tools.Controllers
             try
             {
                 var pendingCount = await _context.ConflictingFields
-                    .CountAsync(c => c.ProjectId == projectId && c.Status == 1);
+                    .CountAsync(c => c.ProjectId == projectId && c.Status == true);
 
                 return Ok(new { allResolved = pendingCount == 0 });
             }
@@ -1128,7 +1128,7 @@ namespace Tools.Controllers
                 var conflict = await _context.ConflictingFields.FirstOrDefaultAsync(c => c.Id == conflictId);
                 if (conflict != null)
                 {
-                    conflict.Status = 0;
+                    conflict.Status = false;
                     await _context.SaveChangesAsync();
                 }
                 return Ok(new { message = "Conflict resolved successfully" });
@@ -1147,7 +1147,7 @@ namespace Tools.Controllers
                 var conflict = await _context.ConflictingFields.FirstOrDefaultAsync(c => c.Id == dto.ConflictId);
                 if (conflict != null)
                 {
-                    conflict.Status = 0;
+                    conflict.Status = false;
                 }
 
                 var nodalLists = await _context.NodalList.Where(n => n.ProjectId == dto.ProjectId && n.Status).ToListAsync();
@@ -1170,7 +1170,7 @@ namespace Tools.Controllers
                 string resolvedNodalName = dto.TargetName;
                 if (string.IsNullOrWhiteSpace(resolvedNodalName) && targetF.Contains("nodal") && parsedTargetInt > 0)
                 {
-                    var matching = nodalLists.FirstOrDefault(x => x.NodalCode == parsedTargetInt && !string.IsNullOrWhiteSpace(x.NodalName));
+                    var matching = nodalLists.FirstOrDefault(x => x.NodalCode == parsedTargetInt.ToString() && !string.IsNullOrWhiteSpace(x.NodalName));
                     if (matching != null) resolvedNodalName = matching.NodalName;
                 }
 
@@ -1203,19 +1203,19 @@ namespace Tools.Controllers
                     }
                     else if (matchF.Contains("nodal"))
                     {
-                        isMatch = (parsedMatchInt > 0 && n.NodalCode == parsedMatchInt) ||
+                        isMatch = (parsedMatchInt > 0 && n.NodalCode == parsedMatchInt.ToString()) ||
                                   (!string.IsNullOrEmpty(n.NodalName) && (n.NodalName.Contains(matchVal) || (parsedMatchInt > 0 && n.NodalName.StartsWith(parsedMatchInt.ToString()))));
                     }
                     else
                     {
-                        isMatch = (parsedMatchInt > 0 && (n.CollegeCode == parsedMatchInt || n.ExamCenterCode == parsedMatchInt || n.NodalCode == parsedMatchInt));
+                        isMatch = (parsedMatchInt > 0 && (n.CollegeCode == parsedMatchInt || n.ExamCenterCode == parsedMatchInt || n.NodalCode == parsedMatchInt.ToString()));
                     }
 
                     if (isMatch)
                     {
                         if (targetF.Contains("nodal"))
                         {
-                            n.NodalCode = parsedTargetInt > 0 ? parsedTargetInt : n.NodalCode;
+                            n.NodalCode = parsedTargetInt > 0 ? parsedTargetInt.ToString() : n.NodalCode;
                             if (!string.IsNullOrWhiteSpace(resolvedNodalName))
                             {
                                 n.NodalName = resolvedNodalName;
@@ -1302,7 +1302,7 @@ namespace Tools.Controllers
 
                 static string? GetValidNodalCode(NodalList n)
                 {
-                    if (n.NodalCode != 0) return n.NodalCode.ToString();
+                    if ((!string.IsNullOrWhiteSpace(n.NodalCode))) return n.NodalCode;
                     if (!string.IsNullOrWhiteSpace(n.NodalName))
                     {
                         var trimmed = n.NodalName.Trim();
@@ -1337,7 +1337,7 @@ namespace Tools.Controllers
                         {
                             var validNodal = matchNodals.FirstOrDefault(n => GetValidCenterCode(n) != null && GetValidNodalCode(n) != null) ?? matchNodals.First();
                             var centerCodeStr = GetValidCenterCode(validNodal) ?? (validNodal.ExamCenterCode != 0 ? validNodal.ExamCenterCode.ToString() : "");
-                            var nodalCodeStr = GetValidNodalCode(validNodal) ?? (validNodal.NodalCode != 0 ? validNodal.NodalCode.ToString() : "");
+                            var nodalCodeStr = GetValidNodalCode(validNodal) ?? ((!string.IsNullOrWhiteSpace(validNodal.NodalCode)) ? validNodal.NodalCode : "");
 
                             if (!string.IsNullOrEmpty(centerCodeStr) && (temp.CenterCode != centerCodeStr || temp.NodalCode != nodalCodeStr))
                             {

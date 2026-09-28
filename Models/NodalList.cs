@@ -15,7 +15,7 @@ namespace Tools.Models
         [Required]
         public string ExamCenterName { get; set; }
         public string? Gender { get; set; }
-        public int NodalCode { get; set; }
+        public string? NodalCode { get; set; }
         [Required]
         public string NodalName { get; set; }
         public string? OtherFields { get; set; }

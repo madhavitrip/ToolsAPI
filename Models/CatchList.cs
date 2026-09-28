@@ -13,7 +13,7 @@ namespace Tools.Models
         public string? SubjectName { get; set; }
         public string? CollegeName { get; set; }
         [Required]
-        public int CenterCode { get; set; }
+        public string CenterCode { get; set; }
         public string? CenterName { get; set; }
         public int CollegeCode { get; set; }
         public string? PaperCode { get; set; }
