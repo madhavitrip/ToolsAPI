@@ -61,7 +61,7 @@ namespace Tools.Controllers
             }
 
             var Envelope = await _context.EnvelopeBreakages
-                .Where(p => p.ProjectId == ProjectId && (p.Status == 1 || p.Status == null))
+                .Where(p => p.ProjectId == ProjectId && (p.Status == true))
                 .ToListAsync();
 
             if (!NRData.Any() || !Envelope.Any())
@@ -360,14 +360,14 @@ namespace Tools.Controllers
 
                 var nrDataIds = nrDataList.Select(r => r.Id).ToList();
                 var env = await _context.EnvelopeBreakages
-                    .Where(p => p.ProjectId == ProjectId && nrDataIds.Contains(p.NrDataId) && (p.Status == 1 || p.Status == null))
+                    .Where(p => p.ProjectId == ProjectId && nrDataIds.Contains(p.NrDataId) && (p.Status == true))
                     .ToListAsync();
 
                 if (env.Any()) // Check if any active records were found
                 {
                     foreach (var item in env)
                     {
-                        item.Status = 0;
+                        item.Status = false;
                     }
                     await _context.SaveChangesAsync();
 
@@ -449,7 +449,7 @@ namespace Tools.Controllers
                         InnerEnvelope = JsonSerializer.Serialize(innerBreakdown),
                         OuterEnvelope = JsonSerializer.Serialize(outerBreakdown),
                         TotalEnvelope = totalOuterCount,
-                        Status = 1
+                        Status = true
                     };
 
                     // ? Add to database
@@ -907,7 +907,7 @@ namespace Tools.Controllers
                     return NotFound("No NRData found.");
 
                 var breakages = await _context.EnvelopeBreakages
-                    .Where(x => x.ProjectId == ProjectId && (x.Status == 1 || x.Status == null))
+                    .Where(x => x.ProjectId == ProjectId && (x.Status == true))
                     .ToListAsync();
 
                 var extraEnvelopes = await _context.ExtrasEnvelope
@@ -1224,7 +1224,7 @@ namespace Tools.Controllers
                 // 2️⃣ EnvelopeBreakages
                 // ==============================
                 var breakages = await _context.EnvelopeBreakages
-                    .Where(x => x.ProjectId == ProjectId && (x.Status == 1 || x.Status == null))
+                    .Where(x => x.ProjectId == ProjectId && (x.Status == true))
                     .ToListAsync();
 
                 // ==============================
@@ -1493,7 +1493,7 @@ namespace Tools.Controllers
                     return NotFound();
                 }
 
-                envelopeBreakage.Status = 0;
+                envelopeBreakage.Status = false;
                 await _loggerService.LogEventAsync($"Deactivated Envelope Breaking of Id {id} (Status=0)", "EnvelopeBreakages", LogHelper.GetTriggeredBy(User), envelopeBreakage.ProjectId);
                 await _context.SaveChangesAsync();
 

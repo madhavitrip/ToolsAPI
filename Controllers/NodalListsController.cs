@@ -60,7 +60,7 @@ namespace Tools.Controllers
                         x.ExamCenterCode.ToString().Contains(search) ||
                         (x.ExamCenterName != null && x.ExamCenterName.ToLower().Contains(search)) ||
                         (x.Gender != null && x.Gender.ToLower().Contains(search)) ||
-                        x.NodalCode.ToString().Contains(search) ||
+                        x.NodalCode.Contains(search) ||
                         (x.NodalName != null && x.NodalName.ToLower().Contains(search)) ||
                         (x.OtherFields != null && x.OtherFields.ToLower().Contains(search))
                     );
@@ -85,7 +85,7 @@ namespace Tools.Controllers
                                     "examcentercode" => query.Where(x => x.ExamCenterCode.ToString().Contains(val)),
                                     "examcentername" => query.Where(x => x.ExamCenterName != null && x.ExamCenterName.ToLower().Contains(val)),
                                     "gender" => query.Where(x => x.Gender != null && x.Gender.ToLower().Contains(val)),
-                                    "nodalcode" => query.Where(x => x.NodalCode.ToString().Contains(val)),
+                                    "nodalcode" => query.Where(x => x.NodalCode.Contains(val)),
                                     "nodalname" => query.Where(x => x.NodalName != null && x.NodalName.ToLower().Contains(val)),
                                     _ => query.Where(x => x.OtherFields != null && x.OtherFields.ToLower().Contains(val))
                                 };
@@ -224,7 +224,7 @@ namespace Tools.Controllers
             public string? Gender { get; set; }
             public int CorrectCenterCode { get; set; }
             public string? CorrectCenterName { get; set; }
-            public int NodalCode { get; set; }
+            public string? NodalCode { get; set; }
             public string? NodalName { get; set; }
         }
 
@@ -261,7 +261,7 @@ namespace Tools.Controllers
 
                 var centerNameStr = !string.IsNullOrWhiteSpace(req.CorrectCenterName) ? req.CorrectCenterName : $"Center {req.CorrectCenterCode}";
                 var collegeNameStr = !string.IsNullOrWhiteSpace(req.CollegeName) ? req.CollegeName : (req.CollegeCode != 0 ? $"College {req.CollegeCode}" : "Unknown College");
-                var nodalCodeInt = req.NodalCode != 0 ? req.NodalCode : (req.CorrectCenterCode != 0 ? req.CorrectCenterCode : 1);
+                var nodalCodeInt = !string.IsNullOrWhiteSpace(req.NodalCode) ? req.NodalCode : (req.CorrectCenterCode != 0 ? req.CorrectCenterCode.ToString() : "1");
                 var nodalNameStr = !string.IsNullOrWhiteSpace(req.NodalName) ? req.NodalName : $"Nodal {nodalCodeInt}";
 
                 if (!records.Any())
@@ -288,7 +288,7 @@ namespace Tools.Controllers
                         r.ExamCenterCode = req.CorrectCenterCode;
                         r.ExamCenterName = centerNameStr;
                         if (string.IsNullOrWhiteSpace(r.CollegeName)) r.CollegeName = collegeNameStr;
-                        if (r.NodalCode == 0) r.NodalCode = nodalCodeInt;
+                        if (string.IsNullOrWhiteSpace(r.NodalCode)) r.NodalCode = nodalCodeInt;
                         if (string.IsNullOrWhiteSpace(r.NodalName)) r.NodalName = nodalNameStr;
                     }
                 }
@@ -308,19 +308,19 @@ namespace Tools.Controllers
                     if (match)
                     {
                         t.CenterCode = req.CorrectCenterCode.ToString();
-                        t.NodalCode = nodalCodeInt.ToString();
+                        t.NodalCode = nodalCodeInt;
                         if (t.CollegeCode == 0 && req.CollegeCode != 0) t.CollegeCode = req.CollegeCode;
                         if (string.IsNullOrWhiteSpace(t.CollegeName) && !string.IsNullOrWhiteSpace(collegeNameStr)) t.CollegeName = collegeNameStr;
                     }
                 }
 
                 var conflictsToResolve = await _context.ConflictingFields
-                    .Where(c => c.ProjectId == req.ProjectId && c.Status == 1 &&
+                    .Where(c => c.ProjectId == req.ProjectId && c.Status == true &&
                                (c.UniqueField.Contains($"Rule1_MultiCenter_{reqCodeStr}") || c.UniqueField.Contains($"Rule2_Unassigned_{reqCodeStr}") || c.UniqueField.Contains(reqCodeStr)))
                     .ToListAsync();
                 foreach (var conf in conflictsToResolve)
                 {
-                    conf.Status = 0;
+                    conf.Status = false;
                 }
 
                 await _context.SaveChangesAsync();
@@ -335,8 +335,8 @@ namespace Tools.Controllers
         public class ResolveCenterNodalDto
         {
             public int ProjectId { get; set; }
-            public int CenterCode { get; set; }
-            public int CorrectNodalCode { get; set; }
+            public string? CenterCode { get; set; }
+            public string? CorrectNodalCode { get; set; }
             public string? CorrectNodalName { get; set; }
         }
 
@@ -347,7 +347,7 @@ namespace Tools.Controllers
             {
                 await EnsureSchemaAsync();
                 var records = await _context.NodalList
-                    .Where(x => x.ProjectId == req.ProjectId && x.ExamCenterCode == req.CenterCode && x.Status)
+                    .Where(x => x.ProjectId == req.ProjectId && x.ExamCenterCode.ToString() == req.CenterCode && x.Status)
                     .ToListAsync();
 
                 if (!records.Any()) return NotFound(new { message = "No matching records found to update" });
@@ -361,7 +361,7 @@ namespace Tools.Controllers
                     }
                 }
 
-                var centerCodeStr = req.CenterCode.ToString();
+                var centerCodeStr = req.CenterCode;
 
                 // Update TemporaryNrDatas staging table for matching records
                 var tempDatasToUpdate = await _context.TemporaryNrDatas
@@ -372,17 +372,17 @@ namespace Tools.Controllers
                 {
                     if (t.CenterCode == centerCodeStr)
                     {
-                        t.NodalCode = req.CorrectNodalCode.ToString();
+                        t.NodalCode = req.CorrectNodalCode;
                     }
                 }
 
                 var nodalsToResolve = await _context.ConflictingFields
-                    .Where(c => c.ProjectId == req.ProjectId && c.Status == 1 &&
-                               (c.UniqueField.Contains($"Rule1_MultiNodal_{centerCodeStr}") || c.UniqueField.Contains(centerCodeStr)))
+                    .Where(c => c.ProjectId == req.ProjectId && c.Status == true &&
+                               (c.UniqueField.Contains($"Rule1_MultiNodal_{centerCodeStr}") || c.UniqueField.Contains(centerCodeStr ?? "")))
                     .ToListAsync();
                 foreach (var conf in nodalsToResolve)
                 {
-                    conf.Status = 0;
+                    conf.Status = false;
                 }
 
                 await _context.SaveChangesAsync();
