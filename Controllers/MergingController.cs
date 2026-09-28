@@ -119,7 +119,7 @@ namespace Tools.Controllers
 
                 static string GetEffectiveCenterCode(NodalList n)
                 {
-                    if (n.ExamCenterCode != 0) return n.ExamCenterCode.ToString();
+                    if ((!string.IsNullOrWhiteSpace(n.ExamCenterCode))) return n.ExamCenterCode;
                     if (!string.IsNullOrEmpty(n.ExamCenterName))
                     {
                         var code = ExtractCodeNumber(n.ExamCenterName);
@@ -237,7 +237,7 @@ namespace Tools.Controllers
 
                 static string? GetValidCenterCode(NodalList n)
                 {
-                    if (n.ExamCenterCode != 0) return n.ExamCenterCode.ToString();
+                    if ((!string.IsNullOrWhiteSpace(n.ExamCenterCode))) return n.ExamCenterCode;
                     if (!string.IsNullOrWhiteSpace(n.ExamCenterName))
                     {
                         var code = ExtractCodeNumber(n.ExamCenterName);
@@ -275,7 +275,7 @@ namespace Tools.Controllers
                         {
                             var centerNodals = nodalLists.Where(n => 
                                 GetEffectiveCenterCode(n) == catchCenterKey || 
-                                n.ExamCenterCode.ToString() == catchCenterKey || 
+                                n.ExamCenterCode == catchCenterKey || 
                                 GetValidCenterCode(n) == catchCenterKey ||
                                 GetEffectiveCollegeCode(n) == catchCenterKey
                             ).ToList();
@@ -330,7 +330,7 @@ namespace Tools.Controllers
                         if (quantity > 0 || gender == "ALL" || gender == "CO-ED")
                         {
                             matchedAnyGender = true;
-                            var centerCodeStr = GetValidCenterCode(nodalItem) ?? (nodalItem.ExamCenterCode != 0 ? nodalItem.ExamCenterCode.ToString() : ((!string.IsNullOrWhiteSpace(catchItem.CenterCode)) ? catchItem.CenterCode : ""));
+                             var centerCodeStr = GetValidCenterCode(nodalItem) ?? ((!string.IsNullOrWhiteSpace(nodalItem.ExamCenterCode)) ? nodalItem.ExamCenterCode : ((!string.IsNullOrWhiteSpace(catchItem.CenterCode)) ? catchItem.CenterCode : ""));
                             var nodalCodeStr = GetValidNodalCode(nodalItem) ?? ((!string.IsNullOrWhiteSpace(nodalItem.NodalCode)) ? nodalItem.NodalCode : centerCodeStr);
 
                             tempDatas.Add(new TemporaryNrDatas
@@ -592,7 +592,7 @@ namespace Tools.Controllers
                             return "";
                         case "examcentercode":
                         case "centercode":
-                            if (n != null && n.ExamCenterCode != 0) return n.ExamCenterCode.ToString();
+                            if (n != null && (!string.IsNullOrWhiteSpace(n.ExamCenterCode))) return n.ExamCenterCode;
                             if (c != null && (!string.IsNullOrWhiteSpace(c.CenterCode))) return c.CenterCode;
                             if (n != null && !string.IsNullOrEmpty(n.ExamCenterName))
                             {
@@ -798,7 +798,7 @@ namespace Tools.Controllers
 
                 static string GetEffectiveCenterCode(NodalList n)
                 {
-                    if (n.ExamCenterCode != 0) return n.ExamCenterCode.ToString();
+                    if ((!string.IsNullOrWhiteSpace(n.ExamCenterCode))) return n.ExamCenterCode;
                     if (!string.IsNullOrEmpty(n.ExamCenterName))
                     {
                         var code = ExtractCodeNumber(n.ExamCenterName);
@@ -902,7 +902,7 @@ namespace Tools.Controllers
 
                 static string? GetValidCenterCode(NodalList n)
                 {
-                    if (n.ExamCenterCode != 0) return n.ExamCenterCode.ToString();
+                    if ((!string.IsNullOrWhiteSpace(n.ExamCenterCode))) return n.ExamCenterCode;
                     if (!string.IsNullOrWhiteSpace(n.ExamCenterName))
                     {
                         var code = ExtractCodeNumber(n.ExamCenterName);
@@ -955,7 +955,7 @@ namespace Tools.Controllers
                                 n.CollegeCode.ToString() == collegeKey ||
                                 (n.CollegeName ?? "").Trim().ToLowerInvariant() == collegeKey.ToLowerInvariant() ||
                                 GetEffectiveCenterCode(n) == collegeKey ||
-                                n.ExamCenterCode.ToString() == collegeKey ||
+                                n.ExamCenterCode == collegeKey ||
                                 n.NodalCode == collegeKey
                             ).ToList();
 
@@ -971,7 +971,7 @@ namespace Tools.Controllers
                         {
                             var matchedByCenter = nodalLists.Where(n => 
                                 GetEffectiveCenterCode(n) == catchCenterKey || 
-                                n.ExamCenterCode.ToString() == catchCenterKey || 
+                                n.ExamCenterCode == catchCenterKey || 
                                 GetValidCenterCode(n) == catchCenterKey ||
                                 GetEffectiveCollegeCode(n) == catchCenterKey ||
                                 n.CollegeCode.ToString() == catchCenterKey ||
@@ -1016,7 +1016,7 @@ namespace Tools.Controllers
                             }
 
                             var validNodals = nodals
-                                .Where(n => GetValidCenterCode(n) != null || GetValidNodalCode(n) != null || n.ExamCenterCode != 0 || (!string.IsNullOrWhiteSpace(n.NodalCode)))
+                                .Where(n => GetValidCenterCode(n) != null || GetValidNodalCode(n) != null || (!string.IsNullOrWhiteSpace(n.ExamCenterCode)) || (!string.IsNullOrWhiteSpace(n.NodalCode)))
                                 .ToList();
 
                             if (!validNodals.Any())
@@ -1081,7 +1081,7 @@ namespace Tools.Controllers
                                     centerCodes = g.Select(x => x.CenterCode).Where(x => !string.IsNullOrEmpty(x) && x != "0").Distinct().ToList(),
                                     centerNames = g.Select(x => {
                                         var cCode = x.CenterCode;
-                                        var nMatch = nodalLists.FirstOrDefault(n => GetEffectiveCenterCode(n) == cCode || n.ExamCenterCode.ToString() == cCode);
+                                        var nMatch = nodalLists.FirstOrDefault(n => GetEffectiveCenterCode(n) == cCode || n.ExamCenterCode == cCode);
                                         return nMatch != null && !string.IsNullOrEmpty(nMatch.ExamCenterName) ? nMatch.ExamCenterName : $"Center {cCode}";
                                     }).Distinct().ToList(),
                                     totalQuantity = g.Sum(x => x.NRQuantity),
@@ -1267,7 +1267,7 @@ namespace Tools.Controllers
                 string resolvedCenterName = dto.TargetName;
                 if (string.IsNullOrWhiteSpace(resolvedCenterName) && (targetF.Contains("center") || targetF.Contains("examcenter")) && parsedTargetInt > 0)
                 {
-                    var matching = nodalLists.FirstOrDefault(x => x.ExamCenterCode == parsedTargetInt && !string.IsNullOrWhiteSpace(x.ExamCenterName));
+                    var matching = nodalLists.FirstOrDefault(x => x.ExamCenterCode == parsedTargetInt.ToString() && !string.IsNullOrWhiteSpace(x.ExamCenterName));
                     if (matching != null) resolvedCenterName = matching.ExamCenterName;
                 }
 
@@ -1288,7 +1288,7 @@ namespace Tools.Controllers
                     }
                     else if (matchF.Contains("center") || matchF.Contains("examcenter"))
                     {
-                        isMatch = (parsedMatchInt > 0 && n.ExamCenterCode == parsedMatchInt) ||
+                        isMatch = (parsedMatchInt > 0 && n.ExamCenterCode == parsedMatchInt.ToString().ToString()) ||
                                   (!string.IsNullOrEmpty(n.ExamCenterName) && (n.ExamCenterName.Contains(matchVal) || (parsedMatchInt > 0 && n.ExamCenterName.StartsWith(parsedMatchInt.ToString()))));
                     }
                     else if (matchF.Contains("nodal"))
@@ -1298,7 +1298,7 @@ namespace Tools.Controllers
                     }
                     else
                     {
-                        isMatch = (parsedMatchInt > 0 && (n.CollegeCode == parsedMatchInt || n.ExamCenterCode == parsedMatchInt || n.NodalCode == parsedMatchInt.ToString()));
+                        isMatch = (parsedMatchInt > 0 && (n.CollegeCode == parsedMatchInt || n.ExamCenterCode == parsedMatchInt.ToString().ToString() || n.NodalCode == parsedMatchInt.ToString()));
                     }
 
                     if (isMatch)
@@ -1314,7 +1314,7 @@ namespace Tools.Controllers
                         }
                         else if (targetF.Contains("center") || targetF.Contains("examcenter"))
                         {
-                            n.ExamCenterCode = parsedTargetInt > 0 ? parsedTargetInt : n.ExamCenterCode;
+                            n.ExamCenterCode = parsedTargetInt > 0 ? parsedTargetInt.ToString() : n.ExamCenterCode;
                             if (!string.IsNullOrWhiteSpace(resolvedCenterName))
                             {
                                 n.ExamCenterName = resolvedCenterName;
@@ -1376,7 +1376,7 @@ namespace Tools.Controllers
 
                 static string? GetValidCenterCode(NodalList n)
                 {
-                    if (n.ExamCenterCode != 0) return n.ExamCenterCode.ToString();
+                    if ((!string.IsNullOrWhiteSpace(n.ExamCenterCode))) return n.ExamCenterCode;
                     if (!string.IsNullOrWhiteSpace(n.ExamCenterName))
                     {
                         var trimmed = n.ExamCenterName.Trim();
@@ -1426,7 +1426,7 @@ namespace Tools.Controllers
                         if (matchNodals.Any())
                         {
                             var validNodal = matchNodals.FirstOrDefault(n => GetValidCenterCode(n) != null && GetValidNodalCode(n) != null) ?? matchNodals.First();
-                            var centerCodeStr = GetValidCenterCode(validNodal) ?? (validNodal.ExamCenterCode != 0 ? validNodal.ExamCenterCode.ToString() : "");
+                            var centerCodeStr = GetValidCenterCode(validNodal) ?? ((!string.IsNullOrWhiteSpace(validNodal.ExamCenterCode)) ? validNodal.ExamCenterCode : "");
                             var nodalCodeStr = GetValidNodalCode(validNodal) ?? ((!string.IsNullOrWhiteSpace(validNodal.NodalCode)) ? validNodal.NodalCode : "");
 
                             if (!string.IsNullOrEmpty(centerCodeStr) && (temp.CenterCode != centerCodeStr || temp.NodalCode != nodalCodeStr))
