@@ -490,17 +490,20 @@ namespace Tools.Controllers
                     .ToDictionary(p => p.Name.ToLower(), p => p);
 
                 var nodalListsToAdd = new List<NodalList>();
+                var failedRecords = new List<Dictionary<string, string>>();
 
                 for (int i = 0; i < incomingData.GetArrayLength(); i++)
                 {
                     var item = incomingData[i];
                     var nodalList = new NodalList { ProjectId = projectId };
                     var extraData = new Dictionary<string, string>();
+                    var rawRecord = new Dictionary<string, string>();
 
                     foreach (var prop in item.EnumerateObject())
                     {
                         string key = prop.Name.Replace(" ", "").ToLower();
                         string value = prop.Value.ToString().Trim();
+                        rawRecord[prop.Name] = value;
 
                         if (properties.TryGetValue(key, out var propInfo))
                         {
@@ -536,6 +539,14 @@ namespace Tools.Controllers
                     }
 
                     if (extraData.Any()) nodalList.OtherFields = JsonSerializer.Serialize(extraData);
+
+                    if (string.IsNullOrWhiteSpace(nodalList.ExamCenterName) || string.IsNullOrWhiteSpace(nodalList.NodalName))
+                    {
+                        rawRecord["FailureReason"] = "Missing required fields (ExamCenterName, NodalName)";
+                        failedRecords.Add(rawRecord);
+                        continue;
+                    }
+
                     nodalListsToAdd.Add(nodalList);
                 }
 
@@ -548,7 +559,8 @@ namespace Tools.Controllers
                 return Ok(new
                 {
                     message = "Nodal List data uploaded successfully",
-                    NewRecords = nodalListsToAdd.Count
+                    NewRecords = nodalListsToAdd.Count,
+                    FailedRecords = failedRecords
                 });
             }
             catch (Exception ex)

@@ -2323,12 +2323,19 @@ namespace Tools.Controllers
                 .Select(m => m.TemplateId)
                 .ToListAsync()).ToHashSet();
 
+            var webRoot = FileStorageHelper.GetStorageBasePath();
+            var legacyRoot = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot");
+
             return templates.Select(t => (object)new
             {
                 t.TemplateId, t.GroupId, t.TypeId, t.ProjectId, t.UploadedByUserId,
                 t.ModuleIds, t.TemplateName, t.SubName, t.RPTFilePath, t.ParsedFieldsJson,
                 t.Version, t.CreatedDate, t.UpdatedDate, t.IsActive, t.IsDeleted,
                 HasMapping = mappedIds.Contains(t.TemplateId),
+                HasFileOnDisk = !string.IsNullOrWhiteSpace(t.RPTFilePath) && (
+                    System.IO.File.Exists(Path.Combine(webRoot, t.RPTFilePath)) ||
+                    System.IO.File.Exists(Path.Combine(legacyRoot, t.RPTFilePath))
+                ),
                 MappingWarning = mappedIds.Contains(t.TemplateId)
                     ? null
                     : "This template does not have a mapping configured and will not appear in the processing pipeline."
