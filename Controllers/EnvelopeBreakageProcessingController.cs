@@ -168,6 +168,27 @@ namespace Tools.Controllers
                     .Where(p => p.ProjectId == ProjectId)
                     .ToListAsync();
 
+                var nodalExtraConfig = extrasconfig.FirstOrDefault(e => e.ExtraType == 1);
+                bool attachExtraForAllNodal = nodalExtraConfig?.AttachExtraForEachCatchForAllNodal == true ||
+                                              extrasconfig.Any(e => e.AttachExtraForEachCatchForAllNodal);
+
+                var allProjectNodals = await _context.NRDatas
+                    .Where(n => n.ProjectId == ProjectId && n.Status == true && !string.IsNullOrEmpty(n.NodalCode))
+                    .GroupBy(n => n.NodalCode)
+                    .Select(g => new {
+                        NodalCode = g.Key,
+                        NodalSort = g.Max(n => n.NodalSort),
+                        Route = g.Select(n => n.Route).FirstOrDefault(r => !string.IsNullOrEmpty(r)) ?? "",
+                        RouteSort = g.Max(n => n.RouteSort),
+                        District = g.Select(n => n.District).FirstOrDefault(d => !string.IsNullOrEmpty(d)) ?? "",
+                        DistrictSort = g.Max(n => n.DistrictSort),
+                        CenterCode = g.Select(n => n.CenterCode).FirstOrDefault() ?? "",
+                        NrDataId = g.Select(n => n.Id).FirstOrDefault()
+                    })
+                    .OrderBy(n => n.RouteSort)
+                    .ThenBy(n => n.NodalSort)
+                    .ToListAsync();
+
                 // ✅ Load sorting field names EARLY so they're available inside helpers
                 var sortFields = await _context.Fields
                     .Where(f => projectconfig.EnvelopeMakingCriteria.Contains(f.FieldId))
@@ -407,6 +428,88 @@ namespace Tools.Controllers
                     }
                 }
 
+                void AddMissingNodalExtrasForCatch(string targetCatchNo, NRData referenceNrData)
+                {
+                    if (!attachExtraForAllNodal || string.IsNullOrEmpty(targetCatchNo) || referenceNrData == null) return;
+
+                    foreach (var nodal in allProjectNodals)
+                    {
+                        if (nodalExtrasAddedForNodalCatch.Contains((nodal.NodalCode, targetCatchNo)))
+                            continue;
+
+                        var extrasToAdd = extras.Where(e => e.ExtraId == 1 && e.CatchNo == targetCatchNo &&
+                            (e.NodalCode == nodal.NodalCode || (string.IsNullOrEmpty(e.NodalCode) && !extras.Any(x => x.ExtraId == 1 && x.CatchNo == targetCatchNo && x.NodalCode == nodal.NodalCode)))).ToList();
+
+                        if (extrasToAdd.Any())
+                        {
+                            foreach (var extra in extrasToAdd)
+                            {
+                                AddExtraWithEnv(extra, referenceNrData.ExamDate, referenceNrData.ExamTime, referenceNrData.CourseName,
+                                    0, nodal.NodalCode, nodal.CenterCode, 10000,
+                                    nodal.NodalSort, nodal.RouteSort, nodal.Route, nodal.NrDataId, nodal.District, nodal.DistrictSort);
+                            }
+                        }
+                        else
+                        {
+                            var sampleExtra = extras.FirstOrDefault(e => e.ExtraId == 1 && e.CatchNo == targetCatchNo)
+                                           ?? extras.FirstOrDefault(e => e.ExtraId == 1);
+
+                            int calculatedQty = 0;
+                            if (nodalExtraConfig != null)
+                            {
+                                if (!string.IsNullOrWhiteSpace(nodalExtraConfig.nodalValue))
+                                {
+                                    try
+                                    {
+                                        var nConfigs = JsonSerializer.Deserialize<List<ExtraEnvelopesController.NodalValueConfig>>(
+                                            nodalExtraConfig.nodalValue,
+                                            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                                        var match = nConfigs?.FirstOrDefault(nc =>
+                                            !string.IsNullOrEmpty(nc.NodalCodes) &&
+                                            nc.NodalCodes.Split(',').Select(x => x.Trim()).Contains(nodal.NodalCode, StringComparer.OrdinalIgnoreCase));
+                                        if (match != null && int.TryParse(match.Value, out int mv))
+                                        {
+                                            calculatedQty = mv;
+                                        }
+                                    }
+                                    catch { }
+                                }
+
+                                if (calculatedQty == 0 && int.TryParse(nodalExtraConfig.Value, out int fv))
+                                {
+                                    calculatedQty = fv;
+                                }
+                            }
+
+                            if (calculatedQty == 0 && sampleExtra != null)
+                            {
+                                calculatedQty = sampleExtra.Quantity;
+                            }
+
+                            if (calculatedQty > 0 || sampleExtra != null)
+                            {
+                                var fallbackExtra = new ExtraEnvelopes
+                                {
+                                    ProjectId = ProjectId,
+                                    CatchNo = targetCatchNo,
+                                    NodalCode = nodal.NodalCode,
+                                    ExtraId = 1,
+                                    Quantity = calculatedQty > 0 ? calculatedQty : (sampleExtra?.Quantity ?? 0),
+                                    InnerEnvelope = sampleExtra?.InnerEnvelope ?? "0",
+                                    OuterEnvelope = sampleExtra?.OuterEnvelope ?? "0",
+                                    Status = 1
+                                };
+
+                                AddExtraWithEnv(fallbackExtra, referenceNrData.ExamDate, referenceNrData.ExamTime, referenceNrData.CourseName,
+                                    0, nodal.NodalCode, nodal.CenterCode, 10000,
+                                    nodal.NodalSort, nodal.RouteSort, nodal.Route, nodal.NrDataId, nodal.District, nodal.DistrictSort);
+                            }
+                        }
+
+                        nodalExtrasAddedForNodalCatch.Add((nodal.NodalCode, targetCatchNo));
+                    }
+                }
+
                 for (int i = 0; i < nrData.Count; i++)
                 {
                     var current = nrData[i];
@@ -419,7 +522,7 @@ namespace Tools.Controllers
                         if (!nodalExtrasAddedForNodalCatch.Contains((prevNrData.NodalCode, prevCatchNo)))
                         {
                             var extrasToAdd = extras.Where(e => e.ExtraId == 1 && e.CatchNo == prevCatchNo &&
-    (string.IsNullOrEmpty(e.NodalCode) || e.NodalCode == prevNrData.NodalCode)).ToList();
+                                (e.NodalCode == prevNrData.NodalCode || (string.IsNullOrEmpty(e.NodalCode) && !extras.Any(x => x.ExtraId == 1 && x.CatchNo == prevCatchNo && x.NodalCode == prevNrData.NodalCode)))).ToList();
                             foreach (var extra in extrasToAdd)
                             {
                                 AddExtraWithEnv(extra, prevNrData.ExamDate, prevNrData.ExamTime, prevNrData.CourseName,
@@ -427,6 +530,11 @@ namespace Tools.Controllers
                                     prevNrData.NodalSort, prevNrData.RouteSort, prevNrData.Route, prevNrData.Id, prevNrData.District, prevNrData.DistrictSort);
                             }
                             nodalExtrasAddedForNodalCatch.Add((prevNrData.NodalCode, prevCatchNo));
+                        }
+
+                        if (attachExtraForAllNodal)
+                        {
+                            AddMissingNodalExtrasForCatch(prevCatchNo, prevNrData);
                         }
 
                         foreach (var extraId in new[] { 2, 3 })
@@ -450,7 +558,7 @@ namespace Tools.Controllers
                         if (!nodalExtrasAddedForNodalCatch.Contains((prevNodalCode, current.CatchNo)))
                         {
                             var extrasToAdd = extras.Where(e => e.ExtraId == 1 && e.CatchNo == current.CatchNo &&
-    (string.IsNullOrEmpty(e.NodalCode) || e.NodalCode == prevNodalCode)).ToList();
+                                (e.NodalCode == prevNodalCode || (string.IsNullOrEmpty(e.NodalCode) && !extras.Any(x => x.ExtraId == 1 && x.CatchNo == current.CatchNo && x.NodalCode == prevNodalCode)))).ToList();
                             foreach (var extra in extrasToAdd)
                             {
                                 AddExtraWithEnv(extra, current.ExamDate, current.ExamTime, current.CourseName,
@@ -614,13 +722,19 @@ namespace Tools.Controllers
                         if (!nodalExtrasAddedForNodalCatch.Contains((lastNrData.NodalCode, prevCatchNo)))
                         {
                             var extrasToAdd = extras.Where(e => e.ExtraId == 1 && e.CatchNo == prevCatchNo &&
-    (string.IsNullOrEmpty(e.NodalCode) || e.NodalCode == lastNrData.NodalCode)).ToList();
+                                (e.NodalCode == lastNrData.NodalCode || (string.IsNullOrEmpty(e.NodalCode) && !extras.Any(x => x.ExtraId == 1 && x.CatchNo == prevCatchNo && x.NodalCode == lastNrData.NodalCode)))).ToList();
                             foreach (var extra in extrasToAdd)
                             {
                                 AddExtraWithEnv(extra, lastNrData.ExamDate, lastNrData.ExamTime, lastNrData.CourseName,
                                     lastNrData.NRQuantity, lastNrData.NodalCode, lastNrData.CenterCode, lastNrData.CenterSort,
                                     lastNrData.NodalSort, lastNrData.RouteSort, lastNrData.Route, lastNrData.Id, lastNrData.District, lastNrData.DistrictSort);
                             }
+                            nodalExtrasAddedForNodalCatch.Add((lastNrData.NodalCode, prevCatchNo));
+                        }
+
+                        if (attachExtraForAllNodal)
+                        {
+                            AddMissingNodalExtrasForCatch(prevCatchNo, lastNrData);
                         }
 
                         foreach (var extraId in new[] { 2, 3 })

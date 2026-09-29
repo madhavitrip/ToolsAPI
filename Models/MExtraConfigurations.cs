@@ -1,4 +1,4 @@
-﻿using System.ComponentModel.DataAnnotations.Schema;
+using System.ComponentModel.DataAnnotations.Schema;
 using System.ComponentModel.DataAnnotations;
 
 namespace Tools.Models
@@ -16,6 +16,7 @@ namespace Tools.Models
         public string EnvelopeType { get; set; }
         public string? RangeConfig { get; set; }
         public bool IsExtraProcessingAsPerNR { get; set; }
+        public bool AttachExtraForEachCatchForAllNodal { get; set; } = false;
 
     }
 }

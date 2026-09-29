@@ -19,16 +19,46 @@ namespace Tools.Controllers
     {
         private readonly ERPToolsDbContext _context;
         private readonly ILoggerService _loggerService;
+        private static bool _schemaEnsured = false;
+        private static readonly object _schemaLock = new object();
+
         public ExtrasConfigurationsController(ERPToolsDbContext context, ILoggerService loggerService)
         {
             _context = context;
             _loggerService = loggerService;
         }
 
+        private async Task EnsureSchemaAsync()
+        {
+            if (_schemaEnsured) return;
+            lock (_schemaLock)
+            {
+                if (_schemaEnsured) return;
+            }
+
+            try
+            {
+                await _context.Database.ExecuteSqlRawAsync("ALTER TABLE ExtraConfigurations ADD COLUMN AttachExtraForEachCatchForAllNodal TINYINT(1) NOT NULL DEFAULT 0;");
+            }
+            catch { }
+
+            try
+            {
+                await _context.Database.ExecuteSqlRawAsync("ALTER TABLE MExtraConfigurations ADD COLUMN AttachExtraForEachCatchForAllNodal TINYINT(1) NOT NULL DEFAULT 0;");
+            }
+            catch { }
+
+            lock (_schemaLock)
+            {
+                _schemaEnsured = true;
+            }
+        }
+
         // GET: api/ExtrasConfigurations
         [HttpGet]
         public async Task<ActionResult<IEnumerable<ExtrasConfiguration>>> GetExtraConfigurations()
         {
+            await EnsureSchemaAsync();
             return await _context.ExtraConfigurations.ToListAsync();
         }
 
@@ -37,6 +67,7 @@ namespace Tools.Controllers
         [HttpGet("ByProject/{projectId}")]
         public async Task<ActionResult<IEnumerable<ExtrasConfiguration>>> GetExtrasByProjectId(int projectId)
         {
+            await EnsureSchemaAsync();
             var extras = await _context.ExtraConfigurations
                 .Where(e => e.ProjectId == projectId)
                 .ToListAsync();
@@ -61,6 +92,7 @@ namespace Tools.Controllers
         [HttpGet("{id}")]
         public async Task<ActionResult<ExtrasConfiguration>> GetExtrasConfiguration(int id)
         {
+            await EnsureSchemaAsync();
             var extrasConfiguration = await _context.ExtraConfigurations.FindAsync(id);
 
             if (extrasConfiguration == null)
@@ -96,6 +128,7 @@ namespace Tools.Controllers
                 return BadRequest();
             }
 
+            await EnsureSchemaAsync();
             _context.Entry(extrasConfiguration).State = EntityState.Modified;
 
             try
@@ -129,6 +162,7 @@ namespace Tools.Controllers
         {
             try
             {
+                await EnsureSchemaAsync();
                 // Log incoming request for debugging
                 Console.WriteLine($" Received ExtrasConfiguration:");
                 Console.WriteLine($"   ProjectId: {extrasConfiguration.ProjectId}");

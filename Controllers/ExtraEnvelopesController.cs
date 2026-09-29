@@ -153,6 +153,10 @@ namespace Tools.Controllers
         }
 
 
+        private static bool _extraSchemaEnsured = false;
+        private static readonly object _extraSchemaLock = new object();
+
+
         // POST: api/ExtraEnvelopes
         // To protect from overposting attacks, see https://go.microsoft.com/fwlink/?linkid=2123754
         [HttpPost]
@@ -245,7 +249,8 @@ namespace Tools.Controllers
 
                     foreach (var config in extraConfig)
                     {
-                        bool useNodal = !string.IsNullOrWhiteSpace(config.nodalValue);
+                        bool isNodalExtra = config.ExtraType == 1;
+                        bool useNodal = isNodalExtra || !string.IsNullOrWhiteSpace(config.nodalValue);
 
                         EnvelopeType envelopeType;
                         try
@@ -263,7 +268,8 @@ namespace Tools.Controllers
                         // ---------- GROUPING ----------
                         var groupedData = useNodal
                             ? nrDataList
-                                .GroupBy(x => new { x.CatchNo, NodalCode = x.NodalCode ?? "" })
+                                .Where(x => !isNodalExtra || !string.IsNullOrWhiteSpace(x.NodalCode))
+                                .GroupBy(x => new { x.CatchNo, NodalCode = (x.NodalCode ?? "").Trim() })
                                 .Select(g => new
                                 {
                                     g.Key.CatchNo,
@@ -279,9 +285,45 @@ namespace Tools.Controllers
                                     Quantity = g.Sum(x => x.Quantity)
                                 }).ToList();
 
+                        if (config.ExtraType == 1 && config.AttachExtraForEachCatchForAllNodal)
+                        {
+                            var distinctCatches = nrDataList.Select(x => x.CatchNo).Where(c => !string.IsNullOrEmpty(c)).Distinct().ToList();
+                            var allNodals = await _context.NRDatas
+                                .Where(n => n.ProjectId == ProjectId && n.Status == true && !string.IsNullOrEmpty(n.NodalCode))
+                                .Select(n => n.NodalCode.Trim())
+                                .Distinct()
+                                .ToListAsync();
+
+                            var existingPairs = new HashSet<(string, string)>(groupedData.Select(g => (g.CatchNo, g.NodalCode ?? "")));
+                            foreach (var cNo in distinctCatches)
+                            {
+                                foreach (var nCode in allNodals)
+                                {
+                                    if (!existingPairs.Contains((cNo, nCode)))
+                                    {
+                                        groupedData.Add(new
+                                        {
+                                            CatchNo = cNo,
+                                            NodalCode = nCode,
+                                            Quantity = 0
+                                        });
+                                        existingPairs.Add((cNo, nCode));
+                                    }
+                                }
+                            }
+
+                            // Ensure no empty NodalCode remains for Nodal Extra
+                            groupedData.RemoveAll(g => string.IsNullOrWhiteSpace(g.NodalCode));
+                        }
+                        else if (config.ExtraType == 1)
+                        {
+                            // Ensure no empty NodalCode remains for Nodal Extra
+                            groupedData.RemoveAll(g => string.IsNullOrWhiteSpace(g.NodalCode));
+                        }
+
                         // ---------- NODAL CONFIG ----------
                         List<NodalValueConfig> nodalConfigs = null;
-                        if (useNodal)
+                        if (useNodal && !string.IsNullOrWhiteSpace(config.nodalValue))
                         {
                             try
                             {
@@ -294,6 +336,10 @@ namespace Tools.Controllers
 
                         foreach (var data in groupedData)
                         {
+                            // For Nodal Extra (ExtraType 1), never add an envelope with empty/null NodalCode
+                            if (config.ExtraType == 1 && string.IsNullOrWhiteSpace(data.NodalCode))
+                                continue;
+
                             int calculatedQuantity = 0;
 
                             if (useNodal && nodalConfigs != null)
@@ -316,6 +362,41 @@ namespace Tools.Controllers
                                         case "Percentage":
                                             if (decimal.TryParse(match.Value, out var pv))
                                                 calculatedQuantity = (int)Math.Round((double)(data.Quantity * pv) / 100);
+                                            break;
+                                    }
+                                }
+                                else
+                                {
+                                    switch (config.Mode)
+                                    {
+                                        case "Fixed":
+                                            if (int.TryParse(config.Value, out var fqv))
+                                                calculatedQuantity = fqv;
+                                            break;
+
+                                        case "Percentage":
+                                            if (decimal.TryParse(config.Value, out var percent))
+                                            {
+                                                var raw = (double)(data.Quantity * percent) / 100;
+
+                                                if (innerCapacity > 10)
+                                                    calculatedQuantity = (int)Math.Ceiling(raw / innerCapacity) * innerCapacity;
+                                                else if (outerCapacity > 0)
+                                                    calculatedQuantity = (int)Math.Ceiling(raw / outerCapacity) * outerCapacity;
+                                            }
+                                            break;
+
+                                        case "Range":
+                                            if (!string.IsNullOrEmpty(config.RangeConfig))
+                                            {
+                                                var rangeConfig = JsonSerializer.Deserialize<RangeConfigModel>(config.RangeConfig);
+
+                                                var range = rangeConfig?.ranges?
+                                                    .FirstOrDefault(r => data.Quantity >= r.from && data.Quantity <= r.to);
+
+                                                if (range != null)
+                                                    calculatedQuantity = range.value;
+                                            }
                                             break;
                                     }
                                 }
