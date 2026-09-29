@@ -61,12 +61,12 @@ namespace Tools.Controllers
                         (x.CourseName != null && x.CourseName.ToLower().Contains(search)) ||
                         (x.SubjectName != null && x.SubjectName.ToLower().Contains(search)) ||
                         (x.PaperCode != null && x.PaperCode.ToLower().Contains(search)) ||
-                        x.CollegeCode.ToString().Contains(search) ||
-                        x.CenterCode.ToString().Contains(search) ||
+                        Convert.ToString(x.CollegeCode).Contains(search) ||
+                        (x.CenterCode != null && x.CenterCode.ToLower().Contains(search)) ||
                         (x.CenterName != null && x.CenterName.ToLower().Contains(search)) ||
-                        x.Transgender.ToString().Contains(search) ||
-                        x.Male.ToString().Contains(search) ||
-                        x.Female.ToString().Contains(search) ||
+                        Convert.ToString(x.Transgender).Contains(search) ||
+                        Convert.ToString(x.Male).Contains(search) ||
+                        Convert.ToString(x.Female).Contains(search) ||
                         (x.Semester != null && x.Semester.ToLower().Contains(search)) ||
                         (x.NRDatas != null && x.NRDatas.ToLower().Contains(search))
                     );
@@ -87,19 +87,19 @@ namespace Tools.Controllers
                                 query = key switch
                                 {
                                     "catchno" => query.Where(x => x.CatchNo != null && x.CatchNo.ToLower().Contains(val)),
-                                    "collegecode" => query.Where(x => x.CollegeCode.ToString().Contains(val)),
+                                    "collegecode" => query.Where(x => Convert.ToString(x.CollegeCode).Contains(val)),
                                     "collegename" => query.Where(x => x.CollegeName != null && x.CollegeName.ToLower().Contains(val)),
-                                    "centercode" => query.Where(x => x.CenterCode.ToString().Contains(val)),
+                                    "centercode" => query.Where(x => x.CenterCode != null && x.CenterCode.ToLower().Contains(val)),
                                     "centername" => query.Where(x => x.CenterName != null && x.CenterName.ToLower().Contains(val)),
                                     "papercode" => query.Where(x => x.PaperCode != null && x.PaperCode.ToLower().Contains(val)),
                                     "coursename" => query.Where(x => x.CourseName != null && x.CourseName.ToLower().Contains(val)),
                                     "subjectname" => query.Where(x => x.SubjectName != null && x.SubjectName.ToLower().Contains(val)),
-                                    "nrquantity" => query.Where(x => x.NRQuantity.ToString().Contains(val)),
+                                    "nrquantity" => query.Where(x => Convert.ToString(x.NRQuantity).Contains(val)),
                                     "examdate" => query.Where(x => x.ExamDate != null && x.ExamDate.ToLower().Contains(val)),
                                     "examtime" => query.Where(x => x.ExamTime != null && x.ExamTime.ToLower().Contains(val)),
-                                    "transgender" => query.Where(x => x.Transgender.ToString().Contains(val)),
-                                    "male" => query.Where(x => x.Male.ToString().Contains(val)),
-                                    "female" => query.Where(x => x.Female.ToString().Contains(val)),
+                                    "transgender" => query.Where(x => Convert.ToString(x.Transgender).Contains(val)),
+                                    "male" => query.Where(x => Convert.ToString(x.Male).Contains(val)),
+                                    "female" => query.Where(x => Convert.ToString(x.Female).Contains(val)),
                                     "semester" => query.Where(x => x.Semester != null && x.Semester.ToLower().Contains(val)),
                                     _ => query.Where(x => x.NRDatas != null && x.NRDatas.ToLower().Contains(val))
                                 };

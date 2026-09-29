@@ -179,16 +179,16 @@ namespace Tools.Controllers
                         query = query.Where(d => d.Route.ToLower().Contains(search));
                         break;
                     case "ExamDate":
-                        query = query.Where(d => d.ExamDate.ToString().Contains(search));
+                        query = query.Where(d => (d.ExamDate != null && d.ExamDate.ToLower().Contains(search)) || Convert.ToString(d.ExamDate).Contains(search));
                         break;
                     case "ExamTime":
-                        query = query.Where(d => d.ExamTime.ToString().Contains(search));
+                        query = query.Where(d => (d.ExamTime != null && d.ExamTime.ToLower().Contains(search)) || Convert.ToString(d.ExamTime).Contains(search));
                         break;
                     case "NRQuantity":
-                        query = query.Where(d => d.NRQuantity.ToString().Contains(search));
+                        query = query.Where(d => Convert.ToString(d.NRQuantity).Contains(search));
                         break;
                     case "Quantity":
-                        query = query.Where(d => d.Quantity.ToString().Contains(search));
+                        query = query.Where(d => Convert.ToString(d.Quantity).Contains(search));
                         break;
 
                     default:
@@ -373,7 +373,7 @@ namespace Tools.Controllers
                     "CourseName" => query.Where(d => d.CourseName != null && d.CourseName.Contains(search)),
                     "ExamDate" => query.Where(d => d.ExamDate != null && d.ExamDate.Contains(search)),
                     "ExamTime" => query.Where(d => d.ExamTime != null && d.ExamTime.Contains(search)),
-                    "LotNo" => query.Where(d => d.LotNo.ToString().Contains(search)),
+                    "LotNo" => query.Where(d => Convert.ToString(d.LotNo).Contains(search)),
                     _ => query
                 };
             }
