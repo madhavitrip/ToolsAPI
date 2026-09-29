@@ -107,6 +107,10 @@ builder.Services.AddHttpClient<IDispatchService, DispatchService>();
 builder.Services.AddControllers(options =>
 {
     options.Filters.Add<ApiAuditLoggingFilter>();
+})
+.AddJsonOptions(options =>
+{
+    options.JsonSerializerOptions.NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowReadingFromString | System.Text.Json.Serialization.JsonNumberHandling.WriteAsString;
 });
 builder.Services.Configure<FormOptions>(options =>
 {

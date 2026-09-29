@@ -75,12 +75,12 @@ namespace Tools.Controllers
                 {
                     search = search.ToLower();
                     query = query.Where(x => 
-                        x.CollegeCode.ToString().Contains(search) ||
+                        Convert.ToString(x.CollegeCode).Contains(search) ||
                         (x.CollegeName != null && x.CollegeName.ToLower().Contains(search)) ||
-                        x.ExamCenterCode.Contains(search) ||
+                        (x.ExamCenterCode != null && x.ExamCenterCode.Contains(search)) ||
                         (x.ExamCenterName != null && x.ExamCenterName.ToLower().Contains(search)) ||
                         (x.Gender != null && x.Gender.ToLower().Contains(search)) ||
-                        x.NodalCode.Contains(search) ||
+                        (x.NodalCode != null && x.NodalCode.Contains(search)) ||
                         (x.NodalName != null && x.NodalName.ToLower().Contains(search)) ||
                         (x.OtherFields != null && x.OtherFields.ToLower().Contains(search))
                     );
@@ -100,7 +100,7 @@ namespace Tools.Controllers
 
                                 query = key switch
                                 {
-                                    "collegecode" => query.Where(x => x.CollegeCode.ToString().Contains(val)),
+                                    "collegecode" => query.Where(x => Convert.ToString(x.CollegeCode).Contains(val)),
                                     "collegename" => query.Where(x => x.CollegeName != null && x.CollegeName.ToLower().Contains(val)),
                                     "examcentercode" => query.Where(x => x.ExamCenterCode.Contains(val)),
                                     "examcentername" => query.Where(x => x.ExamCenterName != null && x.ExamCenterName.ToLower().Contains(val)),
@@ -244,8 +244,20 @@ namespace Tools.Controllers
             public string? Gender { get; set; }
             public int CorrectCenterCode { get; set; }
             public string? CorrectCenterName { get; set; }
-            public string? NodalCode { get; set; }
+            public object? NodalCode { get; set; }
             public string? NodalName { get; set; }
+
+            public string? GetNodalCodeString()
+            {
+                if (NodalCode == null) return null;
+                if (NodalCode is System.Text.Json.JsonElement elem)
+                {
+                    if (elem.ValueKind == System.Text.Json.JsonValueKind.Number) return elem.GetInt64().ToString();
+                    if (elem.ValueKind == System.Text.Json.JsonValueKind.String) return elem.GetString();
+                    return elem.ToString();
+                }
+                return NodalCode.ToString();
+            }
         }
 
         [HttpPost("resolve-college-center")]
@@ -281,7 +293,8 @@ namespace Tools.Controllers
 
                 var centerNameStr = !string.IsNullOrWhiteSpace(req.CorrectCenterName) ? req.CorrectCenterName : $"Center {req.CorrectCenterCode}";
                 var collegeNameStr = !string.IsNullOrWhiteSpace(req.CollegeName) ? req.CollegeName : (req.CollegeCode != 0 ? $"College {req.CollegeCode}" : "Unknown College");
-                var nodalCodeInt = !string.IsNullOrWhiteSpace(req.NodalCode) ? req.NodalCode : (req.CorrectCenterCode != 0 ? req.CorrectCenterCode.ToString() : "1");
+                var nodalCodeRaw = req.GetNodalCodeString();
+                var nodalCodeInt = !string.IsNullOrWhiteSpace(nodalCodeRaw) ? nodalCodeRaw : (req.CorrectCenterCode != 0 ? req.CorrectCenterCode.ToString() : "1");
                 var nodalNameStr = !string.IsNullOrWhiteSpace(req.NodalName) ? req.NodalName : $"Nodal {nodalCodeInt}";
 
                 if (!records.Any())
@@ -355,9 +368,33 @@ namespace Tools.Controllers
         public class ResolveCenterNodalDto
         {
             public int ProjectId { get; set; }
-            public string? CenterCode { get; set; }
-            public string? CorrectNodalCode { get; set; }
+            public object? CenterCode { get; set; }
+            public object? CorrectNodalCode { get; set; }
             public string? CorrectNodalName { get; set; }
+
+            public string? GetCenterCodeString()
+            {
+                if (CenterCode == null) return null;
+                if (CenterCode is System.Text.Json.JsonElement elem)
+                {
+                    if (elem.ValueKind == System.Text.Json.JsonValueKind.Number) return elem.GetInt64().ToString();
+                    if (elem.ValueKind == System.Text.Json.JsonValueKind.String) return elem.GetString();
+                    return elem.ToString();
+                }
+                return CenterCode.ToString();
+            }
+
+            public string? GetCorrectNodalCodeString()
+            {
+                if (CorrectNodalCode == null) return null;
+                if (CorrectNodalCode is System.Text.Json.JsonElement elem)
+                {
+                    if (elem.ValueKind == System.Text.Json.JsonValueKind.Number) return elem.GetInt64().ToString();
+                    if (elem.ValueKind == System.Text.Json.JsonValueKind.String) return elem.GetString();
+                    return elem.ToString();
+                }
+                return CorrectNodalCode.ToString();
+            }
         }
 
         [HttpPost("resolve-center-nodal")]
@@ -366,22 +403,23 @@ namespace Tools.Controllers
             try
             {
                 await EnsureSchemaAsync();
+                var centerCodeStr = req.GetCenterCodeString();
+                var correctNodalCodeStr = req.GetCorrectNodalCodeString();
+
                 var records = await _context.NodalList
-                    .Where(x => x.ProjectId == req.ProjectId && x.ExamCenterCode == req.CenterCode && x.Status)
+                    .Where(x => x.ProjectId == req.ProjectId && x.ExamCenterCode == centerCodeStr && x.Status)
                     .ToListAsync();
 
                 if (!records.Any()) return NotFound(new { message = "No matching records found to update" });
 
                 foreach (var r in records)
                 {
-                    r.NodalCode = req.CorrectNodalCode;
+                    r.NodalCode = correctNodalCodeStr;
                     if (!string.IsNullOrEmpty(req.CorrectNodalName))
                     {
                         r.NodalName = req.CorrectNodalName;
                     }
                 }
-
-                var centerCodeStr = req.CenterCode;
 
                 // Update TemporaryNrDatas staging table for matching records
                 var tempDatasToUpdate = await _context.TemporaryNrDatas
@@ -392,7 +430,7 @@ namespace Tools.Controllers
                 {
                     if (t.CenterCode == centerCodeStr)
                     {
-                        t.NodalCode = req.CorrectNodalCode;
+                        t.NodalCode = correctNodalCodeStr;
                     }
                 }
 
