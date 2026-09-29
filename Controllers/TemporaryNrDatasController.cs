@@ -33,7 +33,7 @@ namespace Tools.Controllers
                         (x.SubjectName != null && x.SubjectName.ToLower().Contains(search)) ||
                         (x.CenterCode != null && x.CenterCode.ToLower().Contains(search)) ||
                         (x.NodalCode != null && x.NodalCode.ToLower().Contains(search)) ||
-                        x.CollegeCode.ToString().Contains(search) ||
+                        Convert.ToString(x.CollegeCode).Contains(search) ||
                         (x.CollegeName != null && x.CollegeName.ToLower().Contains(search))
                     );
                 }
@@ -55,7 +55,7 @@ namespace Tools.Controllers
                                     "catchno" => query.Where(x => x.CatchNo != null && x.CatchNo.ToLower().Contains(val)),
                                     "centercode" => query.Where(x => x.CenterCode != null && x.CenterCode.ToLower().Contains(val)),
                                     "nodalcode" => query.Where(x => x.NodalCode != null && x.NodalCode.ToLower().Contains(val)),
-                                    "collegecode" => query.Where(x => x.CollegeCode.ToString().Contains(val)),
+                                    "collegecode" => query.Where(x => Convert.ToString(x.CollegeCode).Contains(val)),
                                     "collegename" => query.Where(x => x.CollegeName != null && x.CollegeName.ToLower().Contains(val)),
                                     "coursename" => query.Where(x => x.CourseName != null && x.CourseName.ToLower().Contains(val)),
                                     "subjectname" => query.Where(x => x.SubjectName != null && x.SubjectName.ToLower().Contains(val)),
