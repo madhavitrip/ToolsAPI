@@ -280,17 +280,20 @@ namespace Tools.Controllers
                     .ToDictionary(p => p.Name.ToLower(), p => p);
 
                 var catchListsToAdd = new List<CatchList>();
+                var failedRecords = new List<Dictionary<string, string>>();
 
                 for (int i = 0; i < incomingData.GetArrayLength(); i++)
                 {
                     var item = incomingData[i];
                     var catchList = new CatchList { ProjectId = projectId };
                     var extraData = new Dictionary<string, string>();
+                    var rawRecord = new Dictionary<string, string>();
 
                     foreach (var prop in item.EnumerateObject())
                     {
                         string key = prop.Name.Replace(" ", "").ToLower();
                         string value = prop.Value.ToString().Trim();
+                        rawRecord[prop.Name] = value;
 
                         if (properties.TryGetValue(key, out var propInfo))
                         {
@@ -327,6 +330,13 @@ namespace Tools.Controllers
 
                     if (extraData.Any()) catchList.NRDatas = JsonSerializer.Serialize(extraData);
 
+                    if (string.IsNullOrWhiteSpace(catchList.CenterCode) || string.IsNullOrWhiteSpace(catchList.CatchNo) || catchList.NRQuantity <= 0)
+                    {
+                        rawRecord["FailureReason"] = "Missing required fields (CenterCode, CatchNo) or NRQuantity is 0";
+                        failedRecords.Add(rawRecord);
+                        continue;
+                    }
+
                     if (!string.IsNullOrWhiteSpace(catchList.CatchNo))
                     {
                         var expandedCatches = ExpandCatchNoRange(catchList.CatchNo);
@@ -362,7 +372,8 @@ namespace Tools.Controllers
                 return Ok(new
                 {
                     message = "Catch List data uploaded successfully",
-                    NewRecords = catchListsToAdd.Count
+                    NewRecords = catchListsToAdd.Count,
+                    FailedRecords = failedRecords
                 });
             }
             catch (Exception ex)
