@@ -110,7 +110,7 @@ builder.Services.AddControllers(options =>
 })
 .AddJsonOptions(options =>
 {
-    options.JsonSerializerOptions.NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowReadingFromString | System.Text.Json.Serialization.JsonNumberHandling.WriteAsString;
+    options.JsonSerializerOptions.NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowReadingFromString;
 });
 builder.Services.Configure<FormOptions>(options =>
 {
