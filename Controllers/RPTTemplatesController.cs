@@ -1033,7 +1033,8 @@ namespace Tools.Controllers
                         t.TemplateId,
                         t.TemplateName,
                         t.Version,
-                        t.SubName
+                        t.SubName,
+                        t.ModuleIds
                     })
                     .ToListAsync();
 
@@ -1057,7 +1058,8 @@ namespace Tools.Controllers
                         t.TemplateId,
                         t.TemplateName,
                         t.Version,
-                        t.SubName
+                        t.SubName,
+                        t.ModuleIds
                     })
                     .ToListAsync();
 
@@ -1073,7 +1075,8 @@ namespace Tools.Controllers
                         t.TemplateId,
                         t.TemplateName,
                         t.Version,
-                        t.SubName
+                        t.SubName,
+                        t.ModuleIds
                     })
                     .ToListAsync();
 
@@ -1101,7 +1104,8 @@ namespace Tools.Controllers
                         t.TemplateId,
                         t.TemplateName,
                         t.Version,
-                        t.SubName
+                        t.SubName,
+                        t.ModuleIds
                     })
                     .ToListAsync();
 
@@ -1117,7 +1121,8 @@ namespace Tools.Controllers
                         t.TemplateId,
                         t.TemplateName,
                         t.Version,
-                        t.SubName
+                        t.SubName,
+                        t.ModuleIds
                     })
                     .ToListAsync();
 
@@ -1353,7 +1358,7 @@ namespace Tools.Controllers
                     };
                     _context.MRPTTemplates.Add(newTemplate);
                     await _context.SaveChangesAsync();
-                    imported.Add(new { newTemplate.TemplateId, newTemplate.TemplateName, newTemplate.Version });
+                    imported.Add(new { newTemplate.TemplateId, newTemplate.TemplateName, newTemplate.SubName, newTemplate.Version, newTemplate.ModuleIds });
                 }
                 else
                 {
@@ -1407,7 +1412,7 @@ namespace Tools.Controllers
                         }
                     }
 
-                    imported.Add(new { newTemplate.TemplateId, newTemplate.TemplateName, newTemplate.Version });
+                    imported.Add(new { newTemplate.TemplateId, newTemplate.TemplateName, newTemplate.SubName, newTemplate.Version, newTemplate.ModuleIds });
                 }
             }
 
@@ -1553,7 +1558,7 @@ namespace Tools.Controllers
                             await _context.SaveChangesAsync();
                         }
 
-                        promoted.Add(new { newTemplate.TemplateId, newTemplate.TemplateName, newTemplate.Version });
+                        promoted.Add(new { newTemplate.TemplateId, newTemplate.TemplateName, newTemplate.SubName, newTemplate.Version, newTemplate.ModuleIds });
                     }
 
                     await transaction.CommitAsync();
