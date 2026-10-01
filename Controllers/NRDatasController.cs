@@ -5371,30 +5371,44 @@ namespace Tools.Controllers
                 return Ok(new List<object>());
             }
 
-            var records = await _context.NRDatas
-                .Where(x => x.Status == true && x.CatchNo != null && (
-                    (x.Remarksss != null && x.Remarksss.Trim() != "") ||
-                    x.VerificationStatus == (int)HeaderVerificationStatus.NotClear
-                ))
-                .Select(x => new
-                {
-                    x.ProjectId,
-                    x.CatchNo,
-                    HasRemark = x.Remarksss != null && x.Remarksss.Trim() != "",
-                    IsReview = x.VerificationStatus == (int)HeaderVerificationStatus.NotClear
+            // Split the query into two simpler queries to avoid the "OR" condition.
+            // MySQL query optimizer struggles with OR conditions across different columns,
+            // often resulting in a full table scan. Splitting allows index usage.
+            
+            var correctionStats = await _context.NRDatas
+                .Where(x => x.Status == true && x.CatchNo != null && x.Remarksss != null && x.Remarksss != "")
+                .GroupBy(x => x.ProjectId)
+                .Select(g => new 
+                { 
+                    ProjectId = g.Key, 
+                    Count = g.Select(x => x.CatchNo).Distinct().Count() 
                 })
                 .ToListAsync();
 
-            var projectStats = records
+            var reviewStats = await _context.NRDatas
+                .Where(x => x.Status == true && x.CatchNo != null && x.VerificationStatus == (int)HeaderVerificationStatus.NotClear)
                 .GroupBy(x => x.ProjectId)
-                .Select(g => new
-                {
-                    projectId = g.Key,
-                    correctionCount = g.Where(x => x.HasRemark).Select(x => x.CatchNo).Distinct().Count(),
-                    reviewCount = g.Where(x => x.IsReview).Select(x => x.CatchNo).Distinct().Count(),
+                .Select(g => new 
+                { 
+                    ProjectId = g.Key, 
+                    Count = g.Select(x => x.CatchNo).Distinct().Count() 
                 })
-                .Where(x => x.correctionCount > 0 || x.reviewCount > 0)
+                .ToListAsync();
+
+            // Merge results in memory
+            var allProjectIds = correctionStats.Select(c => c.ProjectId)
+                .Union(reviewStats.Select(r => r.ProjectId))
+                .Distinct()
                 .ToList();
+
+            var projectStats = allProjectIds.Select(pid => new
+            {
+                projectId = pid,
+                correctionCount = correctionStats.FirstOrDefault(c => c.ProjectId == pid)?.Count ?? 0,
+                reviewCount = reviewStats.FirstOrDefault(r => r.ProjectId == pid)?.Count ?? 0
+            })
+            .Where(x => x.correctionCount > 0 || x.reviewCount > 0)
+            .ToList();
 
             return Ok(projectStats);
         }
