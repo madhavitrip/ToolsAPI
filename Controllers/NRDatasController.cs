@@ -2677,6 +2677,131 @@ namespace Tools.Controllers
                     n.Status &&
                     n.Batch == batch);
 
+            bool isNrData1 = await _context.NrData1.AnyAsync(n => n.ProjectId == ProjectId && n.Batch == batch);
+
+            if (isNrData1)
+            {
+                var activeQuery1 = _context.NrData1
+                    .AsNoTracking()
+                    .Where(n => n.ProjectId == ProjectId && n.Batch == batch);
+
+                var stats1 = await activeQuery1
+                    .GroupBy(x => 1)
+                    .Select(g => new
+                    {
+                        TotalActive = g.Count(),
+                        MinStep = g.Min(x => x.Steps),
+                        MaxStep = g.Max(x => x.Steps),
+
+                        DuplicatePending = g.Any(x => x.Steps == 0),
+                        EnhancementPending = g.Any(x => x.Steps <= 2),
+                        ExtraPending = g.Any(x => x.Steps <= 3),
+                        EnvelopePending = g.Any(x => x.Steps <= 4)
+                    })
+                    .FirstOrDefaultAsync();
+
+                if (stats1 == null)
+                {
+                    return Ok(new
+                    {
+                        hasPendingPipelineChanges = false,
+                        minStep = 6,
+                        maxStep = 6,
+                        totalActive = 0,
+                        duplicatePending = false,
+                        enhancementPending = false,
+                        extraPending = false,
+                        envelopePending = false,
+                        boxPending = false,
+                        boxTotalLots = 0,
+                        boxCompletedLots = 0,
+                        boxPendingLots = 0,
+                        pendingBoxLots = Array.Empty<string>()
+                    });
+                }
+
+                var rawLotSteps1 = await activeQuery1
+                    .Select(n => new { LotNo = n.EnvLotNo > 0 ? n.EnvLotNo : n.LotNo, n.Steps })
+                    .ToListAsync();
+
+                var lotStats1 = rawLotSteps1
+                    .GroupBy(n => n.LotNo)
+                    .Select(g => new
+                    {
+                        LotNo = g.Key,
+                        IsPending = g.Any(n => n.Steps <= 6),
+                        IsDuplicatePending = g.Any(n => n.Steps <= 0),
+                        IsEnhancementPending = g.Any(n => n.Steps <= 2),
+                        IsExtraPending = g.Any(n => n.Steps <= 3),
+                        IsEnvelopePending = g.Any(n => n.Steps <= 4),
+                        IsBoxPending = g.Any(n => n.Steps <= 6),
+                        IsDuplicateReady = g.Any(n => n.Steps == 0),
+                        IsEnhancementReady = g.Any(n => n.Steps == 1 || n.Steps == 2),
+                        IsExtraReady = g.Any(n => n.Steps == 3 || n.Steps == 4),
+                        IsEnvelopeReady = g.Any(n => n.Steps == 4 || n.Steps == 5),
+                        IsBoxReady = g.Any(n => n.Steps == 5 || n.Steps == 6),
+                        IsDuplicateCompleted = g.Any(n => n.Steps > 0),
+                        IsEnhancementCompleted = g.Any(n => n.Steps > 2),
+                        IsExtraCompleted = g.Any(n => n.Steps > 3),
+                        IsEnvelopeCompleted = g.Any(n => n.Steps > 4),
+                        IsBoxCompleted = g.Any(n => n.Steps > 6)
+                    })
+                    .ToList();
+
+                var pendingBoxLots1 = lotStats1.Where(x => x.IsPending).Select(x => x.LotNo).OrderBy(x => x).ToList();
+                var pendingDuplicateLots1 = lotStats1.Where(x => x.IsDuplicatePending).Select(x => x.LotNo).OrderBy(x => x).ToList();
+                var pendingEnhancementLots1 = lotStats1.Where(x => x.IsEnhancementPending).Select(x => x.LotNo).OrderBy(x => x).ToList();
+                var pendingExtraLots1 = lotStats1.Where(x => x.IsExtraPending).Select(x => x.LotNo).OrderBy(x => x).ToList();
+                var pendingEnvelopeLots1 = lotStats1.Where(x => x.IsEnvelopePending).Select(x => x.LotNo).OrderBy(x => x).ToList();
+
+                var readyDuplicateLots1 = lotStats1.Where(x => x.IsDuplicateReady).Select(x => x.LotNo).OrderBy(x => x).ToList();
+                var readyEnhancementLots1 = lotStats1.Where(x => x.IsEnhancementReady).Select(x => x.LotNo).OrderBy(x => x).ToList();
+                var readyExtraLots1 = lotStats1.Where(x => x.IsExtraReady).Select(x => x.LotNo).OrderBy(x => x).ToList();
+                var readyEnvelopeLots1 = lotStats1.Where(x => x.IsEnvelopeReady).Select(x => x.LotNo).OrderBy(x => x).ToList();
+                var readyBoxLots1 = lotStats1.Where(x => x.IsBoxReady).Select(x => x.LotNo).OrderBy(x => x).ToList();
+
+                var completedDuplicateLots1 = lotStats1.Where(x => x.IsDuplicateCompleted).Select(x => x.LotNo).OrderBy(x => x).ToList();
+                var completedEnhancementLots1 = lotStats1.Where(x => x.IsEnhancementCompleted).Select(x => x.LotNo).OrderBy(x => x).ToList();
+                var completedExtraLots1 = lotStats1.Where(x => x.IsExtraCompleted).Select(x => x.LotNo).OrderBy(x => x).ToList();
+                var completedEnvelopeLots1 = lotStats1.Where(x => x.IsEnvelopeCompleted).Select(x => x.LotNo).OrderBy(x => x).ToList();
+                var completedBoxLots1 = lotStats1.Where(x => x.IsBoxCompleted).Select(x => x.LotNo).OrderBy(x => x).ToList();
+
+                return Ok(new
+                {
+                    hasPendingPipelineChanges = stats1.MinStep < Tools.Models.PipelineNavigator.STEP_DONE,
+
+                    minStep = stats1.MinStep,
+                    maxStep = stats1.MaxStep,
+                    totalActive = stats1.TotalActive,
+
+                    duplicatePending = stats1.DuplicatePending,
+                    enhancementPending = stats1.EnhancementPending,
+                    extraPending = stats1.ExtraPending,
+                    envelopePending = stats1.EnvelopePending,
+
+                    boxPending = pendingBoxLots1.Count > 0,
+                    boxTotalLots = lotStats1.Count,
+                    boxCompletedLots = lotStats1.Count(x => !x.IsPending),
+                    boxPendingLots = pendingBoxLots1.Count,
+                    pendingBoxLots = pendingBoxLots1,
+
+                    pendingDuplicateLots = pendingDuplicateLots1,
+                    completedDuplicateLots = completedDuplicateLots1,
+                    pendingEnhancementLots = pendingEnhancementLots1,
+                    completedEnhancementLots = completedEnhancementLots1,
+                    pendingExtraLots = pendingExtraLots1,
+                    completedExtraLots = completedExtraLots1,
+                    pendingEnvelopeLots = pendingEnvelopeLots1,
+                    completedEnvelopeLots = completedEnvelopeLots1,
+                    completedBoxLots = completedBoxLots1,
+                    readyDuplicateLots = readyDuplicateLots1,
+                    readyEnhancementLots = readyEnhancementLots1,
+                    readyExtraLots = readyExtraLots1,
+                    readyEnvelopeLots = readyEnvelopeLots1,
+                    readyBoxLots = readyBoxLots1
+                });
+            }
+
             // Single query for all overall statistics
             var stats = await activeQuery
                 .GroupBy(x => 1)

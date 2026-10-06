@@ -601,7 +601,7 @@ namespace Tools.Controllers
         }
 
         [HttpPost("MergeFields")]
-        public async Task<IActionResult> MergeFields(int ProjectId, int? batchId = null, int? lotNo = null)
+        public async Task<IActionResult> MergeFields([FromQuery] int ProjectId, [FromQuery] int? batchId = null, [FromQuery] int? lotNo = null)
         {
             try
             {
@@ -1151,7 +1151,7 @@ namespace Tools.Controllers
         }
 
         [HttpPost("Enhancement")]
-        public async Task<IActionResult> ApplyEnhancement(int ProjectId, [FromQuery] int? batch = null, [FromQuery] int? lotNo = null)
+        public async Task<IActionResult> ApplyEnhancement([FromQuery] int ProjectId, [FromQuery] int? batch = null, [FromQuery] int? lotNo = null)
         {
             try
             {
@@ -1384,8 +1384,7 @@ namespace Tools.Controllers
                 try
                 {
                     Console.WriteLine("[NrData1Controller] Envelope breaking is called");
-                    var envelopeController = new EnvelopeBreakagesController(_context, _loggerService, _apiSettings, _dispatchService);
-                    await envelopeController.EnvelopeConfiguration(ProjectId, bypassDispatch: true);
+                    await EnvelopeConfiguration(ProjectId, bypassDispatch: true);
                 }
                 catch (Exception ex)
                 {
@@ -1408,7 +1407,7 @@ namespace Tools.Controllers
         }
 
         [HttpPost("EnvelopeConfiguration")]
-        public async Task<IActionResult> EnvelopeConfiguration(int ProjectId, [FromQuery] bool bypassDispatch = false)
+        public async Task<IActionResult> EnvelopeConfiguration([FromQuery] int ProjectId, [FromQuery] bool bypassDispatch = false)
         {
             try
             {
@@ -1461,9 +1460,10 @@ namespace Tools.Controllers
 
                 bool hasExtraConfig = await _context.ExtraConfigurations.AnyAsync(e => e.ProjectId == ProjectId);
 
-                // 3. Deactivate existing active NewEnvelopeBreakage entries
+                // 3. Deactivate existing active NewEnvelopeBreakage entries for active centers / NrDataIds
+                var centerIds = centerList.Select(c => c.Id).ToList();
                 var existingBreakages = await _context.NewEnvelopeBreakages
-                    .Where(p => p.ProjectId == ProjectId && nrDataIds.Contains(p.NrDataId) && p.Status == true)
+                    .Where(p => p.ProjectId == ProjectId && centerIds.Contains(p.CenterListId) && p.Status == true)
                     .ToListAsync();
 
                 if (existingBreakages.Any())
@@ -1471,6 +1471,7 @@ namespace Tools.Controllers
                     foreach (var item in existingBreakages)
                     {
                         item.Status = false;
+                        _context.NewEnvelopeBreakages.Update(item);
                     }
                     await _context.SaveChangesAsync();
 
@@ -1639,7 +1640,7 @@ namespace Tools.Controllers
         }
 
         [HttpPost("PostExtraEnvelopes")]
-        public async Task<ActionResult> PostExtraEnvelopes(int ProjectId, int? uploadId = null, [FromQuery] int? batchNo = null, [FromQuery] int? lotNo = null)
+        public async Task<ActionResult> PostExtraEnvelopes([FromQuery] int ProjectId, [FromQuery] int? uploadId = null, [FromQuery] int? batchNo = null, [FromQuery] int? lotNo = null)
         {
             try
             {
@@ -2111,6 +2112,20 @@ namespace Tools.Controllers
 
                     if (newEnvBreakages.Any())
                     {
+                        var targetCenterIds = newEnvBreakages.Select(b => b.CenterListId).Distinct().ToList();
+                        var existingActiveForCenters = await _context.NewEnvelopeBreakages
+                            .Where(b => b.ProjectId == ProjectId && targetCenterIds.Contains(b.CenterListId) && b.Status)
+                            .ToListAsync();
+
+                        if (existingActiveForCenters.Any())
+                        {
+                            foreach (var oldB in existingActiveForCenters)
+                            {
+                                oldB.Status = false;
+                                _context.NewEnvelopeBreakages.Update(oldB);
+                            }
+                        }
+
                         await _context.NewEnvelopeBreakages.AddRangeAsync(newEnvBreakages);
                     }
                     if (envBreakages.Any())
@@ -2282,7 +2297,7 @@ namespace Tools.Controllers
         }
 
         [HttpPost("ProcessEnvelopeBreaking")]
-        public async Task<IActionResult> ProcessEnvelopeBreaking(int ProjectId, int triggeredBy = 0, [FromQuery] bool skipReset = false, [FromQuery] int? lotNo = null, [FromQuery] string? catchNo = null, [FromQuery] bool bypassDispatch = false, [FromQuery] int? batchNo = null)
+        public async Task<IActionResult> ProcessEnvelopeBreaking([FromQuery] int ProjectId, [FromQuery] int triggeredBy = 0, [FromQuery] bool skipReset = false, [FromQuery] int? lotNo = null, [FromQuery] string? catchNo = null, [FromQuery] bool bypassDispatch = false, [FromQuery] int? batchNo = null)
         {
             var procController = new EnvelopeBreakageProcessingController(_context, _loggerService, _apiSettings, _dispatchService)
             {
@@ -2292,13 +2307,23 @@ namespace Tools.Controllers
         }
 
         [HttpGet("GetEnvelopeBreakingReport")]
-        public async Task<IActionResult> GetEnvelopeBreakingReport(int ProjectId, [FromQuery] int? lotNo = null)
+        public async Task<IActionResult> GetEnvelopeBreakingReport([FromQuery] int ProjectId, [FromQuery] int? lotNo = null)
         {
             var procController = new EnvelopeBreakageProcessingController(_context, _loggerService, _apiSettings, _dispatchService)
             {
                 ControllerContext = this.ControllerContext
             };
             return await procController.GetEnvelopeBreakingReport(ProjectId, lotNo);
+        }
+
+        [HttpPost("ProcessBoxBreaking")]
+        public async Task<IActionResult> ProcessBoxBreaking([FromQuery] int ProjectId, [FromQuery] List<int>? LotNo = null, [FromQuery] bool skipReset = false, [FromQuery] bool bypassDispatch = false, [FromQuery] bool runBoth = false, [FromQuery] int? batchNo = null)
+        {
+            var procController = new BoxBreakingProcessingController(_context, _loggerService, _apiSettings, _dispatchService)
+            {
+                ControllerContext = this.ControllerContext
+            };
+            return await procController.ProcessBoxBreaking(ProjectId, LotNo ?? new List<int>(), skipReset, bypassDispatch, runBoth, batchNo);
         }
 
         #region Helper Models
