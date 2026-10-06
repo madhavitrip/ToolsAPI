@@ -164,6 +164,17 @@ namespace Tools.Controllers
         {
             try
             {
+                // If this project has records in NrData1 and no active records in NRDatas, delegate to NrData1Controller
+                if (!await _context.NRDatas.AnyAsync(p => p.ProjectId == ProjectId && p.Status == true) &&
+                    await _context.NrData1.AnyAsync(p => p.ProjectId == ProjectId))
+                {
+                    var nrData1Controller = new NrData1Controller(_context, _loggerService, null, null)
+                    {
+                        ControllerContext = this.ControllerContext
+                    };
+                    return await nrData1Controller.PostExtraEnvelopes(ProjectId, uploadId, batchNo, lotNo);
+                }
+
                 var projectConfig = await _context.ProjectConfigs
                     .FirstOrDefaultAsync(p => p.ProjectId == ProjectId);
 

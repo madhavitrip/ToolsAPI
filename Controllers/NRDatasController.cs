@@ -2815,6 +2815,16 @@ namespace Tools.Controllers
             }
 
             var requiresDuplicateRerun = await query.AnyAsync();
+            if (!requiresDuplicateRerun)
+            {
+                var nr1Query = _context.NrData1
+                    .Where(p => p.ProjectId == ProjectId && p.Steps == Tools.Models.PipelineNavigator.STEP_UPLOADED);
+                if (Batch.HasValue && Batch.Value > 0)
+                {
+                    nr1Query = nr1Query.Where(p => p.Batch == Batch.Value);
+                }
+                requiresDuplicateRerun = await nr1Query.AnyAsync();
+            }
             return Ok(new { requiresDuplicateRerun });
         }
 

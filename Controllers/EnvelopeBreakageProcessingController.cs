@@ -41,6 +41,12 @@ namespace Tools.Controllers
         {
             try
             {
+                var isNewModel = await _context.NrData1.AnyAsync(p => p.ProjectId == ProjectId);
+                if (isNewModel)
+                {
+                    return await ProcessEnvelopeBreakingNew(ProjectId, triggeredBy, skipReset, lotNo, catchNo, bypassDispatch, batchNo);
+                }
+
                 if (!skipReset) await ResetReportStatus(ProjectId);
 
                 // ✅ STEP 0: Validate dispatch status (mandatory backend validation unless bypassed)
@@ -146,11 +152,34 @@ namespace Tools.Controllers
                     e => new { e.TotalEnvelope, e.OuterEnvelope, e.InnerEnvelope }
                 );
 
-                var mssTypes = projectconfig.MssTypes;
-                string mssMode = projectconfig.MssAttached?.ToLower();
-                var mssData = await _context.Mss
-                    .Where(m => mssTypes.Contains(m.Id))
-                    .ToListAsync();
+                var project = await _context.Projects.FirstOrDefaultAsync(p => p.ProjectId == ProjectId);
+                int projectTypeId = project?.TypeId ?? 0;
+
+                var mssTypes = projectconfig.MssTypes ?? new List<int>();
+                string mssMode = projectconfig.MssAttached?.ToLower() ?? "end";
+                var mssData = new List<Mss>();
+
+                if (!string.Equals(mssMode, "none", StringComparison.OrdinalIgnoreCase))
+                {
+                    var mssQuery = _context.Mss.AsQueryable();
+
+                    if (projectTypeId > 0)
+                    {
+                        mssQuery = mssQuery.Where(m => m.TypeId == projectTypeId);
+                    }
+
+                    if (mssTypes.Any())
+                    {
+                        mssQuery = mssQuery.Where(m => mssTypes.Contains(m.Id));
+                    }
+
+                    mssData = await mssQuery.ToListAsync();
+
+                    if (!mssData.Any() && projectTypeId > 0)
+                    {
+                        mssData = await _context.Mss.Where(m => m.TypeId == projectTypeId).ToListAsync();
+                    }
+                }
 
                 var resultList = new List<dynamic>();
                 string prevNodalCode = null;
@@ -1124,6 +1153,12 @@ namespace Tools.Controllers
         {
             try
             {
+                var isNewModel = await _context.NrData1.AnyAsync(p => p.ProjectId == ProjectId);
+                if (isNewModel)
+                {
+                    return await GetEnvelopeBreakingReportNew(ProjectId, lotNo);
+                }
+
                 var projectconfig = await _context.ProjectConfigs
                     .FirstOrDefaultAsync(p => p.ProjectId == ProjectId);
 
@@ -1402,6 +1437,7 @@ namespace Tools.Controllers
                 var fileName = ReportVersionHelper.GetNextVersionFileName(reportPath, $"EnvelopeBreaking_{lotStr}.xlsx");
                 var filePath = Path.Combine(reportPath, fileName);
 
+                ExcelPackage.License.SetNonCommercialPersonal("Tools");
                 using (var package = new ExcelPackage())
                 {
                     var ws = package.Workbook.Worksheets.Add("Envelope Report");
@@ -1519,6 +1555,7 @@ namespace Tools.Controllers
 
                 var fileName = uploadId.HasValue ? $"CatchWiseBookletAndOmrSerialing_v{uploadId}.xlsx" : ReportVersionHelper.GetNextVersionFileName(reportPath, "CatchWiseBookletAndOmrSerialing.xlsx");
                 var filePath = Path.Combine(reportPath, fileName);
+                ExcelPackage.License.SetNonCommercialPersonal("Tools");
                 using (var package = new ExcelPackage())
                 {
                     var worksheet = package.Workbook.Worksheets.Add("Serial Report");
@@ -1561,6 +1598,812 @@ namespace Tools.Controllers
             catch (Exception ex)
             {
                 return BadRequest(ex.Message);
+            }
+        }
+
+        private async Task<IActionResult> ProcessEnvelopeBreakingNew(int ProjectId, int triggeredBy = 0, bool skipReset = false, int? lotNo = null, string? catchNo = null, bool bypassDispatch = false, int? batchNo = null)
+        {
+            try
+            {
+                if (!skipReset) await ResetReportStatus(ProjectId);
+
+                var envCaps = await _context.EnvelopesTypes
+                    .Select(e => new { e.EnvelopeName, e.Capacity })
+                    .ToListAsync();
+                var envelopeCapacities = envCaps.ToDictionary(x => x.EnvelopeName, x => x.Capacity);
+
+                var eligibleSteps = Tools.Models.PipelineNavigator.GetEligiblePickupSteps(Tools.Models.PipelineNavigator.STEP_AWAITING_ENV);
+
+                var nrQuery = _context.NrData1
+                    .Where(p => p.ProjectId == ProjectId && eligibleSteps.Contains(p.Steps) && p.Batch == (batchNo ?? 1));
+
+                if (lotNo.HasValue && lotNo.Value > 0)
+                    nrQuery = nrQuery.Where(p => p.LotNo == lotNo.Value);
+                if (!string.IsNullOrEmpty(catchNo))
+                    nrQuery = nrQuery.Where(p => p.CatchNo == catchNo);
+
+                var nrDataList = await nrQuery
+                    .OrderBy(p => p.CatchNo)
+                    .ToListAsync();
+
+                if (!nrDataList.Any())
+                {
+                    var fallbackQuery = _context.NrData1
+                        .Where(p => p.ProjectId == ProjectId && p.Batch == (batchNo ?? 1));
+                    if (lotNo.HasValue && lotNo.Value > 0)
+                        fallbackQuery = fallbackQuery.Where(p => p.LotNo == lotNo.Value);
+                    if (!string.IsNullOrEmpty(catchNo))
+                        fallbackQuery = fallbackQuery.Where(p => p.CatchNo == catchNo);
+                    nrDataList = await fallbackQuery.OrderBy(p => p.CatchNo).ToListAsync();
+                }
+
+                if (!nrDataList.Any())
+                    return BadRequest("No valid NR Data found for Envelope Breaking processing.");
+
+                var nrDataIds = nrDataList.Select(n => n.Id).ToList();
+                var centers = await _context.CenterList
+                    .Where(c => c.ProjectId == ProjectId && nrDataIds.Contains(c.NRDataId) && c.Status)
+                    .OrderBy(c => c.RouteSort)
+                    .ThenBy(c => c.NodalSort)
+                    .ThenBy(c => c.CenterSort)
+                    .ToListAsync();
+
+                if (!centers.Any())
+                    return BadRequest("No centers found for the selected NR data.");
+
+                var centerIds = centers.Select(c => c.Id).ToList();
+                var newBreakages = await _context.NewEnvelopeBreakages
+                    .Where(b => b.ProjectId == ProjectId && centerIds.Contains(b.CenterListId) && b.Status)
+                    .ToListAsync();
+
+                if (!newBreakages.Any())
+                    return BadRequest("No Envelope Breakdown configuration found. Please run the Envelope Breakages (Inner/Outer) configuration first.");
+
+                var envDict = newBreakages.ToDictionary(e => e.CenterListId);
+
+                var projectconfig = await _context.ProjectConfigs
+                    .FirstOrDefaultAsync(p => p.ProjectId == ProjectId);
+                if (projectconfig == null)
+                    return NotFound("Project config not found");
+
+                var project = await _context.Projects
+                    .FirstOrDefaultAsync(p => p.ProjectId == ProjectId);
+                int projectTypeId = project?.TypeId ?? 0;
+
+                var mssTypes = projectconfig.MssTypes ?? new List<int>();
+                string mssMode = projectconfig.MssAttached?.ToLower() ?? "end";
+                var mssData = new List<Mss>();
+
+                if (!string.Equals(mssMode, "none", StringComparison.OrdinalIgnoreCase))
+                {
+                    var mssQuery = _context.Mss.AsQueryable();
+
+                    if (projectTypeId > 0)
+                    {
+                        mssQuery = mssQuery.Where(m => m.TypeId == projectTypeId);
+                    }
+
+                    if (mssTypes.Any())
+                    {
+                        mssQuery = mssQuery.Where(m => mssTypes.Contains(m.Id));
+                    }
+
+                    mssData = await mssQuery.ToListAsync();
+
+                    if (!mssData.Any() && projectTypeId > 0)
+                    {
+                        mssData = await _context.Mss.Where(m => m.TypeId == projectTypeId).ToListAsync();
+                    }
+                }
+
+                var sortFieldIds = projectconfig.EnvelopeMakingCriteria ?? new List<int>();
+                var sortFields = await _context.Fields
+                    .Where(f => sortFieldIds.Contains(f.FieldId))
+                    .ToListAsync();
+
+                var sortingFieldNames = sortFields
+                    .OrderBy(f => sortFieldIds.IndexOf(f.FieldId))
+                    .Select(f => f.Name)
+                    .ToList();
+
+                var nrDataLookup = nrDataList.ToDictionary(nr => nr.Id);
+                var nrDataJsonLookup = nrDataList.ToDictionary(
+                    nr => nr.Id,
+                    nr =>
+                    {
+                        if (string.IsNullOrWhiteSpace(nr.NRDatas)) return null;
+                        try { return JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(nr.NRDatas); }
+                        catch { return null; }
+                    }
+                );
+
+                string GetNrField(Dictionary<string, JsonElement>? nrDynamic, string fieldName)
+                {
+                    if (nrDynamic == null) return "";
+                    var match = nrDynamic.FirstOrDefault(k =>
+                        k.Key.Equals(fieldName, StringComparison.OrdinalIgnoreCase));
+                    return match.Key != null ? (match.Value.GetString() ?? "") : "";
+                }
+
+                void FillDynamicFields(IDictionary<string, object> rowDict, int nrDataId)
+                {
+                    if (!nrDataJsonLookup.TryGetValue(nrDataId, out var nrDynamic) || nrDynamic == null)
+                        return;
+
+                    foreach (var fieldName in sortingFieldNames)
+                    {
+                        if (!rowDict.ContainsKey(fieldName))
+                        {
+                            rowDict[fieldName] = GetNrField(nrDynamic, fieldName);
+                        }
+                    }
+                }
+
+                string? GetPackingDenominationForQuantity(string? innerEnvelopeJson, int targetQty, ref List<int>? innerEnvelopesPool)
+                {
+                    if (innerEnvelopesPool == null)
+                    {
+                        innerEnvelopesPool = new List<int>();
+                        if (!string.IsNullOrWhiteSpace(innerEnvelopeJson))
+                        {
+                            try
+                            {
+                                var dict = JsonSerializer.Deserialize<Dictionary<string, string>>(innerEnvelopeJson);
+                                if (dict != null)
+                                {
+                                    foreach (var kvp in dict)
+                                    {
+                                        string envName = kvp.Key.Replace("E", "");
+                                        if (int.TryParse(envName, out int capacity) && int.TryParse(kvp.Value, out int count))
+                                        {
+                                            for (int i = 0; i < count; i++)
+                                                innerEnvelopesPool.Add(capacity);
+                                        }
+                                    }
+                                }
+                            }
+                            catch { }
+                        }
+                        innerEnvelopesPool = innerEnvelopesPool.OrderByDescending(x => x).ToList();
+                    }
+
+                    if (targetQty <= 0 || innerEnvelopesPool.Count == 0) return null;
+
+                    var used = new Dictionary<int, int>();
+                    int currentSum = 0;
+                    var remainingPool = new List<int>();
+
+                    foreach (var cap in innerEnvelopesPool)
+                    {
+                        if (currentSum < targetQty && currentSum + cap <= targetQty)
+                        {
+                            currentSum += cap;
+                            if (!used.ContainsKey(cap)) used[cap] = 0;
+                            used[cap]++;
+                        }
+                        else
+                        {
+                            remainingPool.Add(cap);
+                        }
+                    }
+
+                    innerEnvelopesPool = remainingPool;
+                    if (used.Count == 0) return null;
+                    return "[" + string.Join(" & ", used.OrderByDescending(x => x.Key).Select(kvp => $"{kvp.Key}x{kvp.Value}")) + "]";
+                }
+
+                List<dynamic> CreateMssRows(string catchNo, string examDate, string examTime, string courseName, int nrDataId)
+                {
+                    var rows = new List<dynamic>();
+                    foreach (var mss in mssData)
+                    {
+                        var mssRow = new ExpandoObject();
+                        var mssDict = (IDictionary<string, object>)mssRow;
+                        mssDict["isMss"] = true;
+                        mssDict["CatchNo"] = catchNo;
+                        mssDict["EnvQuantity"] = mss.MssType;
+                        mssDict["NodalCode"] = "";
+                        mssDict["CenterEnv"] = 0;
+                        mssDict["TotalEnv"] = 0;
+                        mssDict["Env"] = "";
+                        mssDict["NrDataId"] = nrDataId;
+                        mssDict["CenterListId"] = 0;
+                        mssDict["PackingDenomination"] = null;
+                        rows.Add(mssRow);
+                    }
+                    return rows;
+                }
+
+                var resultList = new List<dynamic>();
+                string? prevMergeField = null;
+                int centerEnvCounter = 0;
+
+                foreach (var center in centers)
+                {
+                    if (!nrDataLookup.TryGetValue(center.NRDataId, out var parentNr)) continue;
+
+                    envDict.TryGetValue(center.Id, out var envInfo);
+                    int totalEnv = envInfo != null && envInfo.TotalEnvelope > 0 ? envInfo.TotalEnvelope : 1;
+
+                    string currentMergeField = $"{parentNr.CatchNo}-{center.CenterCode}";
+                    if (currentMergeField != prevMergeField)
+                    {
+                        centerEnvCounter = 0;
+                        prevMergeField = currentMergeField;
+                    }
+
+                    var envelopeBreakdown = new List<(string EnvType, int Count, int Capacity)>();
+
+                    if (envInfo != null && !string.IsNullOrEmpty(envInfo.OuterEnvelope))
+                    {
+                        try
+                        {
+                            var outerEnvDict = JsonSerializer.Deserialize<Dictionary<string, string>>(envInfo.OuterEnvelope);
+                            if (outerEnvDict != null)
+                            {
+                                foreach (var kvp in outerEnvDict)
+                                {
+                                    if (int.TryParse(kvp.Value, out int count) && count > 0)
+                                    {
+                                        int capacity = 0;
+                                        if (envelopeCapacities.TryGetValue(kvp.Key, out int cap))
+                                            capacity = cap;
+                                        else
+                                        {
+                                            var match = System.Text.RegularExpressions.Regex.Match(kvp.Key, @"\d+");
+                                            if (match.Success) capacity = int.Parse(match.Value);
+                                        }
+                                        envelopeBreakdown.Add((kvp.Key, count, capacity));
+                                    }
+                                }
+                            }
+                        }
+                        catch { }
+                    }
+
+                    envelopeBreakdown = envelopeBreakdown.OrderBy(x => x.Capacity).ToList();
+                    int centerQty = center.Quantity > 0 ? center.Quantity : center.NRQuantity;
+
+                    if (envelopeBreakdown.Count > 0)
+                    {
+                        List<int>? innerPool = null;
+                        string? innerJson = envInfo?.InnerEnvelope;
+                        int envelopeIndex = 1;
+                        int remainingQty = centerQty;
+
+                        foreach (var (envType, count, capacity) in envelopeBreakdown)
+                        {
+                            for (int k = 0; k < count; k++)
+                            {
+                                centerEnvCounter++;
+                                int envQty = remainingQty > capacity ? capacity : remainingQty;
+
+                                var row = new ExpandoObject();
+                                var rowDict = (IDictionary<string, object>)row;
+
+                                rowDict["isMss"] = false;
+                                rowDict["CatchNo"] = parentNr.CatchNo ?? "";
+                                rowDict["CenterCode"] = center.CenterCode ?? "";
+                                rowDict["CourseName"] = parentNr.CourseName ?? "";
+                                rowDict["ExamTime"] = parentNr.ExamTime ?? "";
+                                rowDict["ExamDate"] = parentNr.ExamDate ?? "";
+                                rowDict["Quantity"] = centerQty;
+                                rowDict["EnvQuantity"] = envQty;
+                                rowDict["NodalCode"] = center.NodalCode ?? "";
+                                rowDict["CenterEnv"] = centerEnvCounter;
+                                rowDict["TotalEnv"] = totalEnv;
+                                rowDict["Env"] = $"{envelopeIndex}/{totalEnv}";
+                                rowDict["NRQuantity"] = center.NRQuantity;
+                                rowDict["CenterSort"] = center.CenterSort;
+                                rowDict["NodalSort"] = center.NodalSort;
+                                rowDict["Route"] = center.Route ?? "";
+                                rowDict["RouteSort"] = center.RouteSort;
+                                rowDict["District"] = center.District ?? "";
+                                rowDict["DistrictSort"] = center.DistrictSort;
+                                rowDict["NrDataId"] = parentNr.Id;
+                                rowDict["CenterListId"] = center.Id;
+
+                                // Compute packing denomination: inner breakdown or fallback to envelope capacity
+                                string? packingDenom = GetPackingDenominationForQuantity(innerJson, envQty, ref innerPool);
+                                if (string.IsNullOrEmpty(packingDenom))
+                                {
+                                    int denomCap = capacity > 0 ? capacity : envQty;
+                                    packingDenom = $"[{denomCap}x1]";
+                                }
+                                rowDict["PackingDenomination"] = packingDenom;
+
+                                FillDynamicFields(rowDict, parentNr.Id);
+                                resultList.Add(row);
+
+                                remainingQty -= envQty;
+                                envelopeIndex++;
+                                if (remainingQty <= 0) break;
+                            }
+                            if (remainingQty <= 0) break;
+                        }
+                    }
+                    else
+                    {
+                        centerEnvCounter++;
+                        var row = new ExpandoObject();
+                        var rowDict = (IDictionary<string, object>)row;
+
+                        rowDict["isMss"] = false;
+                        rowDict["CatchNo"] = parentNr.CatchNo ?? "";
+                        rowDict["CenterCode"] = center.CenterCode ?? "";
+                        rowDict["CourseName"] = parentNr.CourseName ?? "";
+                        rowDict["ExamTime"] = parentNr.ExamTime ?? "";
+                        rowDict["ExamDate"] = parentNr.ExamDate ?? "";
+                        rowDict["Quantity"] = centerQty;
+                        rowDict["EnvQuantity"] = centerQty;
+                        rowDict["NodalCode"] = center.NodalCode ?? "";
+                        rowDict["CenterEnv"] = centerEnvCounter;
+                        rowDict["TotalEnv"] = 1;
+                        rowDict["Env"] = "1/1";
+                        rowDict["NRQuantity"] = center.NRQuantity;
+                        rowDict["CenterSort"] = center.CenterSort;
+                        rowDict["NodalSort"] = center.NodalSort;
+                        rowDict["Route"] = center.Route ?? "";
+                        rowDict["RouteSort"] = center.RouteSort;
+                        rowDict["District"] = center.District ?? "";
+                        rowDict["DistrictSort"] = center.DistrictSort;
+                        rowDict["NrDataId"] = parentNr.Id;
+                        rowDict["CenterListId"] = center.Id;
+
+                        List<int>? innerPool = null;
+                        string? packingDenom = GetPackingDenominationForQuantity(envInfo?.InnerEnvelope, centerQty, ref innerPool);
+                        if (string.IsNullOrEmpty(packingDenom))
+                        {
+                            packingDenom = $"[{centerQty}x1]";
+                        }
+                        rowDict["PackingDenomination"] = packingDenom;
+
+                        FillDynamicFields(rowDict, parentNr.Id);
+                        resultList.Add(row);
+                    }
+                }
+
+                // Sorting
+                var nonMssRows = resultList
+                    .Where(r =>
+                    {
+                        var d = (IDictionary<string, object>)r;
+                        return d.ContainsKey("isMss") && !(bool)d["isMss"];
+                    }).ToList();
+
+                IOrderedEnumerable<dynamic>? sortedResultList = null;
+                foreach (var fieldName in sortingFieldNames)
+                {
+                    Func<dynamic, object> keySelector = x =>
+                    {
+                        var dict = (IDictionary<string, object>)x;
+                        if (!dict.ContainsKey(fieldName)) return null!;
+                        var val = dict[fieldName];
+                        if (val == null) return null!;
+
+                        if (fieldName.Equals("NodalSort", StringComparison.OrdinalIgnoreCase))
+                            return double.TryParse(val.ToString(), out double n) ? n : 0.0;
+
+                        if (fieldName.Equals("ExamDate", StringComparison.OrdinalIgnoreCase))
+                            return DateTime.TryParseExact(val.ToString(), "dd-MM-yyyy",
+                                CultureInfo.InvariantCulture, DateTimeStyles.None, out var d)
+                                ? (object)d : DateTime.MinValue;
+
+                        if (fieldName.Contains("sort", StringComparison.OrdinalIgnoreCase))
+                            return double.TryParse(val.ToString(), out double d2) ? d2 : 0.0;
+
+                        return val.ToString()?.Trim().ToLowerInvariant() ?? "";
+                    };
+
+                    sortedResultList = sortedResultList == null
+                        ? nonMssRows.OrderBy(keySelector)
+                        : sortedResultList.ThenBy(keySelector);
+                }
+
+                var sortedNonMss = sortedResultList?.Cast<dynamic>().ToList() ?? nonMssRows;
+
+                // Re-insert MSS rows at correct positions
+                var finalResultList = new List<dynamic>();
+                var insertedMssCatches = new HashSet<string>();
+
+                var runs = new List<(string CatchNo, List<dynamic> Rows)>();
+                string? currentCatch = null;
+                List<dynamic>? currentRun = null;
+
+                foreach (var item in sortedNonMss)
+                {
+                    var dict = (IDictionary<string, object>)item;
+                    string cNo = dict["CatchNo"]?.ToString() ?? "";
+
+                    if (currentRun == null || cNo != currentCatch)
+                    {
+                        currentRun = new List<dynamic>();
+                        runs.Add((cNo, currentRun));
+                        currentCatch = cNo;
+                    }
+
+                    currentRun.Add(item);
+                }
+
+                for (int r = 0; r < runs.Count; r++)
+                {
+                    var (cNo, rows) = runs[r];
+                    bool isFirstRunForCatch = !runs.Take(r).Any(x => x.CatchNo == cNo);
+                    bool isLastRunForCatch = !runs.Skip(r + 1).Any(x => x.CatchNo == cNo);
+
+                    if (mssMode == "start" && isFirstRunForCatch && insertedMssCatches.Add(cNo))
+                    {
+                        var firstRow = (IDictionary<string, object>)rows.First();
+                        int nrId = (int)(firstRow["NrDataId"] ?? 0);
+                        if (nrId == 0) nrId = nrDataList.FirstOrDefault(n => n.CatchNo == cNo)?.Id ?? 0;
+                        finalResultList.AddRange(CreateMssRows(
+                            cNo,
+                            firstRow["ExamDate"]?.ToString() ?? "",
+                            firstRow["ExamTime"]?.ToString() ?? "",
+                            firstRow["CourseName"]?.ToString() ?? "",
+                            nrId
+                        ));
+                    }
+
+                    finalResultList.AddRange(rows);
+
+                    if (mssMode == "end" && isLastRunForCatch && insertedMssCatches.Add(cNo))
+                    {
+                        var lastRow = (IDictionary<string, object>)rows.Last();
+                        int nrId = (int)(lastRow["NrDataId"] ?? 0);
+                        if (nrId == 0) nrId = nrDataList.FirstOrDefault(n => n.CatchNo == cNo)?.Id ?? 0;
+                        finalResultList.AddRange(CreateMssRows(
+                            cNo,
+                            lastRow["ExamDate"]?.ToString() ?? "",
+                            lastRow["ExamTime"]?.ToString() ?? "",
+                            lastRow["CourseName"]?.ToString() ?? "",
+                            nrId
+                        ));
+                    }
+                }
+
+                // Safety net: add MSS for any catches in nrDataList that had no rows in sortedNonMss
+                foreach (var nr in nrDataList)
+                {
+                    if (!string.IsNullOrEmpty(nr.CatchNo) && insertedMssCatches.Add(nr.CatchNo))
+                    {
+                        finalResultList.AddRange(CreateMssRows(
+                            nr.CatchNo,
+                            nr.ExamDate ?? "",
+                            nr.ExamTime ?? "",
+                            nr.CourseName ?? "",
+                            nr.Id
+                        ));
+                    }
+                }
+
+                // Serials
+                int bookletStart = projectconfig?.BookletSerialNumber ?? 0;
+                int omrStart = projectconfig?.OmrSerialNumber ?? 0;
+                bool resetOmrSerialOnCatchChange = projectconfig?.ResetOmrSerialOnCatchChange ?? false;
+                bool resetBookletSerialOnCatchChange = projectconfig?.ResetBookletSerialOnCatchChange ?? false;
+                int serial = 1;
+
+                bool assignBookletSerial = bookletStart > 0;
+                bool assignOmrSerial = omrStart > 0;
+                string? prevCatchForSerial = null;
+
+                var newEnvelopeResults = new List<NewEnvelopeBreakingResult>();
+
+                foreach (var item in finalResultList)
+                {
+                    var dict = (IDictionary<string, object>)item;
+                    bool isMssRow = dict.ContainsKey("isMss") && (bool)dict["isMss"];
+                    string cNo = dict["CatchNo"]?.ToString() ?? "";
+
+                    if (!isMssRow && prevCatchForSerial != null && cNo != prevCatchForSerial)
+                    {
+                        serial = 1;
+                        if (resetOmrSerialOnCatchChange) omrStart = projectconfig?.OmrSerialNumber ?? 0;
+                        if (resetBookletSerialOnCatchChange) bookletStart = projectconfig?.BookletSerialNumber ?? 0;
+                    }
+
+                    if (isMssRow)
+                    {
+                        int mssNrId = (int)(dict["NrDataId"] ?? 0);
+                        if (mssNrId == 0)
+                        {
+                            mssNrId = nrDataList.FirstOrDefault(n => n.CatchNo == cNo)?.Id ?? 0;
+                        }
+
+                        newEnvelopeResults.Add(new NewEnvelopeBreakingResult
+                        {
+                            ProjectId = ProjectId,
+                            NrDataId = mssNrId,
+                            CenterListId = 0,
+                            EnvQuantity = dict["EnvQuantity"]?.ToString() ?? "MSS",
+                            CenterEnv = 0,
+                            TotalEnv = 0,
+                            Env = "",
+                            SerialNumber = 0,
+                            BookletSerial = "",
+                            OmrSerial = "",
+                            PackingDenomination = null,
+                            CreatedAt = DateTime.UtcNow,
+                            Status = true
+                        });
+                        continue;
+                    }
+
+                    int centerListId = (int)(dict["CenterListId"] ?? 0);
+                    int nrDataId = (int)(dict["NrDataId"] ?? 0);
+                    int envQuantity = (int)(dict["EnvQuantity"] ?? 0);
+
+                    string bookletSerial = "";
+                    string omrSerial = "";
+
+                    if (assignBookletSerial)
+                    {
+                        bookletSerial = $"{bookletStart}-{bookletStart + envQuantity - 1}";
+                        bookletStart += envQuantity;
+                    }
+
+                    if (assignOmrSerial)
+                    {
+                        omrSerial = $"{omrStart}-{omrStart + envQuantity - 1}";
+                        omrStart += envQuantity;
+                    }
+
+                    newEnvelopeResults.Add(new NewEnvelopeBreakingResult
+                    {
+                        ProjectId = ProjectId,
+                        NrDataId = nrDataId,
+                        CenterListId = centerListId,
+                        EnvQuantity = envQuantity.ToString(),
+                        CenterEnv = (int)dict["CenterEnv"],
+                        TotalEnv = (int)dict["TotalEnv"],
+                        Env = dict["Env"]?.ToString(),
+                        SerialNumber = serial++,
+                        BookletSerial = bookletSerial,
+                        OmrSerial = omrSerial,
+                        PackingDenomination = dict.ContainsKey("PackingDenomination") ? dict["PackingDenomination"]?.ToString() : null,
+                        CreatedAt = DateTime.UtcNow,
+                        Status = true
+                    });
+
+                    prevCatchForSerial = cNo;
+                }
+
+                // Deactivate previous active records for these catches
+                var existingNewBreakingIds = await _context.NewEnvelopeBreakingResults
+                    .Where(r => r.ProjectId == ProjectId && nrDataIds.Contains(r.NrDataId) && r.Status)
+                    .Select(r => r.Id)
+                    .ToListAsync();
+
+                if (existingNewBreakingIds.Any())
+                {
+                    await _context.NewEnvelopeBreakingResults
+                        .Where(r => existingNewBreakingIds.Contains(r.Id))
+                        .ExecuteUpdateAsync(s => s.SetProperty(r => r.Status, false));
+                }
+
+                await _context.NewEnvelopeBreakingResults.AddRangeAsync(newEnvelopeResults);
+
+                foreach (var nr in nrDataList)
+                {
+                    nr.Steps = Tools.Models.PipelineNavigator.STEP_AWAITING_ENV;
+                }
+
+                await _context.SaveChangesAsync();
+
+                await _loggerService.LogEventAsync(
+                    $"Saved {newEnvelopeResults.Count} new envelope breaking results for ProjectId {ProjectId}",
+                    "EnvelopeBreakageProcessing",
+                    triggeredBy,
+                    ProjectId);
+
+                try
+                {
+                    await GetEnvelopeBreakingReport(ProjectId, lotNo);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[ProcessEnvelopeBreakingNew] Report error: {ex.Message}");
+                }
+
+                return Ok(new
+                {
+                    message = "Envelope breaking processed successfully for new models",
+                    recordsCount = newEnvelopeResults.Count,
+                    lotNo = lotNo,
+                    catchesProcessed = nrDataList.Select(n => n.CatchNo).Distinct().ToList()
+                });
+            }
+            catch (Exception ex)
+            {
+                await _loggerService.LogErrorAsync("Error during new envelope breaking processing", ex.ToString(), nameof(EnvelopeBreakageProcessingController));
+                return StatusCode(500, new { message = "Error during new envelope breaking processing", error = ex.Message });
+            }
+        }
+
+        private async Task<IActionResult> GetEnvelopeBreakingReportNew(int ProjectId, int? lotNo = null)
+        {
+            try
+            {
+                var projectconfig = await _context.ProjectConfigs
+                    .FirstOrDefaultAsync(p => p.ProjectId == ProjectId);
+
+                if (projectconfig == null)
+                    return NotFound("Project config not found");
+
+                var nrDataDict = await _context.NrData1
+                    .Where(p => p.ProjectId == ProjectId)
+                    .ToDictionaryAsync(p => p.Id);
+
+                var centerDict = await _context.CenterList
+                    .Where(p => p.ProjectId == ProjectId)
+                    .ToDictionaryAsync(p => p.Id);
+
+                var nrDataByCatch = await _context.NrData1
+                    .Where(p => p.ProjectId == ProjectId)
+                    .GroupBy(p => p.CatchNo)
+                    .ToDictionaryAsync(g => g.Key ?? "", g => g.First());
+
+                var sortFieldIds = projectconfig.EnvelopeMakingCriteria ?? new List<int>();
+                var fields = await _context.Fields
+                    .Where(f => sortFieldIds.Contains(f.FieldId))
+                    .ToListAsync();
+
+                var fieldNames = fields
+                    .OrderBy(f => sortFieldIds.IndexOf(f.FieldId))
+                    .Select(f => f.Name)
+                    .ToList();
+
+                var results = await _context.NewEnvelopeBreakingResults
+                    .Where(r => r.ProjectId == ProjectId && r.Status)
+                    .OrderBy(r => r.Id)
+                    .ToListAsync();
+
+                if (!results.Any())
+                    return NotFound("No envelope breaking results found");
+
+                var fullData = new List<dynamic>();
+
+                foreach (var result in results)
+                {
+                    var row = new ExpandoObject();
+                    var rowDict = (IDictionary<string, object>)row;
+
+                    bool isMssRow = result.CenterListId == 0 && result.SerialNumber == 0;
+                    rowDict["isMss"] = isMssRow;
+
+                    NrData1? nr = null;
+                    CenterList? center = null;
+
+                    if (result.NrDataId != 0 && nrDataDict.TryGetValue(result.NrDataId, out var foundNr))
+                    {
+                        nr = foundNr;
+                    }
+
+                    if (result.CenterListId != 0 && centerDict.TryGetValue(result.CenterListId, out var foundCenter))
+                    {
+                        center = foundCenter;
+                    }
+
+                    if (lotNo.HasValue && lotNo.Value > 0)
+                    {
+                        if (nr == null || (nr.LotNo != lotNo.Value && nr.EnvLotNo != lotNo.Value))
+                            continue;
+                    }
+
+                    if (nr != null)
+                    {
+                        rowDict["SubjectName"] = nr.SubjectName ?? "";
+                        rowDict["Pages"] = nr.Pages;
+                        rowDict["Symbol"] = "";
+                        rowDict["Day"] = nr.Day ?? "";
+                        rowDict["NRQuantity"] = center?.NRQuantity ?? 0;
+                    }
+
+                    if (nr != null && !string.IsNullOrEmpty(nr.NRDatas))
+                    {
+                        try
+                        {
+                            var extraFields = JsonSerializer.Deserialize<Dictionary<string, string>>(nr.NRDatas);
+                            if (extraFields != null)
+                            {
+                                foreach (var kvp in extraFields)
+                                {
+                                    rowDict[kvp.Key] = kvp.Value;
+                                }
+                            }
+                        }
+                        catch { }
+                    }
+
+                    rowDict["SerialNo"] = isMssRow ? (object)"" : result.SerialNumber;
+                    rowDict["CatchNo"] = nr?.CatchNo ?? "";
+                    rowDict["CenterCode"] = isMssRow ? "" : (center?.CenterCode ?? "");
+                    rowDict["CenterSort"] = center?.CenterSort ?? 0.0;
+                    rowDict["ExamTime"] = nr?.ExamTime ?? "";
+                    rowDict["ExamDate"] = nr?.ExamDate ?? "";
+                    rowDict["Quantity"] = center?.Quantity ?? 0;
+                    rowDict["NodalCode"] = center?.NodalCode ?? "";
+                    rowDict["NodalSort"] = center?.NodalSort ?? 0.0;
+                    rowDict["Route"] = center?.Route ?? "";
+                    rowDict["RouteSort"] = center?.RouteSort ?? 0;
+                    rowDict["District"] = center?.District ?? "";
+                    rowDict["DistrictSort"] = center?.DistrictSort ?? 0;
+                    rowDict["EnvQuantity"] = result.EnvQuantity ?? "";
+                    rowDict["CenterEnv"] = result.CenterEnv;
+                    rowDict["TotalEnv"] = result.TotalEnv;
+                    rowDict["Env"] = result.Env ?? "";
+                    rowDict["SerialNumber"] = isMssRow ? 0 : result.SerialNumber;
+                    rowDict["BookletSerial"] = result.BookletSerial ?? "";
+                    rowDict["OmrSerial"] = result.OmrSerial ?? "";
+                    rowDict["CourseName"] = nr?.CourseName ?? "";
+                    rowDict["PackingDenomination"] = result.PackingDenomination ?? "";
+
+                    fullData.Add(row);
+                }
+
+                // Generate Excel using EPPlus and record in ExcelReport
+                var reportPath = FileStorageHelper.GetProjectFolder(ProjectId);
+                var distinctLots = (lotNo.HasValue && lotNo.Value > 0)
+                    ? new List<int> { lotNo.Value }
+                    : nrDataDict.Values.Where(r => r.LotNo > 0 || r.EnvLotNo > 0).Select(r => r.LotNo > 0 ? r.LotNo : r.EnvLotNo).Distinct().OrderBy(l => l).ToList();
+                var lotStr = distinctLots.Any() ? string.Join("_", distinctLots) : "All";
+
+                var fileName = ReportVersionHelper.GetNextVersionFileName(reportPath, $"EnvelopeBreaking_New_{lotStr}.xlsx");
+                var filePath = Path.Combine(reportPath, fileName);
+
+                ExcelPackage.License.SetNonCommercialPersonal("Tools");
+                using (var package = new ExcelPackage())
+                {
+                    var ws = package.Workbook.Worksheets.Add("Envelope Report");
+                    var allKeys = fullData.SelectMany(x => ((IDictionary<string, object>)x).Keys).Where(k => k != "isMss").Distinct().ToList();
+
+                    for (int i = 0; i < allKeys.Count; i++)
+                    {
+                        ws.Cells[1, i + 1].Value = allKeys[i];
+                        ws.Cells[1, i + 1].Style.Font.Bold = true;
+                    }
+
+                    int rowIdx = 2;
+                    foreach (var item in fullData)
+                    {
+                        var dict = (IDictionary<string, object>)item;
+                        for (int col = 0; col < allKeys.Count; col++)
+                        {
+                            var key = allKeys[col];
+                            ws.Cells[rowIdx, col + 1].Value = dict.ContainsKey(key) ? dict[key]?.ToString() : "";
+                        }
+                        rowIdx++;
+                    }
+
+                    if (ws.Dimension != null)
+                        ws.Cells[ws.Dimension.Address].AutoFitColumns();
+
+                    package.SaveAs(new FileInfo(filePath));
+                }
+
+                await ToolsAPI.Helpers.ExcelReportHelper.RecordExcelReportAsync(
+                    _context,
+                    ProjectId,
+                    4, // Module 4 (Envelope Breaking)
+                    1,
+                    lotNo,
+                    filePath,
+                    true,
+                    Tools.Services.LogHelper.GetTriggeredBy(User, Request)
+                );
+
+                return Ok(new
+                {
+                    message = "Report generated successfully",
+                    filePath,
+                    fileName,
+                    recordsCount = fullData.Count
+                });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { message = "Error during Excel report generation", error = ex.Message });
             }
         }
 

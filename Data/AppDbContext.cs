@@ -53,6 +53,10 @@ namespace ERPToolsAPI.Data
 
         public DbSet<CatchList> CatchList { get; set; }
         public DbSet<NodalList> NodalList { get; set; }
+        public DbSet<NrData1> NrData1 { get; set; }
+        public DbSet<CenterList> CenterList { get; set; }
+        public DbSet<NewEnvelopeBreakage> NewEnvelopeBreakages { get; set; }
+        public DbSet<NewEnvelopeBreakingResult> NewEnvelopeBreakingResults { get; set; }
 
         public DbSet<TemporaryNrDatas> TemporaryNrDatas { get; set; }
         public DbSet<ExcelReport> ExcelReports { get; set; }
@@ -62,6 +66,18 @@ namespace ERPToolsAPI.Data
 
             modelBuilder.Entity<MRPTTemplate>()
                 .ToTable("mrpttemplates");
+
+            modelBuilder.Entity<NrData1>()
+                .ToTable("nrdata1");
+
+            modelBuilder.Entity<CenterList>()
+                .ToTable("centerlist");
+
+            modelBuilder.Entity<NewEnvelopeBreakage>()
+                .ToTable("newenvelopebreakage");
+
+            modelBuilder.Entity<NewEnvelopeBreakingResult>()
+                .ToTable("newenvelopebreakingresults");
 
             modelBuilder.Entity<ExtraEnvelopes>()
                 .HasIndex(e => new { e.NodalCode, e.ExtraId, e.ProjectId})

@@ -1,28 +1,29 @@
-using Microsoft.EntityFrameworkCore.Migrations;
+﻿using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
 
 namespace Tools.Migrations
 {
     /// <inheritdoc />
-    public partial class AddUploadedByUserIdToRPTTemplates : Migration
+    public partial class LotNo : Migration
     {
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
             migrationBuilder.AddColumn<int>(
-                name: "UploadedByUserId",
-                table: "RPTTemplates",
+                name: "LotNo",
+                table: "nrdata1",
                 type: "int",
-                nullable: true);
+                nullable: false,
+                defaultValue: 0);
         }
 
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
             migrationBuilder.DropColumn(
-                name: "UploadedByUserId",
-                table: "RPTTemplates");
+                name: "LotNo",
+                table: "nrdata1");
         }
     }
 }

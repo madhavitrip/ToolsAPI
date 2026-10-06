@@ -41,7 +41,18 @@ namespace Tools.Controllers
             {
                 // Log incoming parameters for debugging
                 Console.WriteLine($"[DuplicateController] Received ProjectId: {ProjectId}, batchId: {batchId}, lotNo: {lotNo}");
-                
+
+                // If this project has records in NrData1 and no active records in NRDatas, delegate to NrData1Controller
+                if (!await _context.NRDatas.AnyAsync(p => p.ProjectId == ProjectId && p.Status == true) &&
+                    await _context.NrData1.AnyAsync(p => p.ProjectId == ProjectId))
+                {
+                    var nrData1Controller = new NrData1Controller(_context, _logger, _apiSettingsOptions, _dispatchService)
+                    {
+                        ControllerContext = this.ControllerContext
+                    };
+                    return await nrData1Controller.MergeFields(ProjectId, batchId, lotNo);
+                }
+
                 IQueryable<NRData> query = _context.NRDatas
                     .Where(p => p.ProjectId == ProjectId && p.Status == true);
 
@@ -362,6 +373,17 @@ namespace Tools.Controllers
             try
             {
                 Console.WriteLine($"ApplyEnhancement API called for ProjectId: {ProjectId}, batch: {batch}, lotNo: {lotNo}");
+
+                // If this project has records in NrData1 and no active records in NRDatas, delegate to NrData1Controller
+                if (!await _context.NRDatas.AnyAsync(p => p.ProjectId == ProjectId && p.Status == true) &&
+                    await _context.NrData1.AnyAsync(p => p.ProjectId == ProjectId))
+                {
+                    var nrData1Controller = new NrData1Controller(_context, _logger, _apiSettingsOptions, _dispatchService)
+                    {
+                        ControllerContext = this.ControllerContext
+                    };
+                    return await nrData1Controller.ApplyEnhancement(ProjectId, batch, lotNo);
+                }
 
                 // Normalize NULL numeric fields to 0 to avoid materialization errors
                 await _context.Database.ExecuteSqlRawAsync(@"

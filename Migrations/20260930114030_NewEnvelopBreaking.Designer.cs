@@ -12,8 +12,8 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace Tools.Migrations
 {
     [DbContext(typeof(ERPToolsDbContext))]
-    [Migration("20260917071738_AddCollegeCodeToTemporaryNrDatas")]
-    partial class AddCollegeCodeToTemporaryNrDatas
+    [Migration("20260930114030_NewEnvelopBreaking")]
+    partial class NewEnvelopBreaking
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
@@ -164,6 +164,14 @@ namespace Tools.Migrations
                     MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
 
                     b.Property<string>("CatchNo")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("CenterCode")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("CenterName")
                         .HasColumnType("longtext");
 
                     b.Property<int>("CollegeCode")
@@ -202,6 +210,9 @@ namespace Tools.Migrations
                     b.Property<string>("Semester")
                         .HasColumnType("longtext");
 
+                    b.Property<bool>("Status")
+                        .HasColumnType("tinyint(1)");
+
                     b.Property<string>("SubjectName")
                         .HasColumnType("longtext");
 
@@ -211,6 +222,65 @@ namespace Tools.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("CatchList");
+                });
+
+            modelBuilder.Entity("Tools.Models.CenterList", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("CenterCode")
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("CenterData")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<double>("CenterSort")
+                        .HasColumnType("double");
+
+                    b.Property<string>("District")
+                        .HasColumnType("longtext");
+
+                    b.Property<int>("DistrictSort")
+                        .HasColumnType("int");
+
+                    b.Property<int>("ExtraId")
+                        .HasColumnType("int");
+
+                    b.Property<int>("NRDataId")
+                        .HasColumnType("int");
+
+                    b.Property<int>("NRQuantity")
+                        .HasColumnType("int");
+
+                    b.Property<string>("NodalCode")
+                        .HasColumnType("longtext");
+
+                    b.Property<double>("NodalSort")
+                        .HasColumnType("double");
+
+                    b.Property<int>("ProjectId")
+                        .HasColumnType("int");
+
+                    b.Property<int>("Quantity")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Route")
+                        .HasColumnType("longtext");
+
+                    b.Property<int>("RouteSort")
+                        .HasColumnType("int");
+
+                    b.Property<bool>("Status")
+                        .HasColumnType("tinyint(1)");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("centerlist", (string)null);
                 });
 
             modelBuilder.Entity("Tools.Models.ChangedNRData", b =>
@@ -295,8 +365,11 @@ namespace Tools.Migrations
                     b.Property<int>("ProjectId")
                         .HasColumnType("int");
 
-                    b.Property<int>("Status")
+                    b.Property<int?>("Rule")
                         .HasColumnType("int");
+
+                    b.Property<bool>("Status")
+                        .HasColumnType("tinyint(1)");
 
                     b.Property<string>("UniqueField")
                         .IsRequired()
@@ -329,13 +402,15 @@ namespace Tools.Migrations
                     b.Property<int>("ProjectId")
                         .HasColumnType("int");
 
+                    b.Property<bool>("Status")
+                        .HasColumnType("tinyint(1)");
+
                     b.Property<int>("TotalEnvelope")
                         .HasColumnType("int");
 
                     b.HasKey("EnvelopeId");
 
-                    b.HasIndex("NrDataId", "ProjectId")
-                        .IsUnique();
+                    b.HasIndex("NrDataId", "ProjectId", "Status");
 
                     b.ToTable("EnvelopeBreakages");
                 });
@@ -516,6 +591,43 @@ namespace Tools.Migrations
                     b.ToTable("EventLogs");
                 });
 
+            modelBuilder.Entity("Tools.Models.ExcelReport", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("FilePath")
+                        .HasColumnType("longtext");
+
+                    b.Property<DateTime>("GeneratedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int?>("GeneratedByUserId")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("Lot")
+                        .HasColumnType("int");
+
+                    b.Property<int>("ModuleId")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("ProjectId")
+                        .HasColumnType("int");
+
+                    b.Property<bool>("Status")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<int>("Version")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("ExcelReports");
+                });
+
             modelBuilder.Entity("Tools.Models.ExtraEnvelopes", b =>
                 {
                     b.Property<int>("Id")
@@ -587,6 +699,9 @@ namespace Tools.Migrations
 
                     MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
 
+                    b.Property<bool>("AttachExtraForEachCatchForAllNodal")
+                        .HasColumnType("tinyint(1)");
+
                     b.Property<string>("EnvelopeType")
                         .IsRequired()
                         .HasColumnType("longtext");
@@ -649,6 +764,9 @@ namespace Tools.Migrations
                         .HasColumnType("int");
 
                     MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<bool>("AttachExtraForEachCatchForAllNodal")
+                        .HasColumnType("tinyint(1)");
 
                     b.Property<string>("EnvelopeType")
                         .IsRequired()
@@ -975,6 +1093,95 @@ namespace Tools.Migrations
                     b.ToTable("NRDatas");
                 });
 
+            modelBuilder.Entity("Tools.Models.NewEnvelopeBreakage", b =>
+                {
+                    b.Property<int>("EnvelopeId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("EnvelopeId"));
+
+                    b.Property<int>("CenterListId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("InnerEnvelope")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<int>("NrDataId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("OuterEnvelope")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<int>("ProjectId")
+                        .HasColumnType("int");
+
+                    b.Property<bool>("Status")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<int>("TotalEnvelope")
+                        .HasColumnType("int");
+
+                    b.HasKey("EnvelopeId");
+
+                    b.ToTable("newenvelopebreakage", (string)null);
+                });
+
+            modelBuilder.Entity("Tools.Models.NewEnvelopeBreakingResult", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("BookletSerial")
+                        .HasColumnType("longtext");
+
+                    b.Property<int>("CenterEnv")
+                        .HasColumnType("int");
+
+                    b.Property<int>("CenterListId")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Env")
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("EnvQuantity")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<int>("NrDataId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("OmrSerial")
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("PackingDenomination")
+                        .HasColumnType("longtext");
+
+                    b.Property<int>("ProjectId")
+                        .HasColumnType("int");
+
+                    b.Property<int>("SerialNumber")
+                        .HasColumnType("int");
+
+                    b.Property<bool>("Status")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<int>("TotalEnv")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("newenvelopebreakingresults", (string)null);
+                });
+
             modelBuilder.Entity("Tools.Models.NodalList", b =>
                 {
                     b.Property<int>("Id")
@@ -989,19 +1196,21 @@ namespace Tools.Migrations
                     b.Property<string>("CollegeName")
                         .HasColumnType("longtext");
 
-                    b.Property<int>("ExamCenterCode")
-                        .HasColumnType("int");
+                    b.Property<string>("ExamCenterCode")
+                        .HasColumnType("longtext");
 
                     b.Property<string>("ExamCenterName")
+                        .IsRequired()
                         .HasColumnType("longtext");
 
                     b.Property<string>("Gender")
                         .HasColumnType("longtext");
 
-                    b.Property<int>("NodalCode")
-                        .HasColumnType("int");
+                    b.Property<string>("NodalCode")
+                        .HasColumnType("longtext");
 
                     b.Property<string>("NodalName")
+                        .IsRequired()
                         .HasColumnType("longtext");
 
                     b.Property<string>("OtherFields")
@@ -1010,9 +1219,70 @@ namespace Tools.Migrations
                     b.Property<int>("ProjectId")
                         .HasColumnType("int");
 
+                    b.Property<bool>("Status")
+                        .HasColumnType("tinyint(1)");
+
                     b.HasKey("Id");
 
                     b.ToTable("NodalList");
+                });
+
+            modelBuilder.Entity("Tools.Models.NrData1", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<int>("Batch")
+                        .HasColumnType("int");
+
+                    b.Property<string>("CatchNo")
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("CourseName")
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("Day")
+                        .HasColumnType("longtext");
+
+                    b.Property<int>("EnvLotNo")
+                        .HasColumnType("int");
+
+                    b.Property<string>("ExamDate")
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("ExamTime")
+                        .HasColumnType("longtext");
+
+                    b.Property<int>("LotNo")
+                        .HasColumnType("int");
+
+                    b.Property<string>("NRDatas")
+                        .HasColumnType("longtext");
+
+                    b.Property<int>("Pages")
+                        .HasColumnType("int");
+
+                    b.Property<int>("ProjectId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Remarksss")
+                        .HasColumnType("longtext");
+
+                    b.Property<int>("Steps")
+                        .HasColumnType("int");
+
+                    b.Property<string>("SubjectName")
+                        .HasColumnType("longtext");
+
+                    b.Property<int>("VerificationStatus")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("nrdata1", (string)null);
                 });
 
             modelBuilder.Entity("Tools.Models.ProcessSteps", b =>

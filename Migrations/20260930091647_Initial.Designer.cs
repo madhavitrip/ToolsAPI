@@ -4,6 +4,7 @@ using ERPToolsAPI.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace Tools.Migrations
 {
     [DbContext(typeof(ERPToolsDbContext))]
-    partial class ERPToolsDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260930091647_Initial")]
+    partial class Initial
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -1126,59 +1129,6 @@ namespace Tools.Migrations
                     b.ToTable("newenvelopebreakage", (string)null);
                 });
 
-            modelBuilder.Entity("Tools.Models.NewEnvelopeBreakingResult", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("int");
-
-                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
-
-                    b.Property<string>("BookletSerial")
-                        .HasColumnType("longtext");
-
-                    b.Property<int>("CenterEnv")
-                        .HasColumnType("int");
-
-                    b.Property<int>("CenterListId")
-                        .HasColumnType("int");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("datetime(6)");
-
-                    b.Property<string>("Env")
-                        .HasColumnType("longtext");
-
-                    b.Property<string>("EnvQuantity")
-                        .IsRequired()
-                        .HasColumnType("longtext");
-
-                    b.Property<int>("NrDataId")
-                        .HasColumnType("int");
-
-                    b.Property<string>("OmrSerial")
-                        .HasColumnType("longtext");
-
-                    b.Property<string>("PackingDenomination")
-                        .HasColumnType("longtext");
-
-                    b.Property<int>("ProjectId")
-                        .HasColumnType("int");
-
-                    b.Property<int>("SerialNumber")
-                        .HasColumnType("int");
-
-                    b.Property<bool>("Status")
-                        .HasColumnType("tinyint(1)");
-
-                    b.Property<int>("TotalEnv")
-                        .HasColumnType("int");
-
-                    b.HasKey("Id");
-
-                    b.ToTable("newenvelopebreakingresults", (string)null);
-                });
-
             modelBuilder.Entity("Tools.Models.NodalList", b =>
                 {
                     b.Property<int>("Id")
@@ -1252,9 +1202,6 @@ namespace Tools.Migrations
 
                     b.Property<string>("ExamTime")
                         .HasColumnType("longtext");
-
-                    b.Property<int>("LotNo")
-                        .HasColumnType("int");
 
                     b.Property<string>("NRDatas")
                         .HasColumnType("longtext");

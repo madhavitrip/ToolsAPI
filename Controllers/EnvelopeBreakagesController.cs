@@ -389,14 +389,26 @@ namespace Tools.Controllers
                     int remaining = quantity;
                     Dictionary<string, string> innerBreakdown = new();
 
-                    foreach (var size in innerSizes)
+                    if (innerSizes.Any())
                     {
-                        int count = remaining / size;
-
-                        if (count > 0)
+                        foreach (var size in innerSizes)
                         {
-                            innerBreakdown[$"E{size}"] = count.ToString();
-                            remaining -= count * size;
+                            int count = remaining / size;
+                            if (count > 0)
+                            {
+                                innerBreakdown[$"E{size}"] = count.ToString();
+                                remaining -= count * size;
+                            }
+                        }
+
+                        if (remaining > 0)
+                        {
+                            int smallestInner = innerSizes.Last();
+                            int count = (int)Math.Ceiling((double)remaining / smallestInner);
+                            string key = $"E{smallestInner}";
+                            innerBreakdown[key] = (innerBreakdown.ContainsKey(key)
+                                ? int.Parse(innerBreakdown[key]) + count
+                                : count).ToString();
                         }
                     }
 
@@ -406,39 +418,43 @@ namespace Tools.Controllers
                     int totalOuterCount = 0;
 
                     // Step 1: Greedy distribution
-                    foreach (var size in outerSizes)
+                    if (outerSizes.Any())
                     {
-                        int count = remaining / size;
-
-                        if (count > 0)
+                        foreach (var size in outerSizes)
                         {
-                            outerBreakdown[$"E{size}"] = count.ToString();
+                            int count = remaining / size;
+                            if (count > 0)
+                            {
+                                outerBreakdown[$"E{size}"] = count.ToString();
+                                totalOuterCount += count;
+                                remaining -= count * size;
+                            }
+                        }
+
+                        // Step 2: Handle leftover
+                        if (remaining > 0)
+                        {
+                            int smallestSize = outerSizes.Last();
+                            int count = (int)Math.Ceiling((double)remaining / smallestSize);
+
+                            string key = $"E{smallestSize}";
+                            if (outerBreakdown.ContainsKey(key))
+                            {
+                                outerBreakdown[key] = (int.Parse(outerBreakdown[key]) + count).ToString();
+                            }
+                            else
+                            {
+                                outerBreakdown[key] = count.ToString();
+                            }
+
                             totalOuterCount += count;
-                            remaining -= count * size;
+                            remaining = 0;
                         }
                     }
 
-                    // Step 2: Handle leftover ONLY if inner != outer
-                    bool sameEnvelopes = innerSizes.SequenceEqual(outerSizes);
-
-                    if (remaining > 0 && !sameEnvelopes)
+                    if (!innerBreakdown.Any() && outerBreakdown.Any())
                     {
-                        int smallestSize = outerSizes.Last();
-
-                        int count = (int)Math.Ceiling((double)remaining / smallestSize);
-
-                        if (outerBreakdown.ContainsKey($"E{smallestSize}"))
-                        {
-                            outerBreakdown[$"E{smallestSize}"] =
-                                (int.Parse(outerBreakdown[$"E{smallestSize}"]) + count).ToString();
-                        }
-                        else
-                        {
-                            outerBreakdown[$"E{smallestSize}"] = count.ToString();
-                        }
-
-                        totalOuterCount += count;
-                        remaining = 0;
+                        innerBreakdown = new Dictionary<string, string>(outerBreakdown);
                     }
 
 
