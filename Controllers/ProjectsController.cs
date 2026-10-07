@@ -95,8 +95,8 @@ namespace Tools.Controllers
                 var projects = await _context.Projects
                     .ToListAsync(); // Fetch all projects (client-side filtering will follow)
 
-                // Filter projects: RoleId 1 sees ALL active projects (Status == false); other roles filter by UserAssigned list
-                var userProjects = (userRoleId == 1)
+                // Filter projects: RoleId 1 or UserId 1 sees ALL active projects (Status == false); other roles filter by UserAssigned list
+                var userProjects = (userRoleId == 1 || userIntId == 1)
                     ? projects.Where(p => p.Status == false).ToList()
                     : projects.Where(p => p.UserAssigned != null && p.UserAssigned.Contains(userIntId) && p.Status == false).ToList();
 

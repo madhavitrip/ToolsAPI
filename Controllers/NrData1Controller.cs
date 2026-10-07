@@ -2306,24 +2306,14 @@ namespace Tools.Controllers
             return await procController.ProcessEnvelopeBreaking(ProjectId, triggeredBy, skipReset, lotNo, catchNo, bypassDispatch, batchNo);
         }
 
-        [HttpGet("GetEnvelopeBreakingReport")]
-        public async Task<IActionResult> GetEnvelopeBreakingReport([FromQuery] int ProjectId, [FromQuery] int? lotNo = null)
-        {
-            var procController = new EnvelopeBreakageProcessingController(_context, _loggerService, _apiSettings, _dispatchService)
-            {
-                ControllerContext = this.ControllerContext
-            };
-            return await procController.GetEnvelopeBreakingReport(ProjectId, lotNo);
-        }
-
         [HttpPost("ProcessBoxBreaking")]
         public async Task<IActionResult> ProcessBoxBreaking([FromQuery] int ProjectId, [FromQuery] List<int>? LotNo = null, [FromQuery] bool skipReset = false, [FromQuery] bool bypassDispatch = false, [FromQuery] bool runBoth = false, [FromQuery] int? batchNo = null)
         {
-            var procController = new BoxBreakingProcessingController(_context, _loggerService, _apiSettings, _dispatchService)
+            var boxController = new BoxBreakingProcessingController(_context, _loggerService, _apiSettings, _dispatchService)
             {
                 ControllerContext = this.ControllerContext
             };
-            return await procController.ProcessBoxBreaking(ProjectId, LotNo ?? new List<int>(), skipReset, bypassDispatch, runBoth, batchNo);
+            return await boxController.ProcessBoxBreaking(ProjectId, LotNo ?? new List<int>(), skipReset, bypassDispatch, runBoth, batchNo);
         }
 
         #region Helper Models

@@ -31,6 +31,12 @@ namespace Tools.Controllers
         [HttpPost("ProcessBoxBreaking")]
         public async Task<IActionResult> ProcessBoxBreaking(int ProjectId, [FromQuery]List<int> LotNo, [FromQuery] bool skipReset = false, [FromQuery] bool bypassDispatch = false, [FromQuery] bool runBoth = false, [FromQuery] int? batchNo = null)
         {
+            var isNewModel = await _context.NrData1.AnyAsync(p => p.ProjectId == ProjectId);
+            if (isNewModel)
+            {
+                return await ProcessBoxBreakingNew(ProjectId, LotNo, skipReset, bypassDispatch, runBoth, batchNo);
+            }
+
             var sw = System.Diagnostics.Stopwatch.StartNew();
             try
             {
@@ -906,51 +912,129 @@ namespace Tools.Controllers
         }
 
         [HttpGet("GetBoxBreakingReport")]
-        public async Task<IActionResult> GetBoxBreakingReport(int ProjectId, [FromQuery] List<int> LotNo, [FromQuery] int? uploadId = null, [FromQuery] int? userId = null)
+        public async Task<IActionResult> GetBoxBreakingReport(int ProjectId, [FromQuery] List<int>? LotNo = null, [FromQuery] int? uploadId = null, [FromQuery] int? userId = null)
         {
             try
             {
-                // ✅ Get NRData for this lot or upload version
-                List<NRData> nrData;
-                var nrDataQuery = _context.NRDatas.Where(p => p.ProjectId == ProjectId && p.Status == true);
+                bool isNewModel = await _context.NrData1.AnyAsync(p => p.ProjectId == ProjectId);
+                HashSet<string> nrCatchNos = new HashSet<string>();
+                List<NRData> nrData = new List<NRData>();
 
-                if (uploadId.HasValue)
+                if (isNewModel)
                 {
-                    var all = await nrDataQuery.ToListAsync();
-                    nrData = all.Where(x => x.UploadList != null && x.UploadList.Contains(uploadId.Value)).ToList();
-                }
-                else if (LotNo != null && LotNo.Any())
-                {
-                    nrData = await nrDataQuery.Where(p => p.Status == true && LotNo.Contains(p.LotNo)).ToListAsync();
+                    var nr1Query = _context.NrData1.Where(p => p.ProjectId == ProjectId);
+                    if (uploadId.HasValue)
+                    {
+                        nr1Query = nr1Query.Where(p => p.Batch == uploadId.Value);
+                    }
+                    else if (LotNo != null && LotNo.Any())
+                    {
+                        nr1Query = nr1Query.Where(p => LotNo.Contains(p.LotNo));
+                    }
+
+                    var nr1List = await nr1Query.ToListAsync();
+                    if (!nr1List.Any())
+                    {
+                        nr1List = await _context.NrData1.Where(p => p.ProjectId == ProjectId).ToListAsync();
+                    }
+
+                    nrCatchNos = nr1List.Select(n => n.CatchNo ?? "").Where(c => !string.IsNullOrEmpty(c)).ToHashSet();
+
+                    foreach (var nr1 in nr1List)
+                    {
+                        nrData.Add(new NRData
+                        {
+                            Id = nr1.Id,
+                            ProjectId = nr1.ProjectId,
+                            CatchNo = nr1.CatchNo,
+                            CourseName = nr1.CourseName,
+                            SubjectName = nr1.SubjectName,
+                            ExamDate = nr1.ExamDate,
+                            ExamTime = nr1.ExamTime,
+                            Pages = nr1.Pages,
+                            LotNo = nr1.LotNo > 0 ? nr1.LotNo : nr1.EnvLotNo,
+                            NRDatas = nr1.NRDatas
+                        });
+                    }
                 }
                 else
                 {
-                    return BadRequest("Either LotNo or uploadId must be provided.");
+                    var nrDataQuery = _context.NRDatas.Where(p => p.ProjectId == ProjectId && p.Status == true);
+
+                    if (uploadId.HasValue)
+                    {
+                        var all = await nrDataQuery.ToListAsync();
+                        nrData = all.Where(x => x.UploadList != null && x.UploadList.Contains(uploadId.Value)).ToList();
+                    }
+                    else if (LotNo != null && LotNo.Any())
+                    {
+                        nrData = await nrDataQuery.Where(p => p.Status == true && LotNo.Contains(p.LotNo)).ToListAsync();
+                    }
+
+                    if (!nrData.Any())
+                        return NotFound(uploadId.HasValue ? $"No NRData found for version {uploadId}" : $"No NRData found for Lot(s) {(LotNo != null ? string.Join(", ", LotNo) : "All")}");
+
+                    nrCatchNos = nrData.Select(n => n.CatchNo ?? "").Where(c => !string.IsNullOrEmpty(c)).ToHashSet();
                 }
-
-                if (!nrData.Any())
-                    return NotFound(uploadId.HasValue ? $"No NRData found for version {uploadId}" : $"No NRData found for Lot(s) {string.Join(", ", LotNo)}");
-
-                var nrCatchNos = nrData.Select(n => n.CatchNo).ToHashSet();
 
                 // ✅ Get envelope results for this lot's catches
                 var envelopeResults = await _context.EnvelopeBreakingResults
                     .Where(nr => nrCatchNos.Contains(nr.CatchNo) && nr.ProjectId == ProjectId && nr.Status)
                     .ToListAsync();
 
+                if (!envelopeResults.Any() && isNewModel)
+                {
+                    var newEnvBreakings = await _context.NewEnvelopeBreakingResults
+                        .Where(r => r.ProjectId == ProjectId && r.Status && r.SerialNumber != 0)
+                        .ToListAsync();
+
+                    var centerListMap = await _context.CenterList
+                        .Where(c => c.ProjectId == ProjectId && c.Status)
+                        .ToDictionaryAsync(c => c.Id);
+
+                    var nr1Map = await _context.NrData1
+                        .Where(n => n.ProjectId == ProjectId)
+                        .ToDictionaryAsync(n => n.Id);
+
+                    foreach (var eb in newEnvBreakings)
+                    {
+                        centerListMap.TryGetValue(eb.CenterListId, out var c);
+                        nr1Map.TryGetValue(eb.NrDataId, out var n);
+
+                        envelopeResults.Add(new EnvelopeBreakingResult
+                        {
+                            Id = eb.Id,
+                            ProjectId = eb.ProjectId,
+                            NrDataId = eb.NrDataId,
+                            CatchNo = n?.CatchNo ?? "",
+                            CenterCode = c?.CenterCode ?? "",
+                            CenterSort = c?.CenterSort ?? 0,
+                            ExamTime = n?.ExamTime ?? "",
+                            ExamDate = n?.ExamDate ?? "",
+                            Quantity = int.TryParse(eb.EnvQuantity, out int q) ? q : (c?.Quantity ?? 0),
+                            TotalEnv = eb.TotalEnv,
+                            NodalCode = c?.NodalCode ?? "",
+                            NodalSort = c?.NodalSort ?? 0,
+                            Route = c?.Route ?? "",
+                            RouteSort = c?.RouteSort ?? 0,
+                            BookletSerial = eb.BookletSerial ?? "",
+                            OmrSerial = eb.OmrSerial ?? "",
+                            District = c?.District ?? "",
+                            DistrictSort = c?.DistrictSort ?? 0
+                        });
+                    }
+                }
+
                 var envelopeResultIds = envelopeResults.Select(e => e.Id).ToHashSet();
 
-                // ✅ Filter box results by active Status AND only envelope result IDs belonging to this lot
+                // ✅ Filter box results by active Status AND envelope result IDs belonging to this project / lot
                 var boxResults = await _context.BoxBreakingResults
-                    .Where(r => r.ProjectId == ProjectId
-                             && r.Status
-                             && r.EnvelopeBreakingResultId.HasValue
-                             && envelopeResultIds.Contains(r.EnvelopeBreakingResultId.Value))
+                    .Where(r => r.ProjectId == ProjectId && r.Status && (r.EnvelopeBreakingResultId == null || envelopeResultIds.Contains(r.EnvelopeBreakingResultId.Value)))
                     .OrderBy(r => r.Id)
                     .ToListAsync();
 
                 if (!boxResults.Any())
-                    return NotFound($"No box breaking results found for Lot(s) {string.Join(", ", LotNo)}");
+                    return NotFound($"No box breaking results found for Lot(s) {(LotNo != null && LotNo.Any() ? string.Join(", ", LotNo) : "All")}");
 
                 var projectconfig = await _context.ProjectConfigs
                     .FirstOrDefaultAsync(p => p.ProjectId == ProjectId);
@@ -1102,6 +1186,354 @@ namespace Tools.Controllers
             {
                 await _loggerService.LogErrorAsync("Report Status Reset Error", ex.Message, nameof(BoxBreakingProcessingController));
             }
+        }
+
+        private async Task<IActionResult> ProcessBoxBreakingNew(int ProjectId, List<int> LotNo, bool skipReset = false, bool bypassDispatch = false, bool runBoth = false, int? batchNo = null)
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            try
+            {
+                if (!skipReset) await ResetReportStatus(ProjectId);
+                await _loggerService.LogEventAsync($"Starting box breaking for NrData1 ProjectId {ProjectId}, Lots: {string.Join(",", LotNo)}", "BoxBreakingProcessing", Tools.Services.LogHelper.GetTriggeredBy(User), ProjectId);
+
+                // Read active NewEnvelopeBreakingResults from DB
+                var envelopeResults = await _context.NewEnvelopeBreakingResults
+                    .Where(r => r.ProjectId == ProjectId && r.Status && r.SerialNumber != 0)
+                    .ToListAsync();
+
+                var eligibleSteps = Tools.Models.PipelineNavigator.GetEligiblePickupSteps(Tools.Models.PipelineNavigator.STEP_AWAITING_BOX);
+
+                var nrData = await _context.NrData1
+                    .Where(p => p.ProjectId == ProjectId && eligibleSteps.Contains(p.Steps) && p.Batch == (batchNo ?? 1))
+                    .ToListAsync();
+
+                if (LotNo != null && LotNo.Any())
+                {
+                    nrData = nrData.Where(p => LotNo.Contains(p.LotNo)).ToList();
+                }
+
+                if (!nrData.Any())
+                {
+                    var fallbackQuery = _context.NrData1.Where(p => p.ProjectId == ProjectId && p.Batch == (batchNo ?? 1));
+                    if (LotNo != null && LotNo.Any())
+                    {
+                        fallbackQuery = fallbackQuery.Where(p => LotNo.Contains(p.LotNo));
+                    }
+                    nrData = await fallbackQuery.ToListAsync();
+                }
+
+                var nrDataIds = nrData.Select(n => n.Id).ToList();
+                var centerList = await _context.CenterList
+                    .Where(c => c.ProjectId == ProjectId && nrDataIds.Contains(c.NRDataId) && c.Status)
+                    .ToListAsync();
+
+                var centerDict = centerList.ToDictionary(c => c.Id);
+                var nrDict = nrData.ToDictionary(n => n.Id);
+
+                var filteredEnvelopeResults = envelopeResults
+                    .Where(e => nrDict.ContainsKey(e.NrDataId) && (e.CenterListId == 0 || centerDict.ContainsKey(e.CenterListId)))
+                    .ToList();
+
+                if (!filteredEnvelopeResults.Any() && envelopeResults.Any())
+                {
+                    filteredEnvelopeResults = envelopeResults
+                        .Where(e => nrDataIds.Contains(e.NrDataId))
+                        .ToList();
+                }
+
+                var projectconfig = await _context.ProjectConfigs
+                    .Where(p => p.ProjectId == ProjectId)
+                    .FirstOrDefaultAsync();
+
+                if (projectconfig == null)
+                    return NotFound("Project config not found");
+
+                var duplicatesFields = projectconfig.DuplicateRemoveFields ?? new List<int>();
+                var sortingId = projectconfig.SortingBoxReport ?? new List<int>();
+
+                var fieldsFromDb = await _context.Fields
+                    .Where(f => sortingId.Contains(f.FieldId))
+                    .ToListAsync();
+
+                var fieldNames = fieldsFromDb
+                    .OrderBy(f => sortingId.IndexOf(f.FieldId))
+                    .Select(f => f.Name)
+                    .ToList();
+
+                var dupNames = await _context.Fields
+                    .Where(f => duplicatesFields.Contains(f.FieldId))
+                    .Select(f => f.Name)
+                    .ToListAsync();
+
+                var startBox = projectconfig.BoxNumber;
+
+                var capacity = 0;
+                if (projectconfig.BoxCapacity > 0)
+                {
+                    capacity = await _context.BoxCapacity
+                        .Where(c => c.BoxCapacityId == projectconfig.BoxCapacity)
+                        .Select(c => c.Capacity)
+                        .FirstOrDefaultAsync();
+                }
+
+                var breakingReportData = new List<dynamic>();
+
+                foreach (var result in filteredEnvelopeResults)
+                {
+                    dynamic row = new System.Dynamic.ExpandoObject();
+                    var rowDict = (IDictionary<string, object>)row;
+
+                    centerDict.TryGetValue(result.CenterListId, out var cRecord);
+                    nrDict.TryGetValue(result.NrDataId, out var nrRecord);
+
+                    int qty = cRecord != null ? (cRecord.Quantity > 0 ? cRecord.Quantity : cRecord.NRQuantity) : 0;
+
+                    rowDict["CatchNo"] = nrRecord?.CatchNo ?? "";
+                    rowDict["CenterCode"] = cRecord?.CenterCode ?? "";
+                    rowDict["CenterSort"] = cRecord?.CenterSort ?? 0.0;
+                    rowDict["ExamTime"] = nrRecord?.ExamTime ?? "";
+                    rowDict["ExamDate"] = nrRecord?.ExamDate ?? "";
+                    rowDict["Quantity"] = qty;
+                    rowDict["TotalEnv"] = result.TotalEnv;
+                    rowDict["NodalCode"] = cRecord?.NodalCode ?? "";
+                    rowDict["NodalSort"] = cRecord?.NodalSort ?? 0.0;
+                    rowDict["Route"] = cRecord?.Route ?? "";
+                    rowDict["RouteSort"] = cRecord?.RouteSort ?? 0;
+                    rowDict["CourseName"] = nrRecord?.CourseName ?? "";
+                    rowDict["BookletSerial"] = result.BookletSerial ?? "";
+                    rowDict["OmrSerial"] = result.OmrSerial ?? "";
+                    rowDict["EnvelopeBreakingResultId"] = result.Id;
+                    rowDict["NrDataId"] = result.NrDataId;
+                    rowDict["DistrictSort"] = cRecord?.DistrictSort ?? 0.0;
+                    rowDict["District"] = cRecord?.District ?? "";
+                    rowDict["ExtraId"] = cRecord?.ExtraId ?? 0;
+                    //rowDict["Symbol"] = nrRecord?.Symbol ?? "";
+                    rowDict["Pages"] = nrRecord?.Pages ?? 0;
+                    rowDict["NRQuantity"] = qty;
+
+                    if (!string.IsNullOrWhiteSpace(cRecord.CenterData))
+                    {
+                        try
+                        {
+                            var cd = JsonSerializer.Deserialize<Dictionary<string, string>>(cRecord.CenterData);
+                            if (cd != null)
+                            {
+                                foreach (var kvp in cd)
+                                {
+                                    if (!rowDict.ContainsKey(kvp.Key)) rowDict[kvp.Key] = kvp.Value;
+                                }
+                            }
+                        }
+                        catch {}
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(nrRecord.NRDatas))
+                    {
+                        try
+                        {
+                            var nd = JsonSerializer.Deserialize<Dictionary<string, string>>(nrRecord.NRDatas);
+                            if (nd != null)
+                            {
+                                foreach (var kvp in nd)
+                                {
+                                    if (!rowDict.ContainsKey(kvp.Key)) rowDict[kvp.Key] = kvp.Value;
+                                }
+                            }
+                        }
+                        catch {}
+                    }
+
+                    breakingReportData.Add(row);
+                }
+
+                if (!breakingReportData.Any())
+                    return NotFound("No data found in envelope breaking results");
+
+                // Deduplicate & Calculate Start, End, Serial
+                var uniqueRows = breakingReportData
+                    .GroupBy(x =>
+                    {
+                        var keyParts = dupNames.Select(fieldName =>
+                        {
+                            var dict = (IDictionary<string, object>)x;
+                            return dict.ContainsKey(fieldName) ? dict[fieldName]?.ToString()?.Trim() ?? "" : "";
+                        });
+                        return string.Join("_", keyParts);
+                    })
+                    .Select(g => g.First())
+                    .ToList();
+
+                var enrichedList = new List<dynamic>();
+                string previousCatchNo = null;
+                int previousEnd = 0;
+
+                foreach (var row in uniqueRows)
+                {
+                    var rowDict = (IDictionary<string, object>)row;
+                    string catchNo = rowDict["CatchNo"]?.ToString();
+                    string normCatchNo = GetNormalizedCatchNo(catchNo);
+
+                    int start = normCatchNo != previousCatchNo ? 1 : previousEnd + 1;
+                    int end = start + (int)rowDict["TotalEnv"] - 1;
+                    string serial = $"{start} to {end}";
+
+                    rowDict["Start"] = start;
+                    rowDict["End"] = end;
+                    rowDict["Serial"] = serial;
+
+                    enrichedList.Add(row);
+                    previousCatchNo = normCatchNo;
+                    previousEnd = end;
+                }
+
+                IOrderedEnumerable<dynamic> ordered = null;
+                foreach (var fieldName in fieldNames)
+                {
+                    Func<dynamic, object> keySelector = x =>
+                    {
+                        var dict = (IDictionary<string, object>)x;
+                        if (!dict.ContainsKey(fieldName)) return null;
+                        var val = dict[fieldName];
+                        if (val == null) return null;
+
+                        if (fieldName.Equals("NodalSort", StringComparison.OrdinalIgnoreCase))
+                            return double.TryParse(val.ToString(), out double n) ? (object)n : 0.0;
+
+                        if (fieldName.Equals("ExamDate", StringComparison.OrdinalIgnoreCase))
+                            return DateTime.TryParseExact(val.ToString(), "dd-MM-yyyy",
+                                System.Globalization.CultureInfo.InvariantCulture,
+                                System.Globalization.DateTimeStyles.None, out DateTime parsedDate)
+                                ? (object)parsedDate : DateTime.MinValue;
+
+                        if (fieldName.Contains("sort", StringComparison.OrdinalIgnoreCase))
+                            return double.TryParse(val.ToString(), out double d) ? (object)d : 0.0;
+
+                        return val.ToString().Trim().ToLowerInvariant();
+                    };
+
+                    if (ordered == null) ordered = enrichedList.OrderBy(keySelector);
+                    else ordered = ordered.ThenBy(keySelector);
+                }
+
+                var sortedList = ordered?.ToList() ?? enrichedList;
+
+                if (capacity <= 0) capacity = 2000;
+
+                var finalWithBoxes = new List<dynamic>();
+                int boxNo = startBox;
+                int runningPages = 0;
+                string prevMergeKey = null;
+
+                foreach (var item in sortedList)
+                {
+                    var itemDict = (IDictionary<string, object>)item;
+                    int pages = (int)itemDict["Pages"];
+                    if (pages <= 0) pages = 1;
+                    int totalPages = ((int)itemDict["Quantity"]) * pages;
+
+                    var keyParts = dupNames.Select(fieldName => itemDict.ContainsKey(fieldName) ? itemDict[fieldName]?.ToString()?.Trim() ?? "" : "");
+                    string mergeKey = string.Join("_", keyParts);
+
+                    if (prevMergeKey != null && mergeKey != prevMergeKey)
+                    {
+                        if (runningPages > 0)
+                        {
+                            boxNo++;
+                            runningPages = 0;
+                        }
+                    }
+
+                    if (runningPages + totalPages > capacity && runningPages > 0)
+                    {
+                        boxNo++;
+                        runningPages = 0;
+                    }
+
+                    runningPages += totalPages;
+
+                    dynamic boxItem = new System.Dynamic.ExpandoObject();
+                    var boxDict = (IDictionary<string, object>)boxItem;
+                    foreach (var kvp in itemDict) boxDict[kvp.Key] = kvp.Value;
+                    boxDict["BoxNo"] = boxNo.ToString();
+                    boxDict["TotalPages"] = totalPages;
+                    finalWithBoxes.Add(boxItem);
+
+                    prevMergeKey = mergeKey;
+                }
+
+                var boxResults = new List<BoxBreakingResult>();
+                foreach (var item in finalWithBoxes)
+                {
+                    var itemDict = (IDictionary<string, object>)item;
+                    boxResults.Add(new BoxBreakingResult
+                    {
+                        ProjectId = ProjectId,
+                        EnvelopeBreakingResultId = itemDict.ContainsKey("EnvelopeBreakingResultId") && itemDict["EnvelopeBreakingResultId"] != null
+                            ? (int?)itemDict["EnvelopeBreakingResultId"] : 0,
+                        Start = (int)itemDict["Start"],
+                        End = (int)itemDict["End"],
+                        Serial = itemDict["Serial"]?.ToString(),
+                        TotalPages = (int)itemDict["TotalPages"],
+                        BoxNo = itemDict["BoxNo"]?.ToString() ?? "",
+                        OmrSerial = itemDict["OmrSerial"]?.ToString(),
+                        BookletSerial = itemDict["BookletSerial"]?.ToString(),
+                        Quantity = (int)itemDict["Quantity"],
+                    });
+                }
+
+                var envIds = filteredEnvelopeResults.Select(e => e.Id).ToList();
+                if (envIds.Any())
+                {
+                    await _context.BoxBreakingResults
+                        .Where(b => b.ProjectId == ProjectId && b.EnvelopeBreakingResultId.HasValue && envIds.Contains(b.EnvelopeBreakingResultId.Value) && b.Status)
+                        .ExecuteUpdateAsync(s => s.SetProperty(b => b.Status, false));
+                }
+
+                await _context.BoxBreakingResults.AddRangeAsync(boxResults);
+
+                foreach (var nr in nrData)
+                {
+                    nr.Steps = Tools.Models.PipelineNavigator.GetNextStep(Tools.Models.PipelineNavigator.STEP_AWAITING_BOX, projectconfig?.Modules);
+                    _context.NrData1.Update(nr);
+                }
+
+                await _context.SaveChangesAsync();
+
+                sw.Stop();
+                await _loggerService.LogEventAsync(
+                    $"Box breaking completed for NrData1 in {sw.ElapsedMilliseconds}ms. Created {boxResults.Count} records.",
+                    "BoxBreakingProcessing",
+                    Tools.Services.LogHelper.GetTriggeredBy(User),
+                    ProjectId);
+
+                return Ok(new
+                {
+                    message = "Box breaking data saved to database for NrData1",
+                    recordsCount = boxResults.Count,
+                    processingTimeMs = sw.ElapsedMilliseconds
+                });
+            }
+            catch (Exception ex)
+            {
+                sw.Stop();
+                await _loggerService.LogErrorAsync($"Error processing box breaking for NrData1 after {sw.ElapsedMilliseconds}ms", ex.Message, nameof(BoxBreakingProcessingController));
+                return StatusCode(500, new { error = ex.Message, processingTimeMs = sw.ElapsedMilliseconds });
+            }
+        }
+
+        private static string GetNormalizedCatchNo(string c)
+        {
+            if (string.IsNullOrWhiteSpace(c)) return "";
+            int dashIndex = c.LastIndexOf('-');
+            if (dashIndex > 0 && dashIndex + 1 < c.Length)
+            {
+                char firstChar = char.ToUpper(c[dashIndex + 1]);
+                if (firstChar == 'R')
+                {
+                    return c.Substring(0, dashIndex).Trim();
+                }
+            }
+            return c.Trim();
         }
     }
 }
