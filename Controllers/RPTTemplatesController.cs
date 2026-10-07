@@ -214,7 +214,7 @@ namespace Tools.Controllers
             var excludeColumns = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
                 "id", "projectid", "envelopetype", "envelopebreakingresultid",
-                "createdat", "uploadedbatch", "uploadbatch", "nrdataid",
+                "createdat", "nrdataid",
                 "extraid", "envelopid", "envelopeid", "status", "lotno", "verifiedon", "verifiedby", "verificationstatus", "batch"
             };
 
