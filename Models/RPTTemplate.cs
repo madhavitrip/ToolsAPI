@@ -28,6 +28,8 @@ namespace Tools.Models
         public bool? IsActive { get; set; }
         public bool? IsDeleted { get; set; } = false;
         public bool ReportStatus { get; set; } = false;
+
+        public bool InExcel { get; set; } = false;
     }
 }
 
