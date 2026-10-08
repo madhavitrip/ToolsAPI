@@ -48,6 +48,80 @@ namespace Tools.Controllers
             _dispatchService = dispatchService;
         }
 
+        private IQueryable<ToolsAPI.Models.NRDataDto> GetBaseQuery(int projectId, bool isNewModel)
+        {
+            if (isNewModel)
+            {
+                return from nr in _context.NrData1
+                       join c in _context.CenterList on nr.Id equals c.NRDataId
+                       where nr.ProjectId == projectId && nr.Status && c.Status
+                       select new ToolsAPI.Models.NRDataDto
+                       {
+                           Id = c.Id,
+                           ProjectId = nr.ProjectId,
+                           CatchNo = nr.CatchNo,
+                           CenterCode = c.CenterCode,
+                           ExamDate = nr.ExamDate,
+                           ExamTime = nr.ExamTime,
+                           SubjectName = nr.SubjectName,
+                           CourseName = nr.CourseName,
+                           NodalCode = c.NodalCode,
+                           NRQuantity = c.NRQuantity,
+                           Quantity = c.Quantity,
+                           Route = c.Route,
+                           Pages = nr.Pages,
+                           CenterSort = c.CenterSort,
+                           NodalSort = c.NodalSort,
+                           RouteSort = c.RouteSort,
+                           Symbol = null,
+                           LotNo = nr.LotNo,
+                           EnvLotNo = nr.EnvLotNo,
+                           Batch = nr.Batch,
+                           NRDatas = nr.NRDatas,
+                           Day = nr.Day,
+                           District = c.District,
+                           DistrictSort = c.DistrictSort,
+                           NRDataId = nr.Id,
+                           Status = c.Status,
+                           Steps = nr.Steps,
+                           VerificationStatus = nr.VerificationStatus,
+                           Remarksss = nr.Remarksss
+                       };
+            }
+            return _context.NRDatas.Where(d => d.ProjectId == projectId && d.Status).Select(d => new ToolsAPI.Models.NRDataDto
+            {
+                Id = d.Id,
+                ProjectId = d.ProjectId,
+                CatchNo = d.CatchNo,
+                CenterCode = d.CenterCode,
+                ExamDate = d.ExamDate,
+                ExamTime = d.ExamTime,
+                SubjectName = d.SubjectName,
+                CourseName = d.CourseName,
+                NodalCode = d.NodalCode,
+                NRQuantity = d.NRQuantity,
+                Quantity = d.Quantity,
+                Route = d.Route,
+                Pages = d.Pages,
+                CenterSort = d.CenterSort,
+                NodalSort = d.NodalSort,
+                RouteSort = d.RouteSort,
+                Symbol = d.Symbol,
+                LotNo = d.LotNo,
+                EnvLotNo = d.EnvLotNo,
+                Batch = d.Batch,
+                NRDatas = d.NRDatas,
+                Day = d.Day,
+                District = d.District,
+                DistrictSort = d.DistrictSort,
+                NRDataId = d.NRDataId,
+                Status = d.Status,
+                Steps = d.Steps,
+                VerificationStatus = d.VerificationStatus,
+                Remarksss = d.Remarksss
+            });
+        }
+
         // GET: api/NRDatas
         [HttpGet]
         public async Task<ActionResult<IEnumerable<NRData>>> GetNRDatas()
@@ -83,9 +157,8 @@ namespace Tools.Controllers
             [FromQuery] int? lotNo = null,
             [FromQuery] int? batchNo = null)
         {
-            IQueryable<NRData> query = _context.NRDatas
-                .Where(d => d.ProjectId == projectId
-                         && d.Status == true);
+            var isNewModel = await _context.NrData1.AnyAsync(p => p.ProjectId == projectId);
+            IQueryable<ToolsAPI.Models.NRDataDto> query = GetBaseQuery(projectId, isNewModel);
 
             if (batchNo.HasValue)
             {
@@ -117,7 +190,7 @@ namespace Tools.Controllers
                             if (string.IsNullOrWhiteSpace(filterVal))
                                 continue;
 
-                            var prop = typeof(NRData).GetProperties()
+                            var prop = typeof(ToolsAPI.Models.NRDataDto).GetProperties()
                                 .FirstOrDefault(p => p.Name.Equals(filterKey, StringComparison.OrdinalIgnoreCase));
 
                             if (prop != null)
@@ -280,9 +353,9 @@ namespace Tools.Controllers
 
             if (!nrDataList.Any())
             {
-                var allColumns = typeof(NRData).GetProperties()
+                var allColumns = typeof(ToolsAPI.Models.NRDataDto).GetProperties()
               .Select(p => p.Name)
-               .Where(name => name != "Id" && name != "ProjectId" && name != "NRDatas")
+               .Where(name => name != "Id" && name != "ProjectId" && name != "NRDatas" && name != "NRDataId" && name != "Status" && name != "Steps" && name != "VerificationStatus" && name != "Remarksss")
              .ToList();
 
                 return Ok(new
@@ -333,9 +406,8 @@ namespace Tools.Controllers
             // ----------------------------
             // BASE QUERY (NO TRACKING)
             // ----------------------------
-            var query = _context.NRDatas
-                .AsNoTracking()
-                .Where(d => d.ProjectId == projectId && d.Status);
+            var isNewModel = await _context.NrData1.AnyAsync(p => p.ProjectId == projectId);
+            var query = GetBaseQuery(projectId, isNewModel).AsNoTracking();
 
             // ----------------------------
             // FILTERS
@@ -589,6 +661,12 @@ namespace Tools.Controllers
         {
             try
             {
+                var isNewModel = await _context.NrData1.AnyAsync(p => p.ProjectId == projectId);
+                if (isNewModel)
+                {
+                    return Ok(new List<int>());
+                }
+
                 var allData = await _context.NRDatas
                     .Where(n => n.ProjectId == projectId)
                     .Select(n => new { n.UploadList })
@@ -2664,7 +2742,10 @@ namespace Tools.Controllers
         public async Task<ActionResult> GetCount(int ProjectId)
         {
             int Conflict = await _context.ConflictingFields.Where(p => p.ProjectId == ProjectId).CountAsync();
-            int NrData = await _context.NRDatas.Where(p => p.ProjectId == ProjectId).CountAsync();
+            var isNewModel = await _context.NrData1.AnyAsync(p => p.ProjectId == ProjectId);
+            int NrData = isNewModel 
+                ? await _context.NrData1.Where(p => p.ProjectId == ProjectId).CountAsync() 
+                : await _context.NRDatas.Where(p => p.ProjectId == ProjectId).CountAsync();
             return Ok(new { Conflict, NrData });
         }
         [HttpGet("PipelineRerunStatus")]
@@ -5019,15 +5100,44 @@ namespace Tools.Controllers
         {
             try
             {
-                // Get all related data
-                var nrDataQuery = _context.NRDatas.Where(d => d.ProjectId == ProjectId);
-                if (lotNo.HasValue)
-                {
-                    nrDataQuery = nrDataQuery.Where(d => d.LotNo == lotNo.Value);
-                }
-                var nrDataList = await nrDataQuery.ToListAsync();
+                var isNewModel = await _context.NrData1.AnyAsync(p => p.ProjectId == ProjectId);
+                var nrDataList = new List<NRData>();
+                var nrData1List = new List<NrData1>();
+                var nrDataIds = new List<int>();
 
-                var nrDataIds = nrDataList.Select(n => n.Id).ToList();
+                if (isNewModel)
+                {
+                    var nrDataQuery = _context.NrData1.Where(d => d.ProjectId == ProjectId);
+                    if (lotNo.HasValue)
+                    {
+                        nrDataQuery = nrDataQuery.Where(d => d.LotNo == lotNo.Value);
+                    }
+                    nrData1List = await nrDataQuery.ToListAsync();
+                    nrDataIds = nrData1List.Select(n => n.Id).ToList();
+
+                    // Soft delete NrData1
+                    foreach (var item in nrData1List)
+                    {
+                        item.Status = false;
+                    }
+                }
+                else
+                {
+                    var nrDataQuery = _context.NRDatas.Where(d => d.ProjectId == ProjectId);
+                    if (lotNo.HasValue)
+                    {
+                        nrDataQuery = nrDataQuery.Where(d => d.LotNo == lotNo.Value);
+                    }
+                    nrDataList = await nrDataQuery.ToListAsync();
+                    nrDataIds = nrDataList.Select(n => n.Id).ToList();
+
+                    // Soft delete NRData
+                    foreach (var item in nrDataList)
+                    {
+                        item.Status = false;
+                    }
+                }
+
                 var conflictQuery = _context.ConflictingFields.Where(c => c.ProjectId == ProjectId);
                 if (lotNo.HasValue)
                 {
@@ -5058,7 +5168,7 @@ namespace Tools.Controllers
                 }
 
                 // If nothing exists for the project
-                if (!nrDataList.Any() &&
+                if (!nrDataList.Any() && !nrData1List.Any() &&
                     !envelopeResults.Any() &&
                     !boxResults.Any())
                 {
@@ -5078,12 +5188,6 @@ namespace Tools.Controllers
                     {
                         Directory.Delete(reportPath, true);
                     }
-                }
-
-                // Soft delete NRData
-                foreach (var item in nrDataList)
-                {
-                    item.Status = false;
                 }
 
                 // Soft delete EnvelopeBreakingResults
@@ -7761,12 +7865,20 @@ namespace Tools.Controllers
         [HttpGet("active-batches/{projectId}")]
         public async Task<IActionResult> GetActiveBatches(int projectId)
         {
-            var activeBatches = await _context.NRDatas
-                .Where(x => x.ProjectId == projectId && x.Status == true)
-                .Select(x => x.Batch)
-                .Distinct()
-                .OrderBy(x => x)
-                .ToListAsync();
+            var isNewModel = await _context.NrData1.AnyAsync(p => p.ProjectId == projectId);
+            var activeBatches = isNewModel
+                ? await _context.NrData1
+                    .Where(x => x.ProjectId == projectId)
+                    .Select(x => x.Batch)
+                    .Distinct()
+                    .OrderBy(x => x)
+                    .ToListAsync()
+                : await _context.NRDatas
+                    .Where(x => x.ProjectId == projectId && x.Status == true)
+                    .Select(x => x.Batch)
+                    .Distinct()
+                    .OrderBy(x => x)
+                    .ToListAsync();
 
             return Ok(new
             {
@@ -7778,12 +7890,20 @@ namespace Tools.Controllers
         [HttpGet("unique-lots/{projectId}")]
         public async Task<IActionResult> GetUniqueLots(int projectId)
         {
-            var lots = await _context.NRDatas
-                .Where(x => x.ProjectId == projectId && x.Status)
-                .Select(x => x.LotNo)
-                .Distinct()
-                .OrderBy(x => x)
-                .ToListAsync();
+            var isNewModel = await _context.NrData1.AnyAsync(p => p.ProjectId == projectId);
+            var lots = isNewModel 
+                ? await _context.NrData1
+                    .Where(x => x.ProjectId == projectId)
+                    .Select(x => x.LotNo)
+                    .Distinct()
+                    .OrderBy(x => x)
+                    .ToListAsync()
+                : await _context.NRDatas
+                    .Where(x => x.ProjectId == projectId && x.Status)
+                    .Select(x => x.LotNo)
+                    .Distinct()
+                    .OrderBy(x => x)
+                    .ToListAsync();
 
             return Ok(new
             {
