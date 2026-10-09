@@ -437,6 +437,9 @@ namespace Tools.Controllers
                         if (nodalExtrasAddedForNodalCatch.Contains((nodal.NodalCode, targetCatchNo)))
                             continue;
 
+                        var matchingNrData = nrData.FirstOrDefault(n => n.NodalCode == nodal.NodalCode && n.CatchNo == targetCatchNo);
+                        int correctNrDataId = matchingNrData?.Id ?? referenceNrData.Id;
+
                         var extrasToAdd = extras.Where(e => e.ExtraId == 1 && e.CatchNo == targetCatchNo &&
                             (e.NodalCode == nodal.NodalCode || (string.IsNullOrEmpty(e.NodalCode) && !extras.Any(x => x.ExtraId == 1 && x.CatchNo == targetCatchNo && x.NodalCode == nodal.NodalCode)))).ToList();
 
@@ -446,7 +449,7 @@ namespace Tools.Controllers
                             {
                                 AddExtraWithEnv(extra, referenceNrData.ExamDate, referenceNrData.ExamTime, referenceNrData.CourseName,
                                     0, nodal.NodalCode, nodal.CenterCode, 10000,
-                                    nodal.NodalSort, nodal.RouteSort, nodal.Route, nodal.NrDataId, nodal.District, nodal.DistrictSort);
+                                    nodal.NodalSort, nodal.RouteSort, nodal.Route, correctNrDataId, nodal.District, nodal.DistrictSort);
                             }
                         }
                         else
@@ -502,7 +505,7 @@ namespace Tools.Controllers
 
                                 AddExtraWithEnv(fallbackExtra, referenceNrData.ExamDate, referenceNrData.ExamTime, referenceNrData.CourseName,
                                     0, nodal.NodalCode, nodal.CenterCode, 10000,
-                                    nodal.NodalSort, nodal.RouteSort, nodal.Route, nodal.NrDataId, nodal.District, nodal.DistrictSort);
+                                    nodal.NodalSort, nodal.RouteSort, nodal.Route, correctNrDataId, nodal.District, nodal.DistrictSort);
                             }
                         }
 
