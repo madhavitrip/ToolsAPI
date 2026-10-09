@@ -2744,8 +2744,8 @@ namespace Tools.Controllers
             int Conflict = await _context.ConflictingFields.Where(p => p.ProjectId == ProjectId).CountAsync();
             var isNewModel = await _context.NrData1.AnyAsync(p => p.ProjectId == ProjectId);
             int NrData = isNewModel 
-                ? await _context.NrData1.Where(p => p.ProjectId == ProjectId).CountAsync() 
-                : await _context.NRDatas.Where(p => p.ProjectId == ProjectId).CountAsync();
+                ? await _context.NrData1.Where(p => p.ProjectId == ProjectId && p.Status).CountAsync() 
+                : await _context.NRDatas.Where(p => p.ProjectId == ProjectId && p.Status == true).CountAsync();
             return Ok(new { Conflict, NrData });
         }
         [HttpGet("PipelineRerunStatus")]
@@ -2764,7 +2764,7 @@ namespace Tools.Controllers
             {
                 var activeQuery1 = _context.NrData1
                     .AsNoTracking()
-                    .Where(n => n.ProjectId == ProjectId && n.Batch == batch);
+                    .Where(n => n.ProjectId == ProjectId && n.Status && n.Batch == batch);
 
                 var stats1 = await activeQuery1
                     .GroupBy(x => 1)
@@ -3024,7 +3024,7 @@ namespace Tools.Controllers
             if (!requiresDuplicateRerun)
             {
                 var nr1Query = _context.NrData1
-                    .Where(p => p.ProjectId == ProjectId && p.Steps == Tools.Models.PipelineNavigator.STEP_UPLOADED);
+                    .Where(p => p.ProjectId == ProjectId && p.Status && p.Steps == Tools.Models.PipelineNavigator.STEP_UPLOADED);
                 if (Batch.HasValue && Batch.Value > 0)
                 {
                     nr1Query = nr1Query.Where(p => p.Batch == Batch.Value);
@@ -5034,7 +5034,28 @@ namespace Tools.Controllers
                 var nRData = await _context.NRDatas.FindAsync(id);
                 if (nRData == null)
                 {
-                    return NotFound();
+                    var nr1Data = await _context.NrData1.FindAsync(id);
+                    if (nr1Data == null)
+                    {
+                        return NotFound();
+                    }
+
+                    var pId = nr1Data.ProjectId;
+                    nr1Data.Status = false;
+                    _context.NrData1.Update(nr1Data);
+
+                    var centers = await _context.CenterList
+                        .Where(c => c.NRDataId == nr1Data.Id && c.Status)
+                        .ToListAsync();
+                    foreach (var c in centers)
+                    {
+                        c.Status = false;
+                        _context.CenterList.Update(c);
+                    }
+
+                    await _context.SaveChangesAsync();
+                    await _loggerService.LogEventAsync($"Soft deleted NrData1 of {id} and referencing CenterList", "NrData1", LogHelper.GetTriggeredBy(User), pId);
+                    return NoContent();
                 }
 
                 var projectId = nRData.ProjectId;
@@ -5119,6 +5140,18 @@ namespace Tools.Controllers
                     foreach (var item in nrData1List)
                     {
                         item.Status = false;
+                        _context.NrData1.Update(item);
+                    }
+
+                    // Soft delete referencing CenterList
+                    var centerList = await _context.CenterList
+                        .Where(c => c.ProjectId == ProjectId && nrDataIds.Contains(c.NRDataId) && c.Status)
+                        .ToListAsync();
+
+                    foreach (var c in centerList)
+                    {
+                        c.Status = false;
+                        _context.CenterList.Update(c);
                     }
                 }
                 else
@@ -6018,6 +6051,57 @@ namespace Tools.Controllers
             {
                 if (string.IsNullOrWhiteSpace(catchNo))
                     return BadRequest("Catch number cannot be empty");
+
+                var isNewModel = await _context.NrData1.AnyAsync(p => p.ProjectId == projectId);
+                if (isNewModel)
+                {
+                    var nr1List = await _context.NrData1
+                        .Where(d => d.ProjectId == projectId && d.CatchNo == catchNo)
+                        .ToListAsync();
+
+                    if (!nr1List.Any())
+                        return NotFound($"Catch number {catchNo} not found for project {projectId}");
+
+                    var nr1Ids = nr1List.Select(n => n.Id).ToList();
+
+                    // Soft delete NrData1
+                    foreach (var item in nr1List)
+                    {
+                        item.Status = false;
+                        _context.NrData1.Update(item);
+                    }
+
+                    // Soft delete referencing CenterList
+                    var centers = await _context.CenterList
+                        .Where(c => c.ProjectId == projectId && nr1Ids.Contains(c.NRDataId) && c.Status)
+                        .ToListAsync();
+
+                    foreach (var c in centers)
+                    {
+                        c.Status = false;
+                        _context.CenterList.Update(c);
+                    }
+
+                    var extra = await _context.ExtrasEnvelope.Where(e => e.ProjectId == projectId && e.CatchNo == catchNo).ToListAsync();
+                    foreach (var ex in extra)
+                    {
+                        ex.Status = 0;
+                        _context.ExtrasEnvelope.Update(ex);
+                    }
+
+                    var newEnvResults = await _context.NewEnvelopeBreakingResults
+                        .Where(e => e.ProjectId == projectId && nr1Ids.Contains(e.NrDataId))
+                        .ToListAsync();
+                    foreach (var r in newEnvResults)
+                    {
+                        r.Status = false;
+                        _context.NewEnvelopeBreakingResults.Update(r);
+                    }
+
+                    await _context.SaveChangesAsync();
+                    await _loggerService.LogEventAsync($"Soft deleted CatchNo {catchNo} in NrData1 and CenterList", "NrData1", LogHelper.GetTriggeredBy(User), projectId);
+                    return Ok(new { message = $"Catch number {catchNo} soft deleted successfully in NrData1 and CenterList." });
+                }
 
                 // 🔹 Get NRData
                 var allNrDataForCatch = await _context.NRDatas
@@ -7868,7 +7952,7 @@ namespace Tools.Controllers
             var isNewModel = await _context.NrData1.AnyAsync(p => p.ProjectId == projectId);
             var activeBatches = isNewModel
                 ? await _context.NrData1
-                    .Where(x => x.ProjectId == projectId)
+                    .Where(x => x.ProjectId == projectId && x.Status)
                     .Select(x => x.Batch)
                     .Distinct()
                     .OrderBy(x => x)
@@ -7893,7 +7977,7 @@ namespace Tools.Controllers
             var isNewModel = await _context.NrData1.AnyAsync(p => p.ProjectId == projectId);
             var lots = isNewModel 
                 ? await _context.NrData1
-                    .Where(x => x.ProjectId == projectId)
+                    .Where(x => x.ProjectId == projectId && x.Status)
                     .Select(x => x.LotNo)
                     .Distinct()
                     .OrderBy(x => x)

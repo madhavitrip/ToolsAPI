@@ -51,13 +51,13 @@ namespace Tools.Controllers
                 List<NrData1> NRData;
                 if (uploadId.HasValue)
                 {
-                    var allData = await _context.NrData1.Where(p => p.ProjectId == ProjectId).ToListAsync();
+                    var allData = await _context.NrData1.Where(p => p.ProjectId == ProjectId && p.Status == true).ToListAsync();
                     NRData = allData;
                 }
                 else
                 {
                     NRData = await _context.NrData1
-                        .Where(p => p.ProjectId == ProjectId)
+                        .Where(p => p.ProjectId == ProjectId && p.Status == true)
                         .ToListAsync();
                 }
 

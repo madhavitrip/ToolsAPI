@@ -46,7 +46,7 @@ namespace Tools.Controllers
         [HttpGet]
         public async Task<ActionResult<IEnumerable<NrData1>>> GetNrData1()
         {
-            return await _context.NrData1.ToListAsync();
+            return await _context.NrData1.Where(x => x.Status).ToListAsync();
         }
 
         // GET: api/NrData1/5
@@ -80,7 +80,7 @@ namespace Tools.Controllers
             [FromQuery] string? search = null)
         {
             var query = _context.NrData1
-                .Where(d => d.ProjectId == projectId);
+                .Where(d => d.ProjectId == projectId && d.Status);
 
             if (batchNo.HasValue)
             {
@@ -437,13 +437,20 @@ namespace Tools.Controllers
                         .Where(x => !string.IsNullOrWhiteSpace(x))
                         .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-                    var previousNrDataIds = existingNrData1List
+                    var previousNrData1Rows = existingNrData1List
                         .Where(x => x.CatchNo != null && incomingCatchNos.Contains(x.CatchNo))
-                        .Select(x => x.Id)
                         .ToList();
+
+                    var previousNrDataIds = previousNrData1Rows.Select(x => x.Id).ToList();
 
                     if (previousNrDataIds.Any())
                     {
+                        foreach (var oldNr in previousNrData1Rows)
+                        {
+                            oldNr.Status = false;
+                            _context.NrData1.Update(oldNr);
+                        }
+
                         var oldCenters = await _context.CenterList
                             .Where(c => c.ProjectId == projectId && previousNrDataIds.Contains(c.NRDataId) && c.Status)
                             .ToListAsync();
@@ -451,6 +458,7 @@ namespace Tools.Controllers
                         foreach (var oldCenter in oldCenters)
                         {
                             oldCenter.Status = false;
+                            _context.CenterList.Update(oldCenter);
                         }
                     }
                 }
@@ -608,7 +616,7 @@ namespace Tools.Controllers
                 Console.WriteLine($"[NrData1Controller] MergeFields received ProjectId: {ProjectId}, batchId: {batchId}, lotNo: {lotNo}");
 
                 IQueryable<NrData1> query = _context.NrData1
-                    .Where(p => p.ProjectId == ProjectId);
+                    .Where(p => p.ProjectId == ProjectId && p.Status);
 
                 // 1. Try with batchId and lotNo if provided, prioritizing STEP_UPLOADED (0)
                 var attemptQuery = query;
@@ -1158,7 +1166,7 @@ namespace Tools.Controllers
                 Console.WriteLine($"[NrData1Controller] ApplyEnhancement API called for ProjectId: {ProjectId}, batch: {batch}, lotNo: {lotNo}");
 
                 IQueryable<NrData1> query = _context.NrData1
-                    .Where(p => p.ProjectId == ProjectId);
+                    .Where(p => p.ProjectId == ProjectId && p.Status);
 
                 if (batch.HasValue && batch.Value > 0)
                 {
@@ -1443,7 +1451,7 @@ namespace Tools.Controllers
 
                 // 1. Fetch enhanced NrData1 records for Project
                 var nrDataList = await _context.NrData1
-                    .Where(s => s.ProjectId == ProjectId && s.Steps == PipelineNavigator.STEP_ENHANCEMENT)
+                    .Where(s => s.ProjectId == ProjectId && s.Status && s.Steps == PipelineNavigator.STEP_ENHANCEMENT)
                     .ToListAsync();
 
                 if (!nrDataList.Any())
@@ -1650,7 +1658,7 @@ namespace Tools.Controllers
                 var eligibleSteps = PipelineNavigator.GetEligiblePickupSteps(PipelineNavigator.STEP_AWAITING_EXTRA);
 
                 var query = _context.NrData1
-                    .Where(d => d.ProjectId == ProjectId && eligibleSteps.Contains(d.Steps) && d.Batch == (batchNo ?? 1));
+                    .Where(d => d.ProjectId == ProjectId && d.Status == true && eligibleSteps.Contains(d.Steps) && d.Batch == (batchNo ?? 1));
 
                 if (lotNo.HasValue && lotNo.Value > 0)
                 {
@@ -1661,8 +1669,8 @@ namespace Tools.Controllers
 
                 if (!nrDataList.Any())
                 {
-                    // Fallback to all records in this batch
-                    query = _context.NrData1.Where(d => d.ProjectId == ProjectId && d.Batch == (batchNo ?? 1));
+                    // Fallback to all active records in this batch
+                    query = _context.NrData1.Where(d => d.ProjectId == ProjectId && d.Status == true && d.Batch == (batchNo ?? 1));
                     if (lotNo.HasValue && lotNo.Value > 0)
                         query = query.Where(d => d.LotNo == lotNo.Value);
                     nrDataList = await query.ToListAsync();
@@ -1986,6 +1994,7 @@ namespace Tools.Controllers
 
                             var centerExtraDict = new Dictionary<string, string>
                             {
+                                { "CatchNo", data.CatchNo ?? "" },
                                 { "Quantity", calculatedQuantity.ToString() },
                                 { "NRQuantity", calculatedQuantity.ToString() },
                                 { "InnerEnvelope", innerCount.ToString() },
@@ -2509,6 +2518,133 @@ namespace Tools.Controllers
 
             var numberPart = new string(envelopeCode.Where(char.IsDigit).ToArray());
             return int.TryParse(numberPart, out var capacity) ? capacity : 0;
+        }
+
+        // DELETE: api/NrData1/5
+        [HttpDelete("{id}")]
+        public async Task<IActionResult> DeleteNrData1(int id)
+        {
+            try
+            {
+                var nr1 = await _context.NrData1.FindAsync(id);
+                if (nr1 == null)
+                {
+                    return NotFound();
+                }
+
+                nr1.Status = false;
+                _context.NrData1.Update(nr1);
+
+                // Update referencing CenterList rows to Status = false
+                var centers = await _context.CenterList
+                    .Where(c => c.NRDataId == nr1.Id && c.Status)
+                    .ToListAsync();
+                foreach (var c in centers)
+                {
+                    c.Status = false;
+                    _context.CenterList.Update(c);
+                }
+
+                await _context.SaveChangesAsync();
+                await _loggerService.LogEventAsync($"Soft deleted NrData1 record {id} and referencing CenterList records", "NrData1", LogHelper.GetTriggeredBy(User), nr1.ProjectId);
+                return NoContent();
+            }
+            catch (Exception ex)
+            {
+                await _loggerService.LogErrorAsync("Error soft deleting NrData1 record", ex.Message, nameof(NrData1Controller));
+                return StatusCode(500, "Internal Server Error");
+            }
+        }
+
+        // DELETE: api/NrData1/DeleteByProject/5
+        [HttpDelete("DeleteByProject/{projectId}")]
+        public async Task<IActionResult> DeleteByProject(int projectId, [FromQuery] int? lotNo = null)
+        {
+            try
+            {
+                var query = _context.NrData1.Where(d => d.ProjectId == projectId);
+                if (lotNo.HasValue)
+                {
+                    query = query.Where(d => d.LotNo == lotNo.Value);
+                }
+                var nr1List = await query.ToListAsync();
+                if (!nr1List.Any())
+                {
+                    return NotFound($"No NrData1 records found for ProjectId {projectId}");
+                }
+
+                var nr1Ids = nr1List.Select(n => n.Id).ToList();
+
+                foreach (var item in nr1List)
+                {
+                    item.Status = false;
+                    _context.NrData1.Update(item);
+                }
+
+                var centers = await _context.CenterList
+                    .Where(c => c.ProjectId == projectId && nr1Ids.Contains(c.NRDataId) && c.Status)
+                    .ToListAsync();
+
+                foreach (var c in centers)
+                {
+                    c.Status = false;
+                    _context.CenterList.Update(c);
+                }
+
+                await _context.SaveChangesAsync();
+                await _loggerService.LogEventAsync($"Soft deleted all NrData1 and CenterList records for ProjectId {projectId}", "NrData1", LogHelper.GetTriggeredBy(User), projectId);
+                return Ok(new { message = "Project NrData1 and CenterList records soft deleted successfully.", projectId, count = nr1List.Count });
+            }
+            catch (Exception ex)
+            {
+                await _loggerService.LogErrorAsync("Error soft deleting project NrData1 records", ex.Message, nameof(NrData1Controller));
+                return StatusCode(500, "Internal Server Error");
+            }
+        }
+
+        // DELETE: api/NrData1/DeleteCatchNo/5/Catch123
+        [HttpDelete("DeleteCatchNo/{projectId}/{catchNo}")]
+        public async Task<IActionResult> DeleteCatchNo(int projectId, string catchNo)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(catchNo))
+                    return BadRequest("Catch number cannot be empty");
+
+                var nr1List = await _context.NrData1
+                    .Where(d => d.ProjectId == projectId && d.CatchNo == catchNo)
+                    .ToListAsync();
+
+                if (!nr1List.Any())
+                    return NotFound($"Catch number {catchNo} not found for project {projectId}");
+
+                var nr1Ids = nr1List.Select(n => n.Id).ToList();
+
+                foreach (var item in nr1List)
+                {
+                    item.Status = false;
+                    _context.NrData1.Update(item);
+                }
+
+                var centers = await _context.CenterList
+                    .Where(c => c.ProjectId == projectId && nr1Ids.Contains(c.NRDataId) && c.Status)
+                    .ToListAsync();
+
+                foreach (var c in centers)
+                {
+                    c.Status = false;
+                    _context.CenterList.Update(c);
+                }
+
+                await _context.SaveChangesAsync();
+                await _loggerService.LogEventAsync($"Soft deleted CatchNo {catchNo} in NrData1 and CenterList", "NrData1", LogHelper.GetTriggeredBy(User), projectId);
+                return Ok(new { message = $"Catch number {catchNo} soft deleted successfully in NrData1 and CenterList." });
+            }
+            catch (Exception ex)
+            {
+                await _loggerService.LogErrorAsync("Error deleting CatchNo in NrData1", ex.Message, nameof(NrData1Controller));
+                return StatusCode(500, "Internal Server Error");
+            }
         }
     }
 }

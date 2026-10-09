@@ -1515,7 +1515,7 @@ namespace Tools.Controllers
 
                     if (uploadId.HasValue)
                     {
-                        var nrDatas = await _context.NrData1.Where(n => n.ProjectId == ProjectId).ToListAsync();
+                        var nrDatas = await _context.NrData1.Where(n => n.ProjectId == ProjectId && n.Status == true).ToListAsync();
                         var validNrDataIds = nrDatas
                             .Select(n => n.Id)
                             .ToList();
@@ -1670,7 +1670,7 @@ namespace Tools.Controllers
                 var eligibleSteps = Tools.Models.PipelineNavigator.GetEligiblePickupSteps(Tools.Models.PipelineNavigator.STEP_AWAITING_ENV);
 
                 var nrQuery = _context.NrData1
-                    .Where(p => p.ProjectId == ProjectId && eligibleSteps.Contains(p.Steps) && p.Batch == (batchNo ?? 1));
+                    .Where(p => p.ProjectId == ProjectId && p.Status == true && eligibleSteps.Contains(p.Steps) && p.Batch == (batchNo ?? 1));
 
                 if (lotNo.HasValue && lotNo.Value > 0)
                     nrQuery = nrQuery.Where(p => p.LotNo == lotNo.Value);
@@ -1684,7 +1684,7 @@ namespace Tools.Controllers
                 if (!nrDataList.Any())
                 {
                     var fallbackQuery = _context.NrData1
-                        .Where(p => p.ProjectId == ProjectId && p.Batch == (batchNo ?? 1));
+                        .Where(p => p.ProjectId == ProjectId && p.Status == true && p.Batch == (batchNo ?? 1));
                     if (lotNo.HasValue && lotNo.Value > 0)
                         fallbackQuery = fallbackQuery.Where(p => p.LotNo == lotNo.Value);
                     if (!string.IsNullOrEmpty(catchNo))
@@ -2287,15 +2287,15 @@ namespace Tools.Controllers
                     return NotFound("Project config not found");
 
                 var nrDataDict = await _context.NrData1
-                    .Where(p => p.ProjectId == ProjectId)
+                    .Where(p => p.ProjectId == ProjectId && p.Status == true)
                     .ToDictionaryAsync(p => p.Id);
 
                 var centerDict = await _context.CenterList
-                    .Where(p => p.ProjectId == ProjectId)
+                    .Where(p => p.ProjectId == ProjectId && p.Status == true)
                     .ToDictionaryAsync(p => p.Id);
 
                 var nrDataByCatch = await _context.NrData1
-                    .Where(p => p.ProjectId == ProjectId)
+                    .Where(p => p.ProjectId == ProjectId && p.Status == true)
                     .GroupBy(p => p.CatchNo)
                     .ToDictionaryAsync(g => g.Key ?? "", g => g.First());
 

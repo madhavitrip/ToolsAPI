@@ -166,7 +166,7 @@ namespace Tools.Controllers
             {
                 // If this project has records in NrData1 and no active records in NRDatas, delegate to NrData1Controller
                 if (!await _context.NRDatas.AnyAsync(p => p.ProjectId == ProjectId && p.Status == true) &&
-                    await _context.NrData1.AnyAsync(p => p.ProjectId == ProjectId))
+                    await _context.NrData1.AnyAsync(p => p.ProjectId == ProjectId && p.Status == true))
                 {
                     var nrData1Controller = new NrData1Controller(_context, _loggerService, null, null)
                     {

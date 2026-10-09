@@ -922,7 +922,7 @@ namespace Tools.Controllers
 
                 if (isNewModel)
                 {
-                    var nr1Query = _context.NrData1.Where(p => p.ProjectId == ProjectId);
+                    var nr1Query = _context.NrData1.Where(p => p.ProjectId == ProjectId && p.Status);
                     if (uploadId.HasValue)
                     {
                         nr1Query = nr1Query.Where(p => p.Batch == uploadId.Value);
@@ -935,7 +935,7 @@ namespace Tools.Controllers
                     var nr1List = await nr1Query.ToListAsync();
                     if (!nr1List.Any())
                     {
-                        nr1List = await _context.NrData1.Where(p => p.ProjectId == ProjectId).ToListAsync();
+                        nr1List = await _context.NrData1.Where(p => p.ProjectId == ProjectId && p.Status).ToListAsync();
                     }
 
                     nrCatchNos = nr1List.Select(n => n.CatchNo ?? "").Where(c => !string.IsNullOrEmpty(c)).ToHashSet();
@@ -993,7 +993,7 @@ namespace Tools.Controllers
                         .ToDictionaryAsync(c => c.Id);
 
                     var nr1Map = await _context.NrData1
-                        .Where(n => n.ProjectId == ProjectId)
+                        .Where(n => n.ProjectId == ProjectId && n.Status)
                         .ToDictionaryAsync(n => n.Id);
 
                     foreach (var eb in newEnvBreakings)
@@ -1204,7 +1204,7 @@ namespace Tools.Controllers
                 var eligibleSteps = Tools.Models.PipelineNavigator.GetEligiblePickupSteps(Tools.Models.PipelineNavigator.STEP_AWAITING_BOX);
 
                 var nrData = await _context.NrData1
-                    .Where(p => p.ProjectId == ProjectId && eligibleSteps.Contains(p.Steps) && p.Batch == (batchNo ?? 1))
+                    .Where(p => p.ProjectId == ProjectId && p.Status && eligibleSteps.Contains(p.Steps) && p.Batch == (batchNo ?? 1))
                     .ToListAsync();
 
                 if (LotNo != null && LotNo.Any())
@@ -1214,7 +1214,7 @@ namespace Tools.Controllers
 
                 if (!nrData.Any())
                 {
-                    var fallbackQuery = _context.NrData1.Where(p => p.ProjectId == ProjectId && p.Batch == (batchNo ?? 1));
+                    var fallbackQuery = _context.NrData1.Where(p => p.ProjectId == ProjectId && p.Status && p.Batch == (batchNo ?? 1));
                     if (LotNo != null && LotNo.Any())
                     {
                         fallbackQuery = fallbackQuery.Where(p => LotNo.Contains(p.LotNo));
