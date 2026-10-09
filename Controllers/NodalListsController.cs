@@ -540,9 +540,9 @@ namespace Tools.Controllers
 
                     if (extraData.Any()) nodalList.OtherFields = JsonSerializer.Serialize(extraData);
 
-                    if (string.IsNullOrWhiteSpace(nodalList.ExamCenterName) || string.IsNullOrWhiteSpace(nodalList.NodalName))
+                    if (string.IsNullOrWhiteSpace(nodalList.ExamCenterCode) || string.IsNullOrWhiteSpace(nodalList.NodalCode))
                     {
-                        rawRecord["FailureReason"] = "Missing required fields (ExamCenterName, NodalName)";
+                        rawRecord["FailureReason"] = "Missing required fields (ExamCenterCode, NodalCode)";
                         failedRecords.Add(rawRecord);
                         continue;
                     }
