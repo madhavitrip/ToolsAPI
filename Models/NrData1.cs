@@ -23,6 +23,7 @@ namespace Tools.Models
         public int VerificationStatus { get; set; }
         public int Batch { get; set; }
         public string? Remarksss { get; set; }
+        public bool Status { get; set; } = true;
 
     }
 }

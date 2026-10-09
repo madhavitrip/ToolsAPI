@@ -42,57 +42,123 @@ namespace Tools.Controllers
         [HttpGet]
         public async Task<ActionResult> GetEnvelopeBreakages(int ProjectId, int? uploadId = null, [FromQuery] int? lotNo = null)
         {
-            List<NRData> NRData;
-            if (uploadId.HasValue)
+            var isNewModel = await _context.NrData1.AnyAsync(p => p.ProjectId == ProjectId);
+            IEnumerable<dynamic> Consolidated = null;
+            List<int> distinctLots = new List<int>();
+
+            if (isNewModel)
             {
-                var allData = await _context.NRDatas.Where(p => p.ProjectId == ProjectId).ToListAsync();
-                NRData = allData.Where(p => p.UploadList != null && p.UploadList.Contains(uploadId.Value)).ToList();
+                List<NrData1> NRData;
+                if (uploadId.HasValue)
+                {
+                    var allData = await _context.NrData1.Where(p => p.ProjectId == ProjectId && p.Status == true).ToListAsync();
+                    NRData = allData;
+                }
+                else
+                {
+                    NRData = await _context.NrData1
+                        .Where(p => p.ProjectId == ProjectId && p.Status == true)
+                        .ToListAsync();
+                }
+
+                if (lotNo.HasValue && lotNo.Value > 0)
+                {
+                    NRData = NRData.Where(p => p.LotNo == lotNo.Value).ToList();
+                }
+
+                var centerList = await _context.CenterList
+                    .Where(p => p.ProjectId == ProjectId && p.Status == true)
+                    .ToListAsync();
+
+                var newEnv = await _context.NewEnvelopeBreakages
+                    .Where(p => p.ProjectId == ProjectId && p.Status == true)
+                    .ToListAsync();
+
+                if (!NRData.Any() || !newEnv.Any())
+                {
+                    await _loggerService.LogEventAsync($"No data available for this project", "EnvelopeBreakage", LogHelper.GetTriggeredBy(User), ProjectId);
+                    return NotFound("No data available for this project.");
+                }
+
+                Consolidated = (from nr in NRData
+                                join c in centerList on nr.Id equals c.NRDataId
+                                join env in newEnv on c.Id equals env.CenterListId
+                                select new
+                                {
+                                    Id = c.Id,
+                                    ProjectId = nr.ProjectId,
+                                    CourseName = nr.CourseName,
+                                    SubjectName = nr.SubjectName,
+                                    NRDatas = nr.NRDatas,
+                                    CatchNo = nr.CatchNo,
+                                    CenterCode = c.CenterCode,
+                                    ExamTime = nr.ExamTime,
+                                    ExamDate = nr.ExamDate,
+                                    Quantity = c.Quantity,
+                                    NodalCode = c.NodalCode,
+                                    InnerEnvelope = env.InnerEnvelope,
+                                    OuterEnvelope = env.OuterEnvelope
+                                }).ToList();
+
+                distinctLots = (lotNo.HasValue && lotNo.Value > 0)
+                    ? new List<int> { lotNo.Value }
+                    : NRData.Where(r => r.LotNo > 0).Select(r => r.LotNo).Distinct().OrderBy(l => l).ToList();
             }
             else
             {
-                NRData = await _context.NRDatas
-                    .Where(p => p.ProjectId == ProjectId && p.Status == true)
+                List<NRData> NRData;
+                if (uploadId.HasValue)
+                {
+                    var allData = await _context.NRDatas.Where(p => p.ProjectId == ProjectId).ToListAsync();
+                    NRData = allData.Where(p => p.UploadList != null && p.UploadList.Contains(uploadId.Value)).ToList();
+                }
+                else
+                {
+                    NRData = await _context.NRDatas
+                        .Where(p => p.ProjectId == ProjectId && p.Status == true)
+                        .ToListAsync();
+                }
+
+                if (lotNo.HasValue && lotNo.Value > 0)
+                {
+                    NRData = NRData.Where(p => p.LotNo == lotNo.Value).ToList();
+                }
+
+                var Envelope = await _context.EnvelopeBreakages
+                    .Where(p => p.ProjectId == ProjectId && (p.Status == true))
                     .ToListAsync();
-            }
 
-            if (lotNo.HasValue && lotNo.Value > 0)
-            {
-                NRData = NRData.Where(p => p.LotNo == lotNo.Value).ToList();
-            }
+                if (!NRData.Any() || !Envelope.Any())
+                {
+                    await _loggerService.LogEventAsync($"No data available for this project", "EnvelopeBreakage", LogHelper.GetTriggeredBy(User), ProjectId);
+                    return NotFound("No data available for this project.");
+                }
 
-            var Envelope = await _context.EnvelopeBreakages
-                .Where(p => p.ProjectId == ProjectId && (p.Status == true))
-                .ToListAsync();
-
-            if (!NRData.Any() || !Envelope.Any())
-                return NotFound("No data available for this project.");
-            await _loggerService.LogEventAsync($"No data available for this project", "EnvelopeBreakage", LogHelper.GetTriggeredBy(User), ProjectId);
-
-
-            var Consolidated = (from nr in NRData
+                Consolidated = (from nr in NRData
                                 join env in Envelope on nr.Id equals env.NrDataId
                                 select new
                                 {
-                                    nr.Id,
-                                    nr.ProjectId,
-                                    nr.CourseName,
-                                    nr.SubjectName,
-                                    nr.NRDatas,
-                                    nr.CatchNo,
-                                    nr.CenterCode,
-                                    nr.ExamTime,
-                                    nr.ExamDate,
-                                    nr.Quantity,
-                                    nr.NodalCode,
-                                    env.InnerEnvelope,
-                                    env.OuterEnvelope
+                                    Id = nr.Id,
+                                    ProjectId = nr.ProjectId,
+                                    CourseName = nr.CourseName,
+                                    SubjectName = nr.SubjectName,
+                                    NRDatas = nr.NRDatas,
+                                    CatchNo = nr.CatchNo,
+                                    CenterCode = nr.CenterCode,
+                                    ExamTime = nr.ExamTime,
+                                    ExamDate = nr.ExamDate,
+                                    Quantity = nr.Quantity,
+                                    NodalCode = nr.NodalCode,
+                                    InnerEnvelope = env.InnerEnvelope,
+                                    OuterEnvelope = env.OuterEnvelope
                                 }).ToList();
 
-            var reportPath = FileStorageHelper.GetProjectFolder(ProjectId);
+                distinctLots = (lotNo.HasValue && lotNo.Value > 0)
+                    ? new List<int> { lotNo.Value }
+                    : NRData.Where(r => r.LotNo > 0).Select(r => r.LotNo).Distinct().OrderBy(l => l).ToList();
+            }
 
-            var distinctLots = (lotNo.HasValue && lotNo.Value > 0)
-                ? new List<int> { lotNo.Value }
-                : NRData.Where(r => r.LotNo > 0).Select(r => r.LotNo).Distinct().OrderBy(l => l).ToList();
+            var reportPath = FileStorageHelper.GetProjectFolder(ProjectId);
             var lotStr = distinctLots.Any() ? string.Join("_", distinctLots) : "All";
 
             var filename = uploadId.HasValue ? $"EnvelopeBreaking_{lotStr}_v{uploadId}.xlsx" : ReportVersionHelper.GetNextVersionFileName(reportPath, $"EnvelopeBreaking_{lotStr}.xlsx");
@@ -111,7 +177,7 @@ namespace Tools.Controllers
             var parsedRows = new List<Dictionary<string, object>>();
             try
             {
-                foreach (var row in Consolidated)
+                foreach (dynamic row in Consolidated)
                 {
                     var parsedRow = new Dictionary<string, object>
                     {

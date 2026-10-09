@@ -1,3 +1,4 @@
+
 using ERPToolsAPI.Data;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -90,18 +91,37 @@ namespace Tools.Controllers
             if (projectId <= 0)
                 return BadRequest("ProjectId is required.");
 
-            var catchItems = await _context.NRDatas
-                .Where(x => x.ProjectId == projectId && x.Status == true && x.EnvLotNo == 0 && x.VerificationStatus == 1 && !string.IsNullOrWhiteSpace(x.CatchNo))
-                .GroupBy(x => x.CatchNo)
-                .Select(g => new
-                {
-                    CatchNo = g.Key,
-                    Count = g.Count()
-                })
-                .OrderBy(x => x.CatchNo)
-                .ToListAsync();
+            var isNewModel = await _context.NrData1.AnyAsync(p => p.ProjectId == projectId);
+            if (isNewModel)
+            {
+                var catchItems = await _context.NrData1
+                    .Where(x => x.ProjectId == projectId && x.Status && x.EnvLotNo == 0 && x.VerificationStatus == 1 && !string.IsNullOrWhiteSpace(x.CatchNo))
+                    .GroupBy(x => x.CatchNo)
+                    .Select(g => new
+                    {
+                        CatchNo = g.Key,
+                        Count = g.Count()
+                    })
+                    .OrderBy(x => x.CatchNo)
+                    .ToListAsync();
 
-            return Ok(catchItems);
+                return Ok(catchItems);
+            }
+            else
+            {
+                var catchItems = await _context.NRDatas
+                    .Where(x => x.ProjectId == projectId && x.Status == true && x.EnvLotNo == 0 && x.VerificationStatus == 1 && !string.IsNullOrWhiteSpace(x.CatchNo))
+                    .GroupBy(x => x.CatchNo)
+                    .Select(g => new
+                    {
+                        CatchNo = g.Key,
+                        Count = g.Count()
+                    })
+                    .OrderBy(x => x.CatchNo)
+                    .ToListAsync();
+
+                return Ok(catchItems);
+            }
         }
 
         [HttpGet("GetAssignedEnvLotCatches/{projectId}")]
@@ -110,26 +130,53 @@ namespace Tools.Controllers
             if (projectId <= 0)
                 return BadRequest("ProjectId is required.");
 
-            var query = _context.NRDatas
-                .Where(x => x.ProjectId == projectId && x.Status == true && x.EnvLotNo > 0 && !string.IsNullOrWhiteSpace(x.CatchNo));
-
-            if (lotNo.HasValue)
+            var isNewModel = await _context.NrData1.AnyAsync(p => p.ProjectId == projectId);
+            if (isNewModel)
             {
-                query = query.Where(x => x.LotNo == lotNo.Value);
-            }
+                var query = _context.NrData1
+                    .Where(x => x.ProjectId == projectId && x.Status && x.EnvLotNo > 0 && !string.IsNullOrWhiteSpace(x.CatchNo));
 
-            var catchItems = await query
-                .GroupBy(x => new { x.EnvLotNo, x.CatchNo })
-                .Select(g => new
+                if (lotNo.HasValue)
                 {
-                    EnvLotNo = g.Key.EnvLotNo,
-                    CatchNo = g.Key.CatchNo
-                })
-                .OrderBy(x => x.EnvLotNo)
-                .ThenBy(x => x.CatchNo)
-                .ToListAsync();
+                    query = query.Where(x => x.LotNo == lotNo.Value);
+                }
 
-            return Ok(catchItems);
+                var catchItems = await query
+                    .GroupBy(x => new { x.EnvLotNo, x.CatchNo })
+                    .Select(g => new
+                    {
+                        EnvLotNo = g.Key.EnvLotNo,
+                        CatchNo = g.Key.CatchNo
+                    })
+                    .OrderBy(x => x.EnvLotNo)
+                    .ThenBy(x => x.CatchNo)
+                    .ToListAsync();
+
+                return Ok(catchItems);
+            }
+            else
+            {
+                var query = _context.NRDatas
+                    .Where(x => x.ProjectId == projectId && x.Status == true && x.EnvLotNo > 0 && !string.IsNullOrWhiteSpace(x.CatchNo));
+
+                if (lotNo.HasValue)
+                {
+                    query = query.Where(x => x.LotNo == lotNo.Value);
+                }
+
+                var catchItems = await query
+                    .GroupBy(x => new { x.EnvLotNo, x.CatchNo })
+                    .Select(g => new
+                    {
+                        EnvLotNo = g.Key.EnvLotNo,
+                        CatchNo = g.Key.CatchNo
+                    })
+                    .OrderBy(x => x.EnvLotNo)
+                    .ThenBy(x => x.CatchNo)
+                    .ToListAsync();
+
+                return Ok(catchItems);
+            }
         }
 
         [HttpPost("AssignEnvLotByCatches")]
@@ -153,37 +200,75 @@ namespace Tools.Controllers
             if (catchNos.Count == 0)
                 return BadRequest("No valid catch numbers provided.");
 
-            var maxEnvLotNo = await _context.NRDatas
-                .Where(x => x.ProjectId == request.ProjectId && x.Status == true && x.EnvLotNo > 0)
-                .MaxAsync(x => (int?)x.EnvLotNo) ?? 0;
-
-            var nextEnvLotNo = maxEnvLotNo + 1;
-
-            var rows = await _context.NRDatas
-                .Where(x => x.ProjectId == request.ProjectId && x.EnvLotNo == 0 && catchNos.Contains(x.CatchNo))
-                .ToListAsync();
-
-            if (rows.Count == 0)
-                return NotFound("No matching unassigned NRData rows found.");
-
-            foreach (var row in rows)
+            var isNewModel = await _context.NrData1.AnyAsync(p => p.ProjectId == request.ProjectId);
+            if (isNewModel)
             {
-                row.EnvLotNo = nextEnvLotNo;
+                var maxEnvLotNo = await _context.NrData1
+                    .Where(x => x.ProjectId == request.ProjectId && x.Status && x.EnvLotNo > 0)
+                    .MaxAsync(x => (int?)x.EnvLotNo) ?? 0;
+
+                var nextEnvLotNo = maxEnvLotNo + 1;
+
+                var rows = await _context.NrData1
+                    .Where(x => x.ProjectId == request.ProjectId && x.Status && x.EnvLotNo == 0 && catchNos.Contains(x.CatchNo))
+                    .ToListAsync();
+
+                if (rows.Count == 0)
+                    return NotFound("No matching unassigned NrData1 rows found.");
+
+                foreach (var row in rows)
+                {
+                    row.EnvLotNo = nextEnvLotNo;
+                }
+
+                await _context.SaveChangesAsync();
+                _loggerService.LogEventAsync(
+                    $"Assigned EnvLotNo {nextEnvLotNo} to {rows.Count} NrData1 rows (ProjectId {request.ProjectId})",
+                    "NRDataLots",
+                    LogHelper.GetTriggeredBy(User),
+                    request.ProjectId
+                );
+
+                return Ok(new
+                {
+                    message = "Envelope lot created and assigned successfully.",
+                    assignedEnvLotNo = nextEnvLotNo
+                });
             }
-
-            await _context.SaveChangesAsync();
-            _loggerService.LogEventAsync(
-                $"Assigned EnvLotNo {nextEnvLotNo} to {rows.Count} NRData rows (ProjectId {request.ProjectId})",
-                "NRDataLots",
-                LogHelper.GetTriggeredBy(User),
-                request.ProjectId
-            );
-
-            return Ok(new
+            else
             {
-                message = "Envelope lot created and assigned successfully.",
-                assignedEnvLotNo = nextEnvLotNo
-            });
+                var maxEnvLotNo = await _context.NRDatas
+                    .Where(x => x.ProjectId == request.ProjectId && x.Status == true && x.EnvLotNo > 0)
+                    .MaxAsync(x => (int?)x.EnvLotNo) ?? 0;
+
+                var nextEnvLotNo = maxEnvLotNo + 1;
+
+                var rows = await _context.NRDatas
+                    .Where(x => x.ProjectId == request.ProjectId && x.EnvLotNo == 0 && catchNos.Contains(x.CatchNo))
+                    .ToListAsync();
+
+                if (rows.Count == 0)
+                    return NotFound("No matching unassigned NRData rows found.");
+
+                foreach (var row in rows)
+                {
+                    row.EnvLotNo = nextEnvLotNo;
+                }
+
+                await _context.SaveChangesAsync();
+                _loggerService.LogEventAsync(
+                    $"Assigned EnvLotNo {nextEnvLotNo} to {rows.Count} NRData rows (ProjectId {request.ProjectId})",
+                    "NRDataLots",
+                    LogHelper.GetTriggeredBy(User),
+                    request.ProjectId
+                );
+
+                return Ok(new
+                {
+                    message = "Envelope lot created and assigned successfully.",
+                    assignedEnvLotNo = nextEnvLotNo
+                });
+            }
         }
 
         [HttpPost("UnassignEnvLotByCatches")]
@@ -207,31 +292,63 @@ namespace Tools.Controllers
             if (catchNos.Count == 0)
                 return BadRequest("No valid catch numbers provided.");
 
-            var rows = await _context.NRDatas
-                .Where(x => x.ProjectId == request.ProjectId && catchNos.Contains(x.CatchNo) && x.EnvLotNo > 0)
-                .ToListAsync();
-
-            if (rows.Count == 0)
-                return NotFound("No matching NRData rows found for unassignment.");
-
-            foreach (var row in rows)
+            var isNewModel = await _context.NrData1.AnyAsync(p => p.ProjectId == request.ProjectId);
+            if (isNewModel)
             {
-                row.EnvLotNo = 0;
+                var rows = await _context.NrData1
+                    .Where(x => x.ProjectId == request.ProjectId && x.Status && catchNos.Contains(x.CatchNo) && x.EnvLotNo > 0)
+                    .ToListAsync();
+
+                if (rows.Count == 0)
+                    return NotFound("No matching NrData1 rows found for unassignment.");
+
+                foreach (var row in rows)
+                {
+                    row.EnvLotNo = 0;
+                }
+
+                await _context.SaveChangesAsync();
+                _loggerService.LogEventAsync(
+                    $"Unassigned EnvLotNo from {rows.Count} NrData1 rows (ProjectId {request.ProjectId})",
+                    "NRDataLots",
+                    LogHelper.GetTriggeredBy(User),
+                    request.ProjectId
+                );
+
+                return Ok(new
+                {
+                    message = "Envelope lot assignment reverted successfully.",
+                    revertedCount = rows.Count
+                });
             }
-
-            await _context.SaveChangesAsync();
-            _loggerService.LogEventAsync(
-                $"Unassigned EnvLotNo from {rows.Count} NRData rows (ProjectId {request.ProjectId})",
-                "NRDataLots",
-                LogHelper.GetTriggeredBy(User),
-                request.ProjectId
-            );
-
-            return Ok(new
+            else
             {
-                message = "Envelope lot assignment reverted successfully.",
-                revertedCount = rows.Count
-            });
+                var rows = await _context.NRDatas
+                    .Where(x => x.ProjectId == request.ProjectId && catchNos.Contains(x.CatchNo) && x.EnvLotNo > 0)
+                    .ToListAsync();
+
+                if (rows.Count == 0)
+                    return NotFound("No matching NRData rows found for unassignment.");
+
+                foreach (var row in rows)
+                {
+                    row.EnvLotNo = 0;
+                }
+
+                await _context.SaveChangesAsync();
+                _loggerService.LogEventAsync(
+                    $"Unassigned EnvLotNo from {rows.Count} NRData rows (ProjectId {request.ProjectId})",
+                    "NRDataLots",
+                    LogHelper.GetTriggeredBy(User),
+                    request.ProjectId
+                );
+
+                return Ok(new
+                {
+                    message = "Envelope lot assignment reverted successfully.",
+                    revertedCount = rows.Count
+                });
+            }
         }
 
         //[HttpGet("GetByProjectId/{projectId}")]
@@ -282,28 +399,52 @@ namespace Tools.Controllers
 
             try
             {
-                // Get unique lots with catch counts
-                var lots = await _context.NRDatas
-                    .Where(x => x.ProjectId == projectId && x.Status == true)
-                    .GroupBy(x => x.LotNo)
-                    .Select(g => new
-                    {
-                        lotNo = g.Key,
-                        catchCount = g.Select(x => x.CatchNo).Distinct().Count(),
-                        minStep = g.Min(x => x.Steps),
+                var isNewModel = await _context.NrData1.AnyAsync(p => p.ProjectId == projectId);
 
-                        // New: Check if any record in this lot has Pages > 0
-                        hasPages = g.All(x => x.Pages > 0)
-                    })
-                    .OrderBy(x => x.lotNo)
-                    .ToListAsync();
-
-                if (lots.Count == 0)
+                if (isNewModel)
                 {
-                    return Ok(new List<object>());
+                    var lots = await _context.NrData1
+                        .Where(x => x.ProjectId == projectId && x.Status)
+                        .GroupBy(x => x.LotNo)
+                        .Select(g => new
+                        {
+                            lotNo = g.Key,
+                            catchCount = g.Select(x => x.CatchNo).Distinct().Count(),
+                            minStep = g.Min(x => x.Steps),
+                            hasPages = g.All(x => x.Pages > 0)
+                        })
+                        .OrderBy(x => x.lotNo)
+                        .ToListAsync();
+
+                    if (lots.Count == 0)
+                    {
+                        return Ok(new List<object>());
+                    }
+                    return Ok(lots);
+                }
+                else
+                {
+                    // Get unique lots with catch counts from old model
+                    var lots = await _context.NRDatas
+                        .Where(x => x.ProjectId == projectId && x.Status == true)
+                        .GroupBy(x => x.LotNo)
+                        .Select(g => new
+                        {
+                            lotNo = g.Key,
+                            catchCount = g.Select(x => x.CatchNo).Distinct().Count(),
+                            minStep = g.Min(x => x.Steps),
+                            hasPages = g.All(x => x.Pages > 0)
+                        })
+                        .OrderBy(x => x.lotNo)
+                        .ToListAsync();
+
+                    if (lots.Count == 0)
+                    {
+                        return Ok(new List<object>());
+                    }
+                    return Ok(lots);
                 }
 
-                return Ok(lots);
             }
             catch (Exception ex)
             {
@@ -381,24 +522,47 @@ namespace Tools.Controllers
 
             try
             {
-                // Get unique lots with catch counts
-                var lots = await _context.NRDatas
-                    .Where(x => x.ProjectId == projectId && x.Status == true)
-                    .GroupBy(x => x.EnvLotNo)
-                    .Select(g => new
-                    {
-                        EnvLotno = g.Key,
-                        catchCount = g.Select(x => x.CatchNo).Distinct().Count()
-                    })
-                    .OrderBy(x => x.EnvLotno)
-                    .ToListAsync();
-
-                if (lots.Count == 0)
+                var isNewModel = await _context.NrData1.AnyAsync(p => p.ProjectId == projectId);
+                if (isNewModel)
                 {
-                    return Ok(new List<object>());
-                }
+                    var lots = await _context.NrData1
+                        .Where(x => x.ProjectId == projectId && x.Status)
+                        .GroupBy(x => x.EnvLotNo)
+                        .Select(g => new
+                        {
+                            EnvLotno = g.Key,
+                            catchCount = g.Select(x => x.CatchNo).Distinct().Count()
+                        })
+                        .OrderBy(x => x.EnvLotno)
+                        .ToListAsync();
 
-                return Ok(lots);
+                    if (lots.Count == 0)
+                    {
+                        return Ok(new List<object>());
+                    }
+
+                    return Ok(lots);
+                }
+                else
+                {
+                    var lots = await _context.NRDatas
+                        .Where(x => x.ProjectId == projectId && x.Status == true)
+                        .GroupBy(x => x.EnvLotNo)
+                        .Select(g => new
+                        {
+                            EnvLotno = g.Key,
+                            catchCount = g.Select(x => x.CatchNo).Distinct().Count()
+                        })
+                        .OrderBy(x => x.EnvLotno)
+                        .ToListAsync();
+
+                    if (lots.Count == 0)
+                    {
+                        return Ok(new List<object>());
+                    }
+
+                    return Ok(lots);
+                }
             }
             catch (Exception ex)
             {
@@ -432,18 +596,132 @@ namespace Tools.Controllers
             if (catchNos.Count == 0)
                 return BadRequest("No valid CatchNo values provided.");
 
-            var query = _context.NRDatas
-                .Where(x => x.ProjectId == request.ProjectId && catchNos.Contains(x.CatchNo));
+            var isNewModel = await _context.NrData1.AnyAsync(p => p.ProjectId == request.ProjectId);
 
-            if (selectedLotNo.HasValue)
+            if (isNewModel)
             {
-                query = query.Where(x => x.LotNo == selectedLotNo.Value);
+                var query = _context.NrData1
+                    .Where(x => x.ProjectId == request.ProjectId && x.Status && catchNos.Contains(x.CatchNo));
+
+                if (selectedLotNo.HasValue)
+                {
+                    query = query.Where(x => x.LotNo == selectedLotNo.Value);
+                }
+
+                var rows = await query.ToListAsync();
+
+                if (rows.Count == 0)
+                    return NotFound("No matching NRData rows found.");
+
+                // 🔹 OMR/Booklet serial validation
+                var projectConfig = await _context.ProjectConfigs
+                    .FirstOrDefaultAsync(x => x.ProjectId == request.ProjectId);
+
+                int resetStep = 5;
+                bool isBothSerialsPositive = projectConfig != null && projectConfig.OmrSerialNumber > 0 && (projectConfig.BookletSerialNumber ?? 0) > 0;
+                bool resetBookletSerial = projectConfig?.ResetBookletSerialOnCatchChange ?? false;
+
+                if (isBothSerialsPositive && !resetBookletSerial)
+                {
+                    resetStep = 4;
+                }
+
+                // 🔹 Detect changed or moved catches
+                var originalLotByCatch = rows
+                    .Where(r => r.CatchNo != null)
+                    .GroupBy(r => r.CatchNo)
+                    .ToDictionary(g => g.Key, g => g.First().LotNo);
+
+                var changedCatchNos = new List<string>();
+                var affectedLotNos = new HashSet<int>();
+
+                foreach (var update in request.Updates)
+                {
+                    if (string.IsNullOrWhiteSpace(update.CatchNo)) continue;
+
+                    if (originalLotByCatch.TryGetValue(update.CatchNo, out var oldLotNo))
+                    {
+                        if (oldLotNo != update.LotNo)
+                        {
+                            changedCatchNos.Add(update.CatchNo);
+                            affectedLotNos.Add(oldLotNo);
+                            affectedLotNos.Add(update.LotNo);
+                        }
+                    }
+                }
+
+                // 🔹 Apply lot updates
+                var updatesByCatch = request.Updates
+                    .Where(u => !string.IsNullOrWhiteSpace(u.CatchNo))
+                    .GroupBy(u => u.CatchNo)
+                    .ToDictionary(g => g.Key, g => g.Last().LotNo);
+
+                foreach (var row in rows)
+                {
+                    if (row.CatchNo == null) continue;
+                    if (updatesByCatch.TryGetValue(row.CatchNo, out var lotNo))
+                    {
+                        row.LotNo = lotNo;
+                    }
+                }
+
+                // 🔹 Reset steps if there were changes/moves
+                if (changedCatchNos.Any())
+                {
+                    // Reset all records of the moved/changed catches
+                    foreach (var row in rows)
+                    {
+                        if (row.CatchNo != null && changedCatchNos.Contains(row.CatchNo) && row.Steps > resetStep)
+                        {
+                            row.Steps = resetStep;
+                        }
+                    }
+
+                    // Reset other records in the affected lots
+                    var lotRecordsToReset = await _context.NrData1
+                        .Where(x => x.ProjectId == request.ProjectId &&
+                                    x.LotNo >= 0 &&
+                                    affectedLotNos.Contains(x.LotNo) &&
+                                    (x.CatchNo == null || !changedCatchNos.Contains(x.CatchNo)) &&
+                                    x.Status &&
+                                    x.Steps > resetStep)
+                        .ToListAsync();
+
+                    foreach (var row in lotRecordsToReset)
+                    {
+                        row.Steps = resetStep;
+                    }
+                }
+
+                await _context.SaveChangesAsync();
+                await _loggerService.LogEventAsync(
+                    $"Updated LotNo for {rows.Count} NrData1 rows (ProjectId {request.ProjectId}). Moved catches: {string.Join(", ", changedCatchNos)}.",
+                    "NRDataLots",
+                    LogHelper.GetTriggeredBy(User),
+                    request.ProjectId
+                );
+
+                return Ok(new
+                {
+                    message = "Lot numbers updated successfully.",
+                    updatedCount = rows.Count,
+                    movedCatchesCount = changedCatchNos.Count
+                });
             }
+            else
+            {
+                var query = _context.NRDatas
+                    .Where(x => x.ProjectId == request.ProjectId && catchNos.Contains(x.CatchNo));
 
-            var rows = await query.ToListAsync();
+                if (selectedLotNo.HasValue)
+                {
+                    query = query.Where(x => x.LotNo == selectedLotNo.Value);
+                }
 
-            if (rows.Count == 0)
-                return NotFound("No matching NRData rows found.");
+                var rows = await query.ToListAsync();
+
+                if (rows.Count == 0)
+                    return NotFound("No matching NRData rows found.");
 
             // 🔹 OMR/Booklet serial validation
             var projectConfig = await _context.ProjectConfigs
@@ -539,6 +817,7 @@ namespace Tools.Controllers
                 updatedCount = rows.Count,
                 movedCatchesCount = changedCatchNos.Count
             });
+            }
         }
     }
 }

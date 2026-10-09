@@ -221,13 +221,25 @@ namespace Tools.Controllers
             List<string> FilterColumns(List<string> columns) =>
                 columns.Where(c => !excludeColumns.Contains(c)).ToList();
 
-            // Direct NRData model columns (excluding the JSON blob column itself)
+            // Direct NRData and NrData1 model columns (excluding JSON blob column)
             var nrDirectColumns = new HashSet<string>(
                 GetModelColumns<NRData>(exclude: new[] { "NRDatas", "UploadList" }),
                 StringComparer.OrdinalIgnoreCase);
+            foreach (var col in GetModelColumns<NrData1>(exclude: new[] { "NRDatas" }))
+                nrDirectColumns.Add(col);
 
             var nrColumns = FilterColumns(nrDirectColumns.ToList());
-            var envColumns = FilterColumns(GetModelColumns<EnvelopeBreakingResult>());
+
+            // EnvelopeBreakingResult, NewEnvelopeBreakingResult, and CenterList model columns
+            var envDirectColumns = new HashSet<string>(
+                GetModelColumns<EnvelopeBreakingResult>(),
+                StringComparer.OrdinalIgnoreCase);
+            foreach (var col in GetModelColumns<NewEnvelopeBreakingResult>())
+                envDirectColumns.Add(col);
+            foreach (var col in GetModelColumns<CenterList>())
+                envDirectColumns.Add(col);
+
+            var envColumns = FilterColumns(envDirectColumns.ToList());
             var envBreakageCols = FilterColumns(GetModelColumns<EnvelopeBreakage>());
             var boxColumns = FilterColumns(GetModelColumns<BoxBreakingResult>());
             var extraConfigCols = FilterColumns(GetModelColumns<ExtrasConfiguration>());

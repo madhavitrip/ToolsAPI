@@ -1506,50 +1506,105 @@ namespace Tools.Controllers
         {
             try
             {
-                var query = _context.EnvelopeBreakingResults.Where(x => x.ProjectId == ProjectId);
-                
-                if (uploadId.HasValue)
+                var isNewModel = await _context.NrData1.AnyAsync(p => p.ProjectId == ProjectId);
+                var grouped = new List<dynamic>();
+
+                if (isNewModel)
                 {
-                    // Filter by uploadId via NRData relationship
-                    var nrDatas = await _context.NRDatas
-                        .Where(n => n.ProjectId == ProjectId)
-                        .ToListAsync();
-                    var validNrDataIds = nrDatas
-                        .Where(n => n.UploadList != null && n.UploadList.Contains(uploadId.Value))
-                        .Select(n => n.Id)
+                    var queryNew = _context.NewEnvelopeBreakingResults.Where(x => x.ProjectId == ProjectId && x.Status == true);
+
+                    if (uploadId.HasValue)
+                    {
+                        var nrDatas = await _context.NrData1.Where(n => n.ProjectId == ProjectId && n.Status == true).ToListAsync();
+                        var validNrDataIds = nrDatas
+                            .Select(n => n.Id)
+                            .ToList();
+
+                        queryNew = queryNew.Where(x => validNrDataIds.Contains(x.NrDataId));
+                    }
+                    else
+                    {
+                        queryNew = queryNew.Where(x => x.BookletSerial != null || x.OmrSerial != null);
+                    }
+
+                    var dataNew = await queryNew.OrderBy(x => x.Id).ToListAsync();
+                    var nrDataIds = dataNew.Select(x => x.NrDataId).Distinct().ToList();
+                    var nrDatasMap = await _context.NrData1.Where(n => nrDataIds.Contains(n.Id)).ToDictionaryAsync(n => n.Id);
+
+                    grouped = dataNew
+                        .GroupBy(x => nrDatasMap.ContainsKey(x.NrDataId) ? nrDatasMap[x.NrDataId].CatchNo : "Unknown")
+                        .Select(g =>
+                        {
+                            var firstSerial = g.First().OmrSerial ?? "";
+                            var lastSerial = g.Last().OmrSerial ?? "";
+                            var firstBooklet = g.First().BookletSerial ?? "";
+                            var lastBooklet = g.Last().BookletSerial ?? "";
+                            var start = string.IsNullOrEmpty(firstSerial) ? "" : firstSerial.Split('-')[0];
+                            var end = string.IsNullOrEmpty(lastSerial) ? "" : lastSerial.Split('-').Last();
+                            var first = string.IsNullOrEmpty(firstBooklet) ? "" : firstBooklet.Split('-')[0];
+                            var last = string.IsNullOrEmpty(lastBooklet) ? "" : lastBooklet.Split('-').Last();
+
+                            var firstRow = g.First();
+                            var nr = nrDatasMap.ContainsKey(firstRow.NrDataId) ? nrDatasMap[firstRow.NrDataId] : null;
+
+                            return (dynamic)new
+                            {
+                                CatchNo = g.Key,
+                                OmrSerialRange = $"{start}-{end}",
+                                BookletSerialRange = $"{first}-{last}",
+                                ExamDate = nr?.ExamDate,
+                                ExamTime = nr?.ExamTime
+                            };
+                        })
                         .ToList();
-                    
-                    query = query.Where(x => validNrDataIds.Contains(x.NrDataId));
                 }
                 else
                 {
-                    query = query.Where(x => x.BookletSerial != null || x.OmrSerial != null);
-                }
-
-                var data = await query.OrderBy(x => x.Id).ToListAsync();
-
-                var grouped = data
-                    .GroupBy(x => x.CatchNo)
-                    .Select(g =>
+                    var query = _context.EnvelopeBreakingResults.Where(x => x.ProjectId == ProjectId);
+                    
+                    if (uploadId.HasValue)
                     {
-                        var firstSerial = g.First().OmrSerial;
-                        var lastSerial = g.Last().OmrSerial;
-                        var firstBooklet = g.First().BookletSerial;
-                        var lastBooklet = g.Last().BookletSerial;
-                        var start = firstSerial.Split('-')[0];
-                        var end = lastSerial.Split('-')[1];
-                        var first = firstBooklet.Split('-')[0];
-                        var last = lastBooklet.Split('-')[0];
-                        return new
+                        // Filter by uploadId via NRData relationship
+                        var nrDatas = await _context.NRDatas
+                            .Where(n => n.ProjectId == ProjectId)
+                            .ToListAsync();
+                        var validNrDataIds = nrDatas
+                            .Where(n => n.UploadList != null && n.UploadList.Contains(uploadId.Value))
+                            .Select(n => n.Id)
+                            .ToList();
+                        
+                        query = query.Where(x => validNrDataIds.Contains(x.NrDataId));
+                    }
+                    else
+                    {
+                        query = query.Where(x => x.BookletSerial != null || x.OmrSerial != null);
+                    }
+
+                    var data = await query.OrderBy(x => x.Id).ToListAsync();
+
+                    grouped = data
+                        .GroupBy(x => x.CatchNo)
+                        .Select(g =>
                         {
-                            CatchNo = g.Key,
-                            OmrSerialRange = $"{start}-{end}",
-                            BookletSerialRange = $"{first}-{last}",
-                            ExamDate = g.First().ExamDate,
-                            ExamTime = g.First().ExamTime
-                        };
-                    })
-                    .ToList();
+                            var firstSerial = g.First().OmrSerial;
+                            var lastSerial = g.Last().OmrSerial;
+                            var firstBooklet = g.First().BookletSerial;
+                            var lastBooklet = g.Last().BookletSerial;
+                            var start = firstSerial.Split('-')[0];
+                            var end = lastSerial.Split('-')[1];
+                            var first = firstBooklet.Split('-')[0];
+                            var last = lastBooklet.Split('-')[0];
+                            return (dynamic)new
+                            {
+                                CatchNo = g.Key,
+                                OmrSerialRange = $"{start}-{end}",
+                                BookletSerialRange = $"{first}-{last}",
+                                ExamDate = g.First().ExamDate,
+                                ExamTime = g.First().ExamTime
+                            };
+                        })
+                        .ToList();
+                }
 
                 var reportPath = FileStorageHelper.GetProjectFolder(ProjectId);
 
@@ -1615,7 +1670,7 @@ namespace Tools.Controllers
                 var eligibleSteps = Tools.Models.PipelineNavigator.GetEligiblePickupSteps(Tools.Models.PipelineNavigator.STEP_AWAITING_ENV);
 
                 var nrQuery = _context.NrData1
-                    .Where(p => p.ProjectId == ProjectId && eligibleSteps.Contains(p.Steps) && p.Batch == (batchNo ?? 1));
+                    .Where(p => p.ProjectId == ProjectId && p.Status == true && eligibleSteps.Contains(p.Steps) && p.Batch == (batchNo ?? 1));
 
                 if (lotNo.HasValue && lotNo.Value > 0)
                     nrQuery = nrQuery.Where(p => p.LotNo == lotNo.Value);
@@ -1629,7 +1684,7 @@ namespace Tools.Controllers
                 if (!nrDataList.Any())
                 {
                     var fallbackQuery = _context.NrData1
-                        .Where(p => p.ProjectId == ProjectId && p.Batch == (batchNo ?? 1));
+                        .Where(p => p.ProjectId == ProjectId && p.Status == true && p.Batch == (batchNo ?? 1));
                     if (lotNo.HasValue && lotNo.Value > 0)
                         fallbackQuery = fallbackQuery.Where(p => p.LotNo == lotNo.Value);
                     if (!string.IsNullOrEmpty(catchNo))
@@ -2232,15 +2287,15 @@ namespace Tools.Controllers
                     return NotFound("Project config not found");
 
                 var nrDataDict = await _context.NrData1
-                    .Where(p => p.ProjectId == ProjectId)
+                    .Where(p => p.ProjectId == ProjectId && p.Status == true)
                     .ToDictionaryAsync(p => p.Id);
 
                 var centerDict = await _context.CenterList
-                    .Where(p => p.ProjectId == ProjectId)
+                    .Where(p => p.ProjectId == ProjectId && p.Status == true)
                     .ToDictionaryAsync(p => p.Id);
 
                 var nrDataByCatch = await _context.NrData1
-                    .Where(p => p.ProjectId == ProjectId)
+                    .Where(p => p.ProjectId == ProjectId && p.Status == true)
                     .GroupBy(p => p.CatchNo)
                     .ToDictionaryAsync(g => g.Key ?? "", g => g.First());
 
