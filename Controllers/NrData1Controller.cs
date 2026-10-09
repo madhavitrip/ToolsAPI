@@ -1986,6 +1986,7 @@ namespace Tools.Controllers
 
                             var centerExtraDict = new Dictionary<string, string>
                             {
+                                { "CatchNo", data.CatchNo ?? "" },
                                 { "Quantity", calculatedQuantity.ToString() },
                                 { "NRQuantity", calculatedQuantity.ToString() },
                                 { "InnerEnvelope", innerCount.ToString() },
