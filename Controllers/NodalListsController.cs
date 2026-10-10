@@ -32,10 +32,27 @@ namespace Tools.Controllers
             {
                 await _context.Database.ExecuteSqlRawAsync("ALTER TABLE NodalList ADD COLUMN Status TINYINT(1) NOT NULL DEFAULT 1;");
             }
-            catch
+            catch { }
+            try
             {
-                // Column may already exist
+                await _context.Database.ExecuteSqlRawAsync("ALTER TABLE NodalList ADD COLUMN CentreSort DOUBLE NOT NULL DEFAULT 0;");
             }
+            catch { }
+            try
+            {
+                await _context.Database.ExecuteSqlRawAsync("ALTER TABLE NodalList ADD COLUMN NodalSort DOUBLE NOT NULL DEFAULT 0;");
+            }
+            catch { }
+            try
+            {
+                await _context.Database.ExecuteSqlRawAsync("ALTER TABLE NodalList MODIFY COLUMN ExamCenterName LONGTEXT NULL;");
+            }
+            catch { }
+            try
+            {
+                await _context.Database.ExecuteSqlRawAsync("ALTER TABLE NodalList MODIFY COLUMN NodalName LONGTEXT NULL;");
+            }
+            catch { }
 
             lock (_schemaLock)
             {
@@ -161,6 +178,8 @@ namespace Tools.Controllers
             existingRecord.Gender = updatedRecord.Gender;
             existingRecord.NodalCode = updatedRecord.NodalCode;
             existingRecord.NodalName = updatedRecord.NodalName;
+            existingRecord.CentreSort = updatedRecord.CentreSort;
+            existingRecord.NodalSort = updatedRecord.NodalSort;
 
             try
             {
@@ -540,9 +559,9 @@ namespace Tools.Controllers
 
                     if (extraData.Any()) nodalList.OtherFields = JsonSerializer.Serialize(extraData);
 
-                    if (string.IsNullOrWhiteSpace(nodalList.ExamCenterName) || string.IsNullOrWhiteSpace(nodalList.NodalName))
+                    if (string.IsNullOrWhiteSpace(nodalList.ExamCenterCode) || string.IsNullOrWhiteSpace(nodalList.NodalCode))
                     {
-                        rawRecord["FailureReason"] = "Missing required fields (ExamCenterName, NodalName)";
+                        rawRecord["FailureReason"] = "Missing required fields (ExamCenterCode, NodalCode)";
                         failedRecords.Add(rawRecord);
                         continue;
                     }

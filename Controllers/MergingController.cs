@@ -324,7 +324,9 @@ namespace Tools.Controllers
                                 SubjectName = catchItem.SubjectName,
                                 ExamDate = catchItem.ExamDate,
                                 ExamTime = catchItem.ExamTime,
-                                NRDatas = catchItem.NRDatas
+                                NRDatas = catchItem.NRDatas,
+                                CenterSort = nodalItem.CentreSort,
+                                NodalSort = nodalItem.NodalSort
                             });
                         }
                     }
