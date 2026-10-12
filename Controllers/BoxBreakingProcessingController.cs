@@ -881,7 +881,7 @@ namespace Tools.Controllers
             }
         }
 
-        private async Task GenerateBoxBreakingReportAsync(int projectId, List<int> lotNumbers, string authHeader = null, int? userId = null)
+        private async Task GenerateBoxBreakingReportAsync(int projectId, List<int>? lotNumbers, string? authHeader = null, int? userId = null)
         {
             try
             {
@@ -889,10 +889,12 @@ namespace Tools.Controllers
                 if (!string.IsNullOrEmpty(authHeader))
                     client.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", authHeader);
 
-                foreach (var lot in lotNumbers)
+                var lots = lotNumbers != null && lotNumbers.Any() ? lotNumbers : new List<int> { 0 };
+                foreach (var lot in lots)
                 {
                     var userIdParam = userId.HasValue ? $"&userId={userId.Value}" : "";
-                    var url = $"{_apiSettings.BoxBreaking}?ProjectId={projectId}&LotNo={lot}{userIdParam}";
+                    var lotParam = lot > 0 ? $"&LotNo={lot}" : "";
+                    var url = $"{_apiSettings.BoxBreaking}?ProjectId={projectId}{lotParam}{userIdParam}";
                     var response = await client.GetAsync(url);
 
                     if (!response.IsSuccessStatusCode)
@@ -978,11 +980,9 @@ namespace Tools.Controllers
                 }
 
                 // ✅ Get envelope results for this lot's catches
-                var envelopeResults = await _context.EnvelopeBreakingResults
-                    .Where(nr => nrCatchNos.Contains(nr.CatchNo) && nr.ProjectId == ProjectId && nr.Status)
-                    .ToListAsync();
+                List<EnvelopeBreakingResult> envelopeResults = new List<EnvelopeBreakingResult>();
 
-                if (!envelopeResults.Any() && isNewModel)
+                if (isNewModel)
                 {
                     var newEnvBreakings = await _context.NewEnvelopeBreakingResults
                         .Where(r => r.ProjectId == ProjectId && r.Status && r.SerialNumber != 0)
@@ -1001,12 +1001,18 @@ namespace Tools.Controllers
                         centerListMap.TryGetValue(eb.CenterListId, out var c);
                         nr1Map.TryGetValue(eb.NrDataId, out var n);
 
+                        string catchNo = n?.CatchNo ?? "";
+                        if (nrCatchNos.Any() && !nrCatchNos.Contains(catchNo))
+                        {
+                            continue;
+                        }
+
                         envelopeResults.Add(new EnvelopeBreakingResult
                         {
                             Id = eb.Id,
                             ProjectId = eb.ProjectId,
                             NrDataId = eb.NrDataId,
-                            CatchNo = n?.CatchNo ?? "",
+                            CatchNo = catchNo,
                             CenterCode = c?.CenterCode ?? "",
                             CenterSort = c?.CenterSort ?? 0,
                             ExamTime = n?.ExamTime ?? "",
@@ -1023,6 +1029,12 @@ namespace Tools.Controllers
                             DistrictSort = c?.DistrictSort ?? 0
                         });
                     }
+                }
+                else
+                {
+                    envelopeResults = await _context.EnvelopeBreakingResults
+                        .Where(nr => nrCatchNos.Contains(nr.CatchNo) && nr.ProjectId == ProjectId && nr.Status)
+                        .ToListAsync();
                 }
 
                 var envelopeResultIds = envelopeResults.Select(e => e.Id).ToHashSet();
@@ -1505,6 +1517,10 @@ namespace Tools.Controllers
                     "BoxBreakingProcessing",
                     Tools.Services.LogHelper.GetTriggeredBy(User),
                     ProjectId);
+
+                var authHeader = Request.Headers.ContainsKey("Authorization") ? Request.Headers["Authorization"].ToString() : null;
+                var triggeredBy = Tools.Services.LogHelper.GetTriggeredBy(User, Request);
+                await GenerateBoxBreakingReportAsync(ProjectId, LotNo, authHeader, triggeredBy > 0 ? triggeredBy : (int?)null);
 
                 return Ok(new
                 {

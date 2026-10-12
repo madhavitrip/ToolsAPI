@@ -2682,15 +2682,62 @@ namespace Tools.Controllers
         [HttpGet("ErrorReport")]
         public async Task<ActionResult> GetDuplicateswrtCatch(int ProjectId, [FromQuery] int? lotNo = null)
         {
-            var dataQuery = _context.NRDatas
-                .Where(item => item.ProjectId == ProjectId && item.Status == true);
-
-            if (lotNo.HasValue)
+            var isNewModel = await _context.NrData1.AnyAsync(p => p.ProjectId == ProjectId);
+            List<NRData> nrData;
+            if (isNewModel)
             {
-                dataQuery = dataQuery.Where(item => item.LotNo == lotNo.Value);
+                var q = from nr in _context.NrData1
+                        join c in _context.CenterList on nr.Id equals c.NRDataId
+                        where nr.ProjectId == ProjectId && nr.Status && c.Status
+                        select new NRData
+                        {
+                            Id = c.Id,
+                            ProjectId = nr.ProjectId,
+                            CatchNo = nr.CatchNo,
+                            CenterCode = c.CenterCode,
+                            ExamDate = nr.ExamDate,
+                            ExamTime = nr.ExamTime,
+                            SubjectName = nr.SubjectName,
+                            CourseName = nr.CourseName,
+                            NodalCode = c.NodalCode,
+                            NRQuantity = c.NRQuantity,
+                            Quantity = c.Quantity,
+                            Route = c.Route,
+                            Pages = nr.Pages,
+                            CenterSort = c.CenterSort,
+                            NodalSort = c.NodalSort,
+                            RouteSort = c.RouteSort,
+                            LotNo = nr.LotNo,
+                            EnvLotNo = nr.EnvLotNo,
+                            Batch = nr.Batch,
+                            NRDatas = nr.NRDatas,
+                            Day = nr.Day,
+                            District = c.District,
+                            DistrictSort = c.DistrictSort,
+                            Status = c.Status,
+                            Steps = nr.Steps,
+                            VerificationStatus = nr.VerificationStatus,
+                            Remarksss = nr.Remarksss
+                        };
+                if (lotNo.HasValue)
+                {
+                    q = q.Where(item => item.LotNo == lotNo.Value);
+                }
+                nrData = await q.ToListAsync();
+            }
+            else
+            {
+                var dataQuery = _context.NRDatas
+                    .Where(item => item.ProjectId == ProjectId && item.Status == true);
+
+                if (lotNo.HasValue)
+                {
+                    dataQuery = dataQuery.Where(item => item.LotNo == lotNo.Value);
+                }
+
+                nrData = await dataQuery.ToListAsync();
             }
 
-            var nrData = await dataQuery.ToListAsync();
             if (nrData.Count == 0)
             {
                 return Ok(new
@@ -3055,9 +3102,66 @@ namespace Tools.Controllers
                     return NotFound("No matching records found");
                 }
 
-                foreach (var item in rowsToUpdate)
+                var isNewModel = await _context.NrData1.AnyAsync(p => p.ProjectId == ProjectId);
+                if (isNewModel)
                 {
-                    ApplyConflictResolution(item, payload);
+                    var centerIds = rowsToUpdate.Select(r => r.Id).ToList();
+                    var centersToUpdate = await _context.CenterList.Where(c => centerIds.Contains(c.Id)).ToListAsync();
+                    var catchNos = rowsToUpdate.Select(r => r.CatchNo).Where(c => !string.IsNullOrEmpty(c)).Distinct().ToList();
+                    var nr1ToUpdate = await _context.NrData1.Where(n => n.ProjectId == ProjectId && catchNos.Contains(n.CatchNo) && n.Status).ToListAsync();
+
+                    var conflictType = (payload.ConflictType ?? string.Empty).Trim().ToLowerInvariant();
+                    foreach (var c in centersToUpdate)
+                    {
+                        if (conflictType == CenterMultipleNodalsConflict ||
+                            conflictType == CollegeMultipleNodalsConflict ||
+                            conflictType == NodalCodeDigitMismatchConflict)
+                        {
+                            c.NodalCode = payload.SelectedValue.Trim();
+                        }
+                        else if (conflictType == CollegeMultipleCentersConflict)
+                        {
+                            c.CenterCode = payload.SelectedValue.Trim();
+                        }
+                        else if (conflictType == ZeroNrQuantityConflict)
+                        {
+                            if (int.TryParse(payload.SelectedValue, out int qVal))
+                            {
+                                c.NRQuantity = qVal;
+                            }
+                        }
+                    }
+
+                    foreach (var n in nr1ToUpdate)
+                    {
+                        if (conflictType == CatchUniqueFieldConflict && !string.IsNullOrWhiteSpace(payload.UniqueField))
+                        {
+                            var prop = typeof(NrData1).GetProperties().FirstOrDefault(p => p.Name.Equals(payload.UniqueField, StringComparison.OrdinalIgnoreCase));
+                            if (prop != null)
+                            {
+                                var targetType = Nullable.GetUnderlyingType(prop.PropertyType) ?? prop.PropertyType;
+                                object? converted = string.IsNullOrWhiteSpace(payload.SelectedValue) ? null : Convert.ChangeType(payload.SelectedValue, targetType);
+                                prop.SetValue(n, converted);
+                            }
+                            else
+                            {
+                                var jsonDict = new Dictionary<string, string>();
+                                if (!string.IsNullOrWhiteSpace(n.NRDatas))
+                                {
+                                    try { jsonDict = JsonSerializer.Deserialize<Dictionary<string, string>>(n.NRDatas) ?? new(); } catch { }
+                                }
+                                jsonDict[payload.UniqueField] = payload.SelectedValue;
+                                n.NRDatas = JsonSerializer.Serialize(jsonDict);
+                            }
+                        }
+                    }
+                }
+                else
+                {
+                    foreach (var item in rowsToUpdate)
+                    {
+                        ApplyConflictResolution(item, payload);
+                    }
                 }
 
                 await _context.SaveChangesAsync();
@@ -3374,9 +3478,50 @@ namespace Tools.Controllers
 
         private async Task<List<NRData>> GetRowsForConflict(int projectId, ConflictActionDto payload)
         {
-            var projectRows = await _context.NRDatas
-                .Where(item => item.ProjectId == projectId)
-                .ToListAsync();
+            var isNewModel = await _context.NrData1.AnyAsync(p => p.ProjectId == projectId);
+            List<NRData> projectRows;
+            if (isNewModel)
+            {
+                projectRows = await (from nr in _context.NrData1
+                                     join c in _context.CenterList on nr.Id equals c.NRDataId
+                                     where nr.ProjectId == projectId && nr.Status && c.Status
+                                     select new NRData
+                                     {
+                                         Id = c.Id,
+                                         ProjectId = nr.ProjectId,
+                                         CatchNo = nr.CatchNo,
+                                         CenterCode = c.CenterCode,
+                                         ExamDate = nr.ExamDate,
+                                         ExamTime = nr.ExamTime,
+                                         SubjectName = nr.SubjectName,
+                                         CourseName = nr.CourseName,
+                                         NodalCode = c.NodalCode,
+                                         NRQuantity = c.NRQuantity,
+                                         Quantity = c.Quantity,
+                                         Route = c.Route,
+                                         Pages = nr.Pages,
+                                         CenterSort = c.CenterSort,
+                                         NodalSort = c.NodalSort,
+                                         RouteSort = c.RouteSort,
+                                         LotNo = nr.LotNo,
+                                         EnvLotNo = nr.EnvLotNo,
+                                         Batch = nr.Batch,
+                                         NRDatas = nr.NRDatas,
+                                         Day = nr.Day,
+                                         District = c.District,
+                                         DistrictSort = c.DistrictSort,
+                                         Status = c.Status,
+                                         Steps = nr.Steps,
+                                         VerificationStatus = nr.VerificationStatus,
+                                         Remarksss = nr.Remarksss
+                                     }).ToListAsync();
+            }
+            else
+            {
+                projectRows = await _context.NRDatas
+                    .Where(item => item.ProjectId == projectId)
+                    .ToListAsync();
+            }
 
             var catchNoSet = new HashSet<string>(
                 (payload.CatchNos ?? new List<string>())
@@ -6082,12 +6227,12 @@ namespace Tools.Controllers
                         _context.CenterList.Update(c);
                     }
 
-                    var extra = await _context.ExtrasEnvelope.Where(e => e.ProjectId == projectId && e.CatchNo == catchNo).ToListAsync();
-                    foreach (var ex in extra)
-                    {
-                        ex.Status = 0;
-                        _context.ExtrasEnvelope.Update(ex);
-                    }
+                    //var extra = await _context.ExtrasEnvelope.Where(e => e.ProjectId == projectId && e.CatchNo == catchNo).ToListAsync();
+                    //foreach (var ex in extra)
+                    //{
+                    //    ex.Status = 0;
+                    //    _context.ExtrasEnvelope.Update(ex);
+                    //}
 
                     var newEnvResults = await _context.NewEnvelopeBreakingResults
                         .Where(e => e.ProjectId == projectId && nr1Ids.Contains(e.NrDataId))
