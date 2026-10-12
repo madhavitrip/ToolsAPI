@@ -35,7 +35,8 @@ namespace Tools.Controllers
             catch { }
             try
             {
-                await _context.Database.ExecuteSqlRawAsync("ALTER TABLE NodalList ADD COLUMN CentreSort DOUBLE NOT NULL DEFAULT 0;");
+                await _context.Database.ExecuteSqlRawAsync("ALTER TABLE NodalList ADD COLUMN CenterSort DOUBLE NOT NULL DEFAULT 0;");
+                await _context.Database.ExecuteSqlRawAsync("ALTER TABLE NodalList RENAME COLUMN CentreSort TO CenterSort;");
             }
             catch { }
             try
@@ -178,7 +179,7 @@ namespace Tools.Controllers
             existingRecord.Gender = updatedRecord.Gender;
             existingRecord.NodalCode = updatedRecord.NodalCode;
             existingRecord.NodalName = updatedRecord.NodalName;
-            existingRecord.CentreSort = updatedRecord.CentreSort;
+            existingRecord.CenterSort = updatedRecord.CenterSort;
             existingRecord.NodalSort = updatedRecord.NodalSort;
 
             try

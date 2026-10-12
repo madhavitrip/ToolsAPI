@@ -66,6 +66,14 @@ namespace Tools.Controllers
             return trimmed.ToLowerInvariant();
         }
 
+        [HttpGet("debug-nodal")]
+        public async Task<IActionResult> DebugNodal()
+        {
+            var nodals = await _context.NodalList.OrderByDescending(x => x.Id).Take(100).Select(x => new { x.Id, x.CenterSort, x.NodalSort, x.NodalCode, x.ExamCenterCode }).ToListAsync();
+            var temps = await _context.TemporaryNrDatas.Where(x => x.CenterSort > 0 || x.NodalSort > 0).Take(50).Select(x => new { x.Id, x.CenterSort, x.NodalSort, x.NodalCode, x.CenterCode }).ToListAsync();
+            return Ok(new { nodals, temps });
+        }
+
         [HttpPost("MergeToTemporary/{projectId}")]
         public async Task<IActionResult> MergeToTemporary(int projectId, [FromQuery] string? mergeBy = "CollegeCode")
         {
@@ -270,7 +278,7 @@ namespace Tools.Controllers
                     if (!matchingNodals.Any())
                     {
                         var centerCodeStr = (!string.IsNullOrWhiteSpace(catchItem.CenterCode)) ? catchItem.CenterCode : (ExtractCodeNumber(catchItem.CenterName) ?? "");
-                        tempDatas.Add(new TemporaryNrDatas
+                        var tRecord = new TemporaryNrDatas
                         {
                             ProjectId = projectId,
                             CatchNo = catchItem.CatchNo,
@@ -283,8 +291,13 @@ namespace Tools.Controllers
                             SubjectName = catchItem.SubjectName,
                             ExamDate = catchItem.ExamDate,
                             ExamTime = catchItem.ExamTime,
-                            NRDatas = catchItem.NRDatas
-                        });
+                            NRDatas = catchItem.NRDatas,
+                            CenterSort = GetDoubleFromJson(catchItem.NRDatas, "CenterSort") != 0 ? GetDoubleFromJson(catchItem.NRDatas, "CenterSort") : GetDoubleFromJson(catchItem.NRDatas, "CentreSort"),
+                            NodalSort = GetDoubleFromJson(catchItem.NRDatas, "NodalSort")
+                        };
+                        
+                        MapJsonToProperties(tRecord, catchItem.NRDatas);
+                        tempDatas.Add(tRecord);
                         continue;
                     }
 
@@ -311,7 +324,7 @@ namespace Tools.Controllers
                             var centerCodeStr = GetValidCenterCode(nodalItem) ?? ((!string.IsNullOrWhiteSpace(nodalItem.ExamCenterCode)) ? nodalItem.ExamCenterCode : ((!string.IsNullOrWhiteSpace(catchItem.CenterCode)) ? catchItem.CenterCode : ""));
                             var nodalCodeStr = GetValidNodalCode(nodalItem) ?? ((!string.IsNullOrWhiteSpace(nodalItem.NodalCode)) ? nodalItem.NodalCode : centerCodeStr);
 
-                            tempDatas.Add(new TemporaryNrDatas
+                            var tRecord = new TemporaryNrDatas
                             {
                                 ProjectId = projectId,
                                 CatchNo = catchItem.CatchNo,
@@ -325,9 +338,13 @@ namespace Tools.Controllers
                                 ExamDate = catchItem.ExamDate,
                                 ExamTime = catchItem.ExamTime,
                                 NRDatas = catchItem.NRDatas,
-                                CenterSort = nodalItem.CentreSort,
-                                NodalSort = nodalItem.NodalSort
-                            });
+                                CenterSort = nodalItem.CenterSort != 0 ? nodalItem.CenterSort : (GetDoubleFromJson(nodalItem.OtherFields, "CenterSort") != 0 ? GetDoubleFromJson(nodalItem.OtherFields, "CenterSort") : (GetDoubleFromJson(nodalItem.OtherFields, "CentreSort") != 0 ? GetDoubleFromJson(nodalItem.OtherFields, "CentreSort") : (GetDoubleFromJson(catchItem.NRDatas, "CenterSort") != 0 ? GetDoubleFromJson(catchItem.NRDatas, "CenterSort") : GetDoubleFromJson(catchItem.NRDatas, "CentreSort")))),
+                                NodalSort = nodalItem.NodalSort != 0 ? nodalItem.NodalSort : (GetDoubleFromJson(nodalItem.OtherFields, "NodalSort") != 0 ? GetDoubleFromJson(nodalItem.OtherFields, "NodalSort") : GetDoubleFromJson(catchItem.NRDatas, "NodalSort"))
+                            };
+                            
+                            MapJsonToProperties(tRecord, catchItem.NRDatas);
+                            MapJsonToProperties(tRecord, nodalItem.OtherFields);
+                            tempDatas.Add(tRecord);
                         }
                     }
                 }
@@ -367,6 +384,96 @@ namespace Tools.Controllers
                 return StatusCode(500, $"Internal server error: {ex.Message}");
             }
         }
+
+        private static double GetDoubleFromJson(string? json, string key)
+        {
+            if (string.IsNullOrWhiteSpace(json)) return 0;
+            try
+            {
+                var dict = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, System.Text.Json.JsonElement>>(json);
+                if (dict != null)
+                {
+                    var matchingKey = dict.Keys.FirstOrDefault(k => string.Equals(k, key, StringComparison.OrdinalIgnoreCase) || string.Equals(k.Replace(" ", ""), key, StringComparison.OrdinalIgnoreCase));
+                    if (matchingKey != null)
+                    {
+                        var el = dict[matchingKey];
+                        if (el.ValueKind == System.Text.Json.JsonValueKind.Number) return el.GetDouble();
+                        if (el.ValueKind == System.Text.Json.JsonValueKind.String && double.TryParse(el.GetString(), out double val)) return val;
+                    }
+                }
+            }
+            catch { }
+            return 0;
+        }
+
+        private static void MapJsonToProperties(object record, string? json)
+        {
+            if (string.IsNullOrWhiteSpace(json)) return;
+
+            var props = record.GetType().GetProperties()
+                .Where(p => p.CanWrite)
+                .ToDictionary(p => p.Name.ToLowerInvariant(), p => p);
+
+            try
+            {
+                var dict = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, System.Text.Json.JsonElement>>(json);
+                if (dict != null)
+                {
+                    foreach (var kvp in dict)
+                    {
+                        var keyLower = kvp.Key.Replace(" ", "").ToLowerInvariant();
+                        if (keyLower == "centresort") keyLower = "centersort";
+
+                        if (props.TryGetValue(keyLower, out var propInfo))
+                        {
+                            if (keyLower == "id" || keyLower == "projectid" || keyLower == "nrdatas") continue;
+
+                            try
+                            {
+                                var targetType = Nullable.GetUnderlyingType(propInfo.PropertyType) ?? propInfo.PropertyType;
+                                object? convertedValue = null;
+
+                                if (kvp.Value.ValueKind == System.Text.Json.JsonValueKind.Number)
+                                {
+                                    convertedValue = Convert.ChangeType(kvp.Value.GetRawText(), targetType);
+                                }
+                                else if (kvp.Value.ValueKind == System.Text.Json.JsonValueKind.String)
+                                {
+                                    var strVal = kvp.Value.GetString();
+                                    if (!string.IsNullOrWhiteSpace(strVal))
+                                    {
+                                        convertedValue = Convert.ChangeType(strVal, targetType);
+                                    }
+                                }
+                                else if (kvp.Value.ValueKind == System.Text.Json.JsonValueKind.True || kvp.Value.ValueKind == System.Text.Json.JsonValueKind.False)
+                                {
+                                    convertedValue = Convert.ChangeType(kvp.Value.GetBoolean(), targetType);
+                                }
+
+                                if (convertedValue != null)
+                                {
+                                    var currentVal = propInfo.GetValue(record);
+                                    bool isDefault = false;
+
+                                    if (currentVal == null) isDefault = true;
+                                    else if (currentVal is int i && i == 0) isDefault = true;
+                                    else if (currentVal is double d && d == 0) isDefault = true;
+                                    else if (currentVal is string s && string.IsNullOrEmpty(s)) isDefault = true;
+
+                                    if (isDefault)
+                                    {
+                                        propInfo.SetValue(record, convertedValue);
+                                    }
+                                }
+                            }
+                            catch { }
+                        }
+                    }
+                }
+            }
+            catch { }
+        }
+
 
         private static string GetValDynamic(CatchList? c, NodalList? n, TemporaryNrDatas? t, string field)
         {
@@ -639,6 +746,7 @@ namespace Tools.Controllers
 
                     var l2FromTemp = g.Select(x => GetKeyDynamic(null, null, x, level2)).Where(x => !string.IsNullOrEmpty(x)).Distinct().ToList();
                     bool hasLevel2 = l2FromTemp.Any();
+
 
                     bool hasLevel3 = true;
                     if (hasLevel3Config)
@@ -1581,21 +1689,125 @@ namespace Tools.Controllers
                     // Clear existing NRDatas for this project
                     await _context.NRDatas.Where(x => x.ProjectId == projectId).ExecuteDeleteAsync();
 
-                    // Direct set-based SQL copy from TemporaryNrDatas into NRDatas
-                    await _context.Database.ExecuteSqlInterpolatedAsync($@"
-                        INSERT INTO `NRDatas` (
-                            `ProjectId`, `CourseName`, `SubjectName`, `CenterCode`, `Quantity`, `NRQuantity`, 
-                            `CatchNo`, `ExamDate`, `ExamTime`, `Day`, `NRDatas`, `NodalCode`, `Pages`, `Route`, 
-                            `RouteSort`, `CenterSort`, `NodalSort`, `Symbol`, `Status`, `District`, `DistrictSort`, `Batch`,
-                            `NRDataId`, `LotNo`, `Steps`, `UploadList`, `EnvLotNo`, `VerificationStatus`, `VerifiedBy`
-                        )
-                        SELECT 
-                            `ProjectId`, `CourseName`, `SubjectName`, `CenterCode`, `NRQuantity`, `NRQuantity`, 
-                            `CatchNo`, `ExamDate`, `ExamTime`, `Day`, `NRDatas`, `NodalCode`, `Pages`, `Route`, 
-                            `RouteSort`, `CenterSort`, `NodalSort`, `Symbol`, `Status`, `District`, `DistrictSort`, 1,
-                            0, 0, 0, '[]', 0, 0, 0
-                        FROM `TemporaryNrDatas`
-                        WHERE `ProjectId` = {projectId}");
+                    // Fetch all temp records for dynamic processing
+                    var tempRecords = await _context.TemporaryNrDatas.Where(x => x.ProjectId == projectId).ToListAsync();
+                    var newNrDatas = new List<NRData>(tempRecords.Count);
+                    
+                    var nrDataProps = typeof(NRData).GetProperties()
+                        .Where(p => p.CanWrite)
+                        .ToDictionary(p => p.Name.ToLowerInvariant(), p => p);
+
+                    foreach (var temp in tempRecords)
+                    {
+                        var nrData = new NRData
+                        {
+                            ProjectId = temp.ProjectId,
+                            CourseName = temp.CourseName,
+                            SubjectName = temp.SubjectName,
+                            CenterCode = temp.CenterCode,
+                            Quantity = temp.NRQuantity,
+                            NRQuantity = temp.NRQuantity,
+                            CatchNo = temp.CatchNo,
+                            ExamDate = temp.ExamDate,
+                            ExamTime = temp.ExamTime,
+                            Day = temp.Day,
+                            NRDatas = temp.NRDatas,
+                            NodalCode = temp.NodalCode,
+                            Pages = temp.Pages,
+                            Route = temp.Route,
+                            RouteSort = temp.RouteSort,
+                            CenterSort = temp.CenterSort,
+                            NodalSort = temp.NodalSort,
+                            Symbol = temp.Symbol,
+                            Status = temp.Status,
+                            District = temp.District,
+                            DistrictSort = temp.DistrictSort,
+                            Batch = 1,
+                            NRDataId = 0,
+                            LotNo = 0,
+                            Steps = 0,
+                            UploadList = new List<int>(),
+                            EnvLotNo = 0,
+                            VerificationStatus = 0,
+                            VerifiedBy = 0
+                        };
+
+                        if (!string.IsNullOrWhiteSpace(temp.NRDatas))
+                        {
+                            try
+                            {
+                                var dict = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, System.Text.Json.JsonElement>>(temp.NRDatas);
+                                if (dict != null)
+                                {
+                                    foreach (var kvp in dict)
+                                    {
+                                        var keyLower = kvp.Key.Replace(" ", "").ToLowerInvariant();
+                                        if (nrDataProps.TryGetValue(keyLower, out var propInfo))
+                                        {
+                                            // Skip some base properties we just set or shouldn't overwrite blindly
+                                            if (keyLower == "id" || keyLower == "projectid" || keyLower == "nrdatas") continue;
+
+                                            try
+                                            {
+                                                var targetType = Nullable.GetUnderlyingType(propInfo.PropertyType) ?? propInfo.PropertyType;
+                                                object? convertedValue = null;
+
+                                                if (kvp.Value.ValueKind == System.Text.Json.JsonValueKind.Number)
+                                                {
+                                                    convertedValue = Convert.ChangeType(kvp.Value.GetRawText(), targetType);
+                                                }
+                                                else if (kvp.Value.ValueKind == System.Text.Json.JsonValueKind.String)
+                                                {
+                                                    var strVal = kvp.Value.GetString();
+                                                    if (!string.IsNullOrWhiteSpace(strVal))
+                                                    {
+                                                        convertedValue = Convert.ChangeType(strVal, targetType);
+                                                    }
+                                                }
+                                                else if (kvp.Value.ValueKind == System.Text.Json.JsonValueKind.True || kvp.Value.ValueKind == System.Text.Json.JsonValueKind.False)
+                                                {
+                                                    convertedValue = Convert.ChangeType(kvp.Value.GetBoolean(), targetType);
+                                                }
+
+                                                if (convertedValue != null)
+                                                {
+                                                    // Only override if current value is default/empty
+                                                    var currentVal = propInfo.GetValue(nrData);
+                                                    bool isDefault = false;
+                                                    
+                                                    if (currentVal == null) isDefault = true;
+                                                    else if (currentVal is int i && i == 0) isDefault = true;
+                                                    else if (currentVal is double d && d == 0) isDefault = true;
+                                                    else if (currentVal is string s && string.IsNullOrEmpty(s)) isDefault = true;
+
+                                                    if (isDefault)
+                                                    {
+                                                        propInfo.SetValue(nrData, convertedValue);
+                                                    }
+                                                }
+                                            }
+                                            catch { }
+                                        }
+                                    }
+                                }
+                            }
+                            catch { }
+                        }
+                        newNrDatas.Add(nrData);
+                    }
+
+                    if (newNrDatas.Any())
+                    {
+                        int chunkSize = 5000;
+                        for (int i = 0; i < newNrDatas.Count; i += chunkSize)
+                        {
+                            var chunk = newNrDatas.Skip(i).Take(chunkSize).ToList();
+                            await _context.NRDatas.AddRangeAsync(chunk);
+                            await _context.SaveChangesAsync();
+                            // Clear tracker to save memory during big inserts
+                            _context.ChangeTracker.Clear();
+                        }
+                    }
 
                     // Clean up temp table
                     await _context.TemporaryNrDatas.Where(x => x.ProjectId == projectId).ExecuteDeleteAsync();

@@ -18,7 +18,7 @@ namespace Tools.Models
         public string? NodalName { get; set; }
         public string? OtherFields { get; set; }
         public bool Status { get; set; } = true;
-        public double CentreSort { get; set; }
+        public double CenterSort { get; set; }
         public double NodalSort { get; set; }
     }
 }
