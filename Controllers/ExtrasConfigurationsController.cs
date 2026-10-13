@@ -72,16 +72,9 @@ namespace Tools.Controllers
                 .Where(e => e.ProjectId == projectId)
                 .ToListAsync();
 
-            if (extras == null || extras.Count == 0)
+            if (extras == null)
             {
-                return NotFound(new { message = $"No configurations found for ProjectId: {projectId}" });
-            }
-
-            // Log what's being returned
-            Console.WriteLine($" Returning {extras.Count} ExtrasConfiguration(s) for ProjectId {projectId}:");
-            foreach (var extra in extras)
-            {
-                Console.WriteLine($"   ID: {extra.Id}, ExtraType: {extra.ExtraType}, Mode: {extra.Mode}, nodalValue: {(string.IsNullOrEmpty(extra.nodalValue) ? "NULL/EMPTY" : "HAS DATA")}");
+                extras = new List<ExtrasConfiguration>();
             }
 
             return Ok(extras);

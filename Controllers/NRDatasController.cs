@@ -4404,68 +4404,258 @@ namespace Tools.Controllers
 
                
                 var catchNumbers = effectiveRows
-                    .Where(x => x.Id <= 0)
+                    .Where(x => HasMeaningfulText(x.CatchNo))
                     .Select(x => x.CatchNo!.Trim())
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .ToList();
 
-              
-                var query = _context.NRDatas
-                    .Where(x =>
-                        x.ProjectId == request.ProjectId &&
-                        (
-                            (ids.Any() && ids.Contains(x.Id)) ||
-                            (x.CatchNo != null && catchNumbers.Contains(x.CatchNo))
-                        ));
-
-                if (lotNo.HasValue)
-                {
-                    query = query.Where(x => x.LotNo == lotNo.Value);
-                }
-
-                var projectRows = await query.ToListAsync();
-
-                if (!projectRows.Any())
-                    return NotFound("No matching NRData rows found.");
-
-                
-                var rowById = projectRows.ToDictionary(x => x.Id);
-                var rowByCatch = projectRows
-                    .GroupBy(x => x.CatchNo!, StringComparer.OrdinalIgnoreCase)
-                    .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
-
-                var modelProperties = typeof(NRData)
-                    .GetProperties()
-                    .Where(p => p.Name != nameof(NRData.NRDatas) && !p.Name.Equals(nameof(NRData.Id), StringComparison.OrdinalIgnoreCase))
-                    .ToDictionary(p => p.Name.ToLower(), p => p);
+                var isNewModel = await _context.NrData1.AnyAsync(p => p.ProjectId == request.ProjectId);
 
                 int updatedCatchCount = 0;
                 int updatedRowCount = 0;
 
-
-//Comment
-                foreach (var item in effectiveRows)
+                if (isNewModel)
                 {
-                    List<NRData> matchingRows = new();
+                    var nr1Query = _context.NrData1
+                        .Where(x =>
+                            x.ProjectId == request.ProjectId && x.Status &&
+                            (
+                                (catchNumbers.Any() && x.CatchNo != null && catchNumbers.Contains(x.CatchNo)) ||
+                                (ids.Any() && ids.Contains(x.Id))
+                            ));
 
-                   
-                    if (item.Id > 0 && rowById.TryGetValue(item.Id, out var rowByIdMatch))
+                    if (lotNo.HasValue)
                     {
-                        matchingRows.Add(rowByIdMatch);
-                    }
-                    else
-                    {
-                        
-                        var trimmedCatchNo = item.CatchNo!.Trim();
-
-                        if (rowByCatch.TryGetValue(trimmedCatchNo, out var rows))
-                            matchingRows = rows;
+                        nr1Query = nr1Query.Where(x => x.LotNo == lotNo.Value);
                     }
 
-                    if (!matchingRows.Any())
-                        continue;
+                    var projectRowsNr1 = await nr1Query.ToListAsync();
 
-                    updatedCatchCount++;
+                    if (projectRowsNr1.Any())
+                    {
+                        var nr1ById = projectRowsNr1.ToDictionary(x => x.Id);
+                        var nr1ByCatch = projectRowsNr1
+                            .GroupBy(x => x.CatchNo!, StringComparer.OrdinalIgnoreCase)
+                            .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
+
+                        var modelPropertiesNr1 = typeof(NrData1)
+                            .GetProperties()
+                            .Where(p => p.Name != nameof(NrData1.NRDatas) && !p.Name.Equals(nameof(NrData1.Id), StringComparison.OrdinalIgnoreCase))
+                            .ToDictionary(p => p.Name.ToLower(), p => p);
+
+                        foreach (var item in effectiveRows)
+                        {
+                            List<NrData1> matchingRows = new();
+                            var trimmedCatchNo = item.CatchNo?.Trim();
+                            if (!string.IsNullOrEmpty(trimmedCatchNo) && nr1ByCatch.TryGetValue(trimmedCatchNo, out var rows))
+                            {
+                                matchingRows = rows;
+                            }
+                            else if (item.Id > 0 && nr1ById.TryGetValue(item.Id, out var rowByIdMatch))
+                            {
+                                matchingRows.Add(rowByIdMatch);
+                            }
+
+                            if (!matchingRows.Any())
+                                continue;
+
+                            updatedCatchCount++;
+
+                            foreach (var row in matchingRows)
+                            {
+                                try
+                                {
+                                    var dynamicFields = new Dictionary<string, object>();
+                                    var oldExamDate = row.ExamDate;
+                                    var oldDay = row.Day;
+                                    bool examDateUpdated = false;
+                                    string? newExamDate = null;
+                                    bool dayProvided = false;
+                                    string? payloadDay = null;
+
+                                    foreach (var field in item.AdditionalFields!)
+                                    {
+                                        var key = field.Key;
+                                        var valueStr = field.Value?.ToString()?.Trim();
+                                        if (string.IsNullOrWhiteSpace(valueStr))
+                                            continue;
+
+                                        var keyLower = key.ToLower();
+                                        if (!allowedFields.Contains(keyLower))
+                                            continue;
+
+                                        if (key.Equals(nameof(NrData1.ExamDate), StringComparison.OrdinalIgnoreCase))
+                                        {
+                                            examDateUpdated = true;
+                                            newExamDate = valueStr;
+                                        }
+
+                                        if (key.Equals(nameof(NrData1.Day), StringComparison.OrdinalIgnoreCase))
+                                        {
+                                            dayProvided = true;
+                                            payloadDay = valueStr;
+                                            continue;
+                                        }
+
+                                        if (modelPropertiesNr1.TryGetValue(keyLower, out var property))
+                                        {
+                                            try
+                                            {
+                                                object? convertedValue = null;
+                                                if (property.PropertyType == typeof(int) || property.PropertyType == typeof(int?))
+                                                {
+                                                    if (int.TryParse(valueStr, out int intVal))
+                                                        convertedValue = intVal;
+                                                }
+                                                else if (property.PropertyType == typeof(double))
+                                                {
+                                                    if (double.TryParse(valueStr, out double dblVal))
+                                                        convertedValue = dblVal;
+                                                }
+                                                else if (property.PropertyType == typeof(bool))
+                                                {
+                                                    if (bool.TryParse(valueStr, out bool boolVal))
+                                                        convertedValue = boolVal;
+                                                }
+                                                else
+                                                {
+                                                    convertedValue = valueStr;
+                                                }
+
+                                                if (convertedValue != null)
+                                                {
+                                                    property.SetValue(row, convertedValue);
+                                                }
+                                            }
+                                            catch
+                                            {
+                                                dynamicFields[key] = valueStr;
+                                            }
+                                        }
+                                        else
+                                        {
+                                            dynamicFields[key] = valueStr;
+                                        }
+                                    }
+
+                                    if (examDateUpdated)
+                                    {
+                                        row.ExamDate = newExamDate;
+                                        if (string.Equals(oldExamDate, newExamDate, StringComparison.OrdinalIgnoreCase) &&
+                                            dayProvided &&
+                                            string.Equals(oldDay, payloadDay, StringComparison.OrdinalIgnoreCase))
+                                        {
+                                        }
+                                        else if (dayProvided &&
+                                                 !string.Equals(oldDay, payloadDay, StringComparison.OrdinalIgnoreCase))
+                                        {
+                                            row.Day = payloadDay;
+                                        }
+                                        else
+                                        {
+                                            if (DateTime.TryParseExact(
+                                                    newExamDate,
+                                                    new[] { "dd-MM-yyyy", "dd/MM/yyyy", "yyyy-MM-dd" },
+                                                    CultureInfo.InvariantCulture,
+                                                    DateTimeStyles.None,
+                                                    out DateTime newDate))
+                                            {
+                                                row.Day = newDate.ToString("dddd", CultureInfo.InvariantCulture);
+                                            }
+                                        }
+                                    }
+                                    else if (dayProvided)
+                                    {
+                                        row.Day = payloadDay;
+                                    }
+
+                                    Dictionary<string, object> existingData;
+                                    if (!string.IsNullOrWhiteSpace(row.NRDatas))
+                                    {
+                                        try
+                                        {
+                                            existingData = System.Text.Json.JsonSerializer
+                                                .Deserialize<Dictionary<string, object>>(row.NRDatas)
+                                                ?? new Dictionary<string, object>();
+                                        }
+                                        catch
+                                        {
+                                            existingData = new Dictionary<string, object>();
+                                        }
+                                    }
+                                    else
+                                    {
+                                        existingData = new Dictionary<string, object>();
+                                    }
+
+                                    foreach (var kv in dynamicFields)
+                                        existingData[kv.Key] = kv.Value;
+
+                                    row.NRDatas = System.Text.Json.JsonSerializer.Serialize(existingData);
+                                    updatedRowCount++;
+                                }
+                                catch (Exception ex)
+                                {
+                                    await _loggerService.LogErrorAsync(
+                                        $"Failed to update CatchNo {item.CatchNo} in NrData1",
+                                        ex.Message,
+                                        nameof(NRDatasController));
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (!isNewModel)
+                {
+                    var query = _context.NRDatas
+                        .Where(x =>
+                            x.ProjectId == request.ProjectId &&
+                            (
+                                (ids.Any() && ids.Contains(x.Id)) ||
+                                (catchNumbers.Any() && x.CatchNo != null && catchNumbers.Contains(x.CatchNo))
+                            ));
+
+                    if (lotNo.HasValue)
+                    {
+                        query = query.Where(x => x.LotNo == lotNo.Value);
+                    }
+
+                    var projectRows = await query.ToListAsync();
+
+                    if (!projectRows.Any() && updatedRowCount == 0)
+                        return NotFound("No matching NRData rows found.");
+
+                    if (projectRows.Any())
+                    {
+                        var rowById = projectRows.ToDictionary(x => x.Id);
+                        var rowByCatch = projectRows
+                            .GroupBy(x => x.CatchNo!, StringComparer.OrdinalIgnoreCase)
+                            .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
+
+                        var modelProperties = typeof(NRData)
+                            .GetProperties()
+                            .Where(p => p.Name != nameof(NRData.NRDatas) && !p.Name.Equals(nameof(NRData.Id), StringComparison.OrdinalIgnoreCase))
+                            .ToDictionary(p => p.Name.ToLower(), p => p);
+
+                        foreach (var item in effectiveRows)
+                        {
+                            List<NRData> matchingRows = new();
+                            var trimmedCatchNo = item.CatchNo?.Trim();
+                            if (!string.IsNullOrEmpty(trimmedCatchNo) && rowByCatch.TryGetValue(trimmedCatchNo, out var rows))
+                            {
+                                matchingRows = rows;
+                            }
+                            else if (item.Id > 0 && rowById.TryGetValue(item.Id, out var rowByIdMatch))
+                            {
+                                matchingRows.Add(rowByIdMatch);
+                            }
+
+                            if (!matchingRows.Any())
+                                continue;
+
+                            updatedCatchCount++;
+
 
                     foreach (var row in matchingRows)
                     {
@@ -4633,9 +4823,12 @@ namespace Tools.Controllers
                         }
                     }
                 }
+            }
+        }
 
-                if (updatedRowCount == 0)
-                    return NotFound("No matching NRData rows found to update.");
+            if (updatedRowCount == 0)
+                return NotFound("No matching NRData rows found to update.");
+
 
                 await _context.SaveChangesAsync();
 

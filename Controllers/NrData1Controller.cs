@@ -763,6 +763,17 @@ namespace Tools.Controllers
             return Ok(centers);
         }
 
+        // GET: api/NrData1/center-debug/5
+        [HttpGet("center-debug/{projectId}")]
+        public async Task<ActionResult> GetCenterDebug(int projectId)
+        {
+            var centers = await _context.CenterList
+                .Where(c => c.ProjectId == projectId && c.Status)
+                .ToListAsync();
+            return Ok(centers);
+        }
+
+
         // POST: api/NrData1
         [HttpPost]
         [HttpPost("PostNRData")]
@@ -1017,8 +1028,16 @@ namespace Tools.Controllers
                     }
                
                     // Build CenterList record
-                    bool isExtraRow = !string.IsNullOrWhiteSpace(itemCenterCode) && extraTypesByName.ContainsKey(itemCenterCode.Trim());
-                    int? extraTypeId = isExtraRow ? extraTypesByName[itemCenterCode.Trim()] : null;
+                    string itemRemark = "";
+                    if (centerExtraData.TryGetValue("Remark", out var remVal)) itemRemark = remVal;
+                    else if (uniqueExtraData.TryGetValue("Remark", out var uremVal)) itemRemark = uremVal;
+
+                    bool isReserveRemark = !string.IsNullOrWhiteSpace(itemRemark) &&
+                        (itemRemark.Contains("Reserve", StringComparison.OrdinalIgnoreCase) ||
+                         itemRemark.Contains("Extra", StringComparison.OrdinalIgnoreCase));
+
+                    bool isExtraRow = (!string.IsNullOrWhiteSpace(itemCenterCode) && extraTypesByName.ContainsKey(itemCenterCode.Trim())) || isReserveRemark;
+                    int? extraTypeId = isReserveRemark ? 1 : (isExtraRow ? extraTypesByName[itemCenterCode.Trim()] : null);
 
                     var centerList = new CenterList
                     {
@@ -1038,7 +1057,14 @@ namespace Tools.Controllers
                         }
                     }
 
-                    if (!isExtraRow)
+                    if (isReserveRemark && centerList.Quantity <= 0 && itemQty > 0)
+                    {
+                        centerList.Quantity = itemQty;
+                        centerList.NRQuantity = itemQty;
+                    }
+
+                    // Reserve centers are associated with a specific center code and must be saved in catchGroup.Centers
+                    if (!isExtraRow || isReserveRemark)
                     {
                         catchGroup.Centers.Add(centerList);
                     }
@@ -2339,7 +2365,11 @@ namespace Tools.Controllers
                     .Where(c => c.ProjectId == ProjectId && nrDataIds.Contains(c.NRDataId) && c.ExtraId == 0 && c.Status)
                     .ToListAsync();
 
-                bool isOnlyReport = extraConfig.Any(c => c.IsExtraProcessingAsPerNR);
+                bool hasExistingExtraCenters = await _context.CenterList
+                    .AnyAsync(c => c.ProjectId == ProjectId && c.Status &&
+                        (c.ExtraId > 0 || (c.CenterData != null && (c.CenterData.Contains("Reserve") || c.CenterData.Contains("Extra"))) || (c.CenterSort > 0 && Math.Abs(c.CenterSort - Math.Round(c.CenterSort)) > 0.001)));
+
+                bool isOnlyReport = extraConfig.Any(c => c.IsExtraProcessingAsPerNR) || (!extraConfig.Any() && hasExistingExtraCenters);
                 var envelopesToUse = new List<ExtraEnvelopeReportDto>();
 
                 if (isOnlyReport)
@@ -2349,32 +2379,286 @@ namespace Tools.Controllers
                         .ToListAsync();
 
                     if (!extraCenters.Any())
-                        return BadRequest("No existing Extra Envelope data found in centerlist for report.");
-
-                    var extraCenterIds = extraCenters.Select(c => c.Id).ToList();
-                    var breakages = await _context.NewEnvelopeBreakages
-                        .Where(b => b.ProjectId == ProjectId && extraCenterIds.Contains(b.CenterListId) && b.Status)
-                        .ToListAsync();
-
-                    var nrLookup = nrDataList.ToDictionary(n => n.Id, n => n.CatchNo);
-
-                    foreach (var c in extraCenters)
                     {
-                        var b = breakages.FirstOrDefault(x => x.CenterListId == c.Id);
-                        nrLookup.TryGetValue(c.NRDataId, out var catchNo);
+                        var centersWithExtraName = await _context.CenterList
+                            .Where(c => c.ProjectId == ProjectId && c.Status && c.CenterCode != null)
+                            .ToListAsync();
 
-                        envelopesToUse.Add(new ExtraEnvelopeReportDto
+                        var matchedCenters = centersWithExtraName
+                            .Where(c => allExtraTypes.Any(et => !string.IsNullOrEmpty(et.Type) && c.CenterCode!.Contains(et.Type, StringComparison.OrdinalIgnoreCase)) ||
+                                        c.CenterCode!.Contains("Extra", StringComparison.OrdinalIgnoreCase))
+                            .ToList();
+
+                        if (matchedCenters.Any())
                         {
-                            CatchNo = catchNo,
-                            NodalCode = c.NodalCode,
-                            ExtraId = c.ExtraId,
-                            Quantity = c.Quantity > 0 ? c.Quantity : c.NRQuantity,
-                            InnerEnvelope = b?.InnerEnvelope,
-                            OuterEnvelope = b?.OuterEnvelope
-                        });
+                            foreach (var mc in matchedCenters)
+                            {
+                                if (mc.ExtraId == 0)
+                                {
+                                    var matchedType = allExtraTypes.FirstOrDefault(et =>
+                                        !string.IsNullOrEmpty(et.Type) && mc.CenterCode!.Contains(et.Type, StringComparison.OrdinalIgnoreCase));
+                                    mc.ExtraId = matchedType?.ExtraTypeId ?? 1;
+                                    _context.CenterList.Update(mc);
+                                }
+                            }
+                            await _context.SaveChangesAsync();
+                            extraCenters = matchedCenters;
+                        }
+                    }
+
+                    // Check for Option 2: Reserve Quantity rows specified in Remark column or decimal CenterSort
+                    if (!extraCenters.Any())
+                    {
+                        var potentialReserveCenters = await _context.CenterList
+                            .Where(c => c.ProjectId == ProjectId && nrDataIds.Contains(c.NRDataId) && c.Status)
+                            .ToListAsync();
+
+                        var matchedReserveCenters = new List<CenterList>();
+                        foreach (var c in potentialReserveCenters)
+                        {
+                            bool isReserve = false;
+                            int reserveQty = c.Quantity > 0 ? c.Quantity : c.NRQuantity;
+
+                            if (!string.IsNullOrWhiteSpace(c.CenterData))
+                            {
+                                try
+                                {
+                                    using var doc = JsonDocument.Parse(c.CenterData);
+                                    foreach (var prop in doc.RootElement.EnumerateObject())
+                                    {
+                                        string pName = prop.Name;
+                                        string pVal = prop.Value.ToString();
+
+                                        if (pName.Contains("Remark", StringComparison.OrdinalIgnoreCase) &&
+                                            pVal.Contains("Reserve", StringComparison.OrdinalIgnoreCase))
+                                        {
+                                            isReserve = true;
+                                        }
+
+                                        if (reserveQty <= 0 &&
+                                            (pName.Equals("Qty", StringComparison.OrdinalIgnoreCase) ||
+                                             pName.Equals("Quantity", StringComparison.OrdinalIgnoreCase) ||
+                                             pName.Contains("Reserve", StringComparison.OrdinalIgnoreCase)) &&
+                                            int.TryParse(pVal, out int parsedQty) && parsedQty > 0)
+                                        {
+                                            reserveQty = parsedQty;
+                                        }
+                                    }
+                                }
+                                catch { }
+                            }
+
+                            // Decimal CenterSort like 1.1 indicates a reserve center
+                            if (!isReserve && c.CenterSort > 0 && Math.Abs(c.CenterSort - Math.Round(c.CenterSort)) > 0.001)
+                            {
+                                isReserve = true;
+                            }
+
+                            if (isReserve)
+                            {
+                                if (c.ExtraId == 0)
+                                {
+                                    c.ExtraId = 1; // Default to Nodal Extra / Reserve
+                                }
+                                if (reserveQty > 0)
+                                {
+                                    c.Quantity = reserveQty;
+                                    c.NRQuantity = reserveQty;
+                                }
+                                _context.CenterList.Update(c);
+                                matchedReserveCenters.Add(c);
+                            }
+                        }
+
+                        if (matchedReserveCenters.Any())
+                        {
+                            await _context.SaveChangesAsync();
+                            extraCenters = matchedReserveCenters;
+                        }
+                    }
+
+                    if (extraCenters.Any())
+                    {
+                        var extraCenterIds = extraCenters.Select(c => c.Id).ToList();
+                        var breakages = await _context.NewEnvelopeBreakages
+                            .Where(b => b.ProjectId == ProjectId && extraCenterIds.Contains(b.CenterListId) && b.Status)
+                            .ToListAsync();
+
+                        // Ensure every extra center has NewEnvelopeBreakage & EnvelopeBreakage records for downstream processing
+                        var newBreakagesToInsert = new List<NewEnvelopeBreakage>();
+                        var legBreakagesToInsert = new List<EnvelopeBreakage>();
+
+                        var envConfigObj = extraConfig.FirstOrDefault(ec => ec.IsExtraProcessingAsPerNR)
+                            ?? extraConfig.FirstOrDefault();
+                        string? envJson = envConfigObj?.EnvelopeType ?? projectConfig?.Envelope;
+
+                        int outerCapacity = 30;
+                        int innerCapacity = 0;
+                        if (!string.IsNullOrWhiteSpace(envJson))
+                        {
+                            try
+                            {
+                                var envDict = JsonSerializer.Deserialize<Dictionary<string, string>>(envJson);
+                                if (envDict != null)
+                                {
+                                    if (envDict.TryGetValue("Outer", out var oVal))
+                                    {
+                                        var cleanO = oVal.Trim().ToUpper().Replace("E", "");
+                                        if (int.TryParse(cleanO, out int oCap) && oCap > 0) outerCapacity = oCap;
+                                    }
+                                    if (envDict.TryGetValue("Inner", out var iVal))
+                                    {
+                                        var cleanI = iVal.Trim().ToUpper().Replace("E", "");
+                                        if (int.TryParse(cleanI, out int iCap) && iCap > 0) innerCapacity = iCap;
+                                    }
+                                }
+                            }
+                            catch { }
+                        }
+
+                        foreach (var c in extraCenters)
+                        {
+                            var b = breakages.FirstOrDefault(x => x.CenterListId == c.Id);
+                            if (b == null)
+                            {
+                                int centerQty = c.Quantity > 0 ? c.Quantity : c.NRQuantity;
+                                if (centerQty <= 0) centerQty = outerCapacity;
+
+                                int totalEnv = 1;
+                                if (!string.IsNullOrWhiteSpace(c.CenterData))
+                                {
+                                    try
+                                    {
+                                        using var doc = JsonDocument.Parse(c.CenterData);
+                                        foreach (var prop in doc.RootElement.EnumerateObject())
+                                        {
+                                            if (prop.Name.Contains("Env", StringComparison.OrdinalIgnoreCase) ||
+                                                prop.Name.Contains("Total", StringComparison.OrdinalIgnoreCase))
+                                            {
+                                                if (int.TryParse(prop.Value.ToString(), out int parsedEnv) && parsedEnv > 0)
+                                                {
+                                                    totalEnv = parsedEnv;
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    catch { }
+                                }
+
+                                var innerBreakdown = new Dictionary<string, string>();
+                                var outerBreakdown = new Dictionary<string, string>();
+
+                                string outerKey = $"E{outerCapacity}";
+                                outerBreakdown[outerKey] = totalEnv.ToString();
+
+                                if (innerCapacity > 0)
+                                {
+                                    string innerKey = $"E{innerCapacity}";
+                                    innerBreakdown[innerKey] = totalEnv.ToString();
+                                }
+                                else
+                                {
+                                    innerBreakdown[outerKey] = totalEnv.ToString();
+                                }
+
+                                string innerStr = JsonSerializer.Serialize(innerBreakdown);
+                                string outerStr = JsonSerializer.Serialize(outerBreakdown);
+
+                                var newB = new NewEnvelopeBreakage
+                                {
+                                    ProjectId = ProjectId,
+                                    NrDataId = c.NRDataId,
+                                    CenterListId = c.Id,
+                                    InnerEnvelope = innerStr,
+                                    OuterEnvelope = outerStr,
+                                    TotalEnvelope = totalEnv,
+                                    Status = true
+                                };
+                                newBreakagesToInsert.Add(newB);
+
+                                var legB = new EnvelopeBreakage
+                                {
+                                    ProjectId = ProjectId,
+                                    NrDataId = c.NRDataId,
+                                    InnerEnvelope = innerStr,
+                                    OuterEnvelope = outerStr,
+                                    TotalEnvelope = totalEnv,
+                                    Status = true
+                                };
+                                legBreakagesToInsert.Add(legB);
+                            }
+                        }
+
+                        if (newBreakagesToInsert.Any())
+                        {
+                            await _context.NewEnvelopeBreakages.AddRangeAsync(newBreakagesToInsert);
+                            await _context.EnvelopeBreakages.AddRangeAsync(legBreakagesToInsert);
+                            await _context.SaveChangesAsync();
+
+                            breakages.AddRange(newBreakagesToInsert);
+                        }
+
+                        var nrLookup = nrDataList.ToDictionary(n => n.Id, n => n.CatchNo);
+
+                        foreach (var c in extraCenters)
+                        {
+                            var b = breakages.FirstOrDefault(x => x.CenterListId == c.Id);
+                            nrLookup.TryGetValue(c.NRDataId, out var catchNo);
+
+                            envelopesToUse.Add(new ExtraEnvelopeReportDto
+                            {
+                                CatchNo = catchNo,
+                                NodalCode = c.NodalCode,
+                                ExtraId = c.ExtraId,
+                                Quantity = c.Quantity > 0 ? c.Quantity : c.NRQuantity,
+                                InnerEnvelope = b?.InnerEnvelope,
+                                OuterEnvelope = b?.OuterEnvelope
+                            });
+                        }
+                    }
+                    else
+                    {
+                        // Check ExtrasEnvelope table as alternative storage from upload
+                        var extrasEnvelopeData = await _context.ExtrasEnvelope
+                            .Where(e => e.ProjectId == ProjectId && e.Status == 1)
+                            .ToListAsync();
+
+                        if (extrasEnvelopeData.Any())
+                        {
+                            foreach (var ex in extrasEnvelopeData)
+                            {
+                                envelopesToUse.Add(new ExtraEnvelopeReportDto
+                                {
+                                    CatchNo = ex.CatchNo,
+                                    NodalCode = ex.NodalCode,
+                                    ExtraId = ex.ExtraId,
+                                    Quantity = ex.Quantity,
+                                    InnerEnvelope = ex.InnerEnvelope,
+                                    OuterEnvelope = ex.OuterEnvelope
+                                });
+                            }
+                        }
+                    }
+
+                    if (!envelopesToUse.Any())
+                    {
+                        bool hasConfiguredCalculations = extraConfig.Any(c =>
+                            (!string.IsNullOrWhiteSpace(c.Value) && c.Value != "0") ||
+                            !string.IsNullOrWhiteSpace(c.nodalValue) ||
+                            !string.IsNullOrWhiteSpace(c.RangeConfig));
+
+                        if (!hasConfiguredCalculations)
+                        {
+                            return BadRequest("No existing Extra Envelope data found in CenterList or NR data. 'Extra Processing as per NR' requires extra packet rows (e.g., University Extra, Nodal Extra, or Reserve Quantity) to be present in the uploaded NR file. If your NR file does not contain extra rows, please uncheck 'Extra Processing as per NR' in Project Configuration, configure envelopes and quantities, and re-run.");
+                        }
+
+                        // If user has configured calculations, switch off isOnlyReport and proceed to calculation
+                        isOnlyReport = false;
                     }
                 }
-                else
+
+                if (!isOnlyReport)
                 {
                     if (!extraConfig.Any())
                         return BadRequest("No ExtraConfiguration found");
@@ -2788,7 +3072,7 @@ namespace Tools.Controllers
                 // Update steps for NrData1
                 foreach (var nr in nrDataList)
                 {
-                    nr.Steps = PipelineNavigator.GetNextStep(PipelineNavigator.STEP_ENV_BREAKING, projectConfig?.Modules);
+                    nr.Steps = PipelineNavigator.GetNextStep(PipelineNavigator.STEP_AWAITING_EXTRA, projectConfig?.Modules);
                     _context.NrData1.Update(nr);
                 }
 
@@ -2811,7 +3095,7 @@ namespace Tools.Controllers
                         x.CatchNo == extra.CatchNo);
 
                     var config = extraConfigs.FirstOrDefault(c => c.ExtraType == extra.ExtraId);
-                    if (baseRow == null || config == null) continue;
+                    if (baseRow == null || (!isOnlyReport && config == null)) continue;
 
                     var matchingCenter = existingCenters.FirstOrDefault(c => c.NRDataId == baseRow.Id && (!string.IsNullOrWhiteSpace(extra.NodalCode) && c.NodalCode == extra.NodalCode))
                         ?? existingCenters.FirstOrDefault(c => c.NRDataId == baseRow.Id);
@@ -2846,29 +3130,45 @@ namespace Tools.Controllers
                     dict["OuterEnvelope"] = extra.OuterEnvelope ?? "";
 
                     // Set CenterCode
-                    switch (extra.ExtraId)
+                    var matchingExtraCenter = await _context.CenterList
+                        .Where(c => c.ProjectId == ProjectId && c.NRDataId == baseRow.Id && c.ExtraId == extra.ExtraId && c.Status)
+                        .FirstOrDefaultAsync();
+
+                    if (matchingExtraCenter != null && !string.IsNullOrWhiteSpace(matchingExtraCenter.CenterCode) &&
+                        !matchingExtraCenter.CenterCode.Contains("Extra", StringComparison.OrdinalIgnoreCase))
                     {
-                        case 1:
-                            dict["CenterCode"] = "Nodal Extra";
-                            dict["NodalSort"] = baseNodalSort;
-                            dict["CenterSort"] = 10000;
-                            dict["RouteSort"] = baseRouteSort;
-                            break;
-                        case 2:
-                            dict["CenterCode"] = "University Extra";
-                            dict["NodalSort"] = 10000;
-                            dict["CenterSort"] = 100000;
-                            dict["RouteSort"] = 10000;
-                            break;
-                        case 3:
-                            dict["CenterCode"] = "Office Extra";
-                            dict["NodalSort"] = 100000;
-                            dict["CenterSort"] = 1000000;
-                            dict["RouteSort"] = 100000;
-                            break;
-                        default:
-                            dict["CenterCode"] = "Extra";
-                            break;
+                        dict["CenterCode"] = matchingExtraCenter.CenterCode;
+                        dict["CenterSort"] = matchingExtraCenter.CenterSort;
+                        dict["NodalSort"] = matchingExtraCenter.NodalSort > 0 ? matchingExtraCenter.NodalSort : baseNodalSort;
+                        dict["RouteSort"] = matchingExtraCenter.RouteSort > 0 ? matchingExtraCenter.RouteSort : baseRouteSort;
+                        dict["Remark"] = "Reserve Quantity";
+                    }
+                    else
+                    {
+                        switch (extra.ExtraId)
+                        {
+                            case 1:
+                                dict["CenterCode"] = "Nodal Extra";
+                                dict["NodalSort"] = baseNodalSort;
+                                dict["CenterSort"] = 10000;
+                                dict["RouteSort"] = baseRouteSort;
+                                break;
+                            case 2:
+                                dict["CenterCode"] = "University Extra";
+                                dict["NodalSort"] = 10000;
+                                dict["CenterSort"] = 100000;
+                                dict["RouteSort"] = 10000;
+                                break;
+                            case 3:
+                                dict["CenterCode"] = "Office Extra";
+                                dict["NodalSort"] = 100000;
+                                dict["CenterSort"] = 1000000;
+                                dict["RouteSort"] = 100000;
+                                break;
+                            default:
+                                dict["CenterCode"] = "Extra";
+                                break;
+                        }
                     }
 
                     allRows.Add(dict);
@@ -2963,6 +3263,16 @@ namespace Tools.Controllers
                 ControllerContext = this.ControllerContext
             };
             return await boxController.ProcessBoxBreaking(ProjectId, LotNo ?? new List<int>(), skipReset, bypassDispatch, runBoth, batchNo);
+        }
+
+        [HttpPost("missing-data")]
+        public async Task<ActionResult> SaveMissingData([FromBody] NRDatasController.MissingDataSaveRequest request, [FromQuery] int? lotNo = null)
+        {
+            var legacy = new NRDatasController(_context, _loggerService, _apiSettings, _dispatchService)
+            {
+                ControllerContext = this.ControllerContext
+            };
+            return await legacy.SaveMissingData(request, lotNo);
         }
 
         #region Helper Models
