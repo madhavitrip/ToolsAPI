@@ -357,8 +357,10 @@ namespace Tools.Controllers
             // Calculated fields for quantity sheet (sourced directly from SP result)
             result.Add(new Dictionary<string, string> { ["value"] = "c.TotalCenters", ["label"] = "TotalCenters" });
             result.Add(new Dictionary<string, string> { ["value"] = "c.TotalNodal", ["label"] = "TotalNodal" });
+            result.Add(new Dictionary<string, string> { ["value"] = "c.TotalInnerEnvelope", ["label"] = "TotalInnerEnvelope" });
+            result.Add(new Dictionary<string, string> { ["value"] = "c.TotalEnvelope", ["label"] = "TotalEnvelope" });
 
-            // Virtual computed fields � not real columns, resolved to SQL expressions at report generation
+            // Virtual computed fields not real columns, resolved to SQL expressions at report generation
             result.Add(new Dictionary<string, string>
             {
                 ["value"] = "calc:BOX_RANGE",
