@@ -357,8 +357,10 @@ namespace Tools.Controllers
             // Calculated fields for quantity sheet (sourced directly from SP result)
             result.Add(new Dictionary<string, string> { ["value"] = "c.TotalCenters", ["label"] = "TotalCenters" });
             result.Add(new Dictionary<string, string> { ["value"] = "c.TotalNodal", ["label"] = "TotalNodal" });
+            result.Add(new Dictionary<string, string> { ["value"] = "c.TotalInnerEnvelope", ["label"] = "TotalInnerEnvelope" });
+            result.Add(new Dictionary<string, string> { ["value"] = "c.TotalEnvelope", ["label"] = "TotalEnvelope" });
 
-            // Virtual computed fields � not real columns, resolved to SQL expressions at report generation
+            // Virtual computed fields not real columns, resolved to SQL expressions at report generation
             result.Add(new Dictionary<string, string>
             {
                 ["value"] = "calc:BOX_RANGE",
@@ -1033,7 +1035,8 @@ namespace Tools.Controllers
                         t.TemplateId,
                         t.TemplateName,
                         t.Version,
-                        t.SubName
+                        t.SubName,
+                        t.ModuleIds
                     })
                     .ToListAsync();
 
@@ -1057,7 +1060,8 @@ namespace Tools.Controllers
                         t.TemplateId,
                         t.TemplateName,
                         t.Version,
-                        t.SubName
+                        t.SubName,
+                        t.ModuleIds
                     })
                     .ToListAsync();
 
@@ -1073,7 +1077,8 @@ namespace Tools.Controllers
                         t.TemplateId,
                         t.TemplateName,
                         t.Version,
-                        t.SubName
+                        t.SubName,
+                        t.ModuleIds
                     })
                     .ToListAsync();
 
@@ -1101,7 +1106,8 @@ namespace Tools.Controllers
                         t.TemplateId,
                         t.TemplateName,
                         t.Version,
-                        t.SubName
+                        t.SubName,
+                        t.ModuleIds
                     })
                     .ToListAsync();
 
@@ -1117,7 +1123,8 @@ namespace Tools.Controllers
                         t.TemplateId,
                         t.TemplateName,
                         t.Version,
-                        t.SubName
+                        t.SubName,
+                        t.ModuleIds
                     })
                     .ToListAsync();
 
@@ -1353,7 +1360,7 @@ namespace Tools.Controllers
                     };
                     _context.MRPTTemplates.Add(newTemplate);
                     await _context.SaveChangesAsync();
-                    imported.Add(new { newTemplate.TemplateId, newTemplate.TemplateName, newTemplate.Version });
+                    imported.Add(new { newTemplate.TemplateId, newTemplate.TemplateName, newTemplate.SubName, newTemplate.Version, newTemplate.ModuleIds });
                 }
                 else
                 {
@@ -1407,7 +1414,7 @@ namespace Tools.Controllers
                         }
                     }
 
-                    imported.Add(new { newTemplate.TemplateId, newTemplate.TemplateName, newTemplate.Version });
+                    imported.Add(new { newTemplate.TemplateId, newTemplate.TemplateName, newTemplate.SubName, newTemplate.Version, newTemplate.ModuleIds });
                 }
             }
 
@@ -1553,7 +1560,7 @@ namespace Tools.Controllers
                             await _context.SaveChangesAsync();
                         }
 
-                        promoted.Add(new { newTemplate.TemplateId, newTemplate.TemplateName, newTemplate.Version });
+                        promoted.Add(new { newTemplate.TemplateId, newTemplate.TemplateName, newTemplate.SubName, newTemplate.Version, newTemplate.ModuleIds });
                     }
 
                     await transaction.CommitAsync();
