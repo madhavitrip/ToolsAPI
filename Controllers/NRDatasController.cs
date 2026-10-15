@@ -696,6 +696,13 @@ namespace Tools.Controllers
                 return BadRequest("fieldName and value are required.");
             }
 
+            var isNewModel = await _context.NrData1.AnyAsync(p => p.ProjectId == projectId);
+            if (isNewModel)
+            {
+                var nr1 = new NrData1Controller(_context, _loggerService, _apiSettings, _dispatchService) { ControllerContext = this.ControllerContext };
+                return await nr1.CheckValueExists(projectId, fieldName, value, lotNo);
+            }
+
             var normalizedValue = value.Trim().ToLowerInvariant();
 
             // 1. Check if standard property
@@ -823,6 +830,13 @@ namespace Tools.Controllers
         [HttpPost("merge-catchnos")]
         public async Task<ActionResult> MergeCatchNos(int ProjectId, [FromBody] MergeCatchNoRequest request, [FromQuery] int? lotNo = null)
         {
+            var isNewModel = await _context.NrData1.AnyAsync(p => p.ProjectId == ProjectId);
+            if (isNewModel)
+            {
+                var nr1 = new NrData1Controller(_context, _loggerService, _apiSettings, _dispatchService) { ControllerContext = this.ControllerContext };
+                return await nr1.MergeCatchNos(ProjectId, request, lotNo);
+            }
+
             if (request == null)
             {
                 return BadRequest("Please select at least 2 catch numbers to merge.");
@@ -1368,7 +1382,15 @@ namespace Tools.Controllers
                 var existingRecord = await _context.NRDatas.FindAsync(id);
 
                 if (existingRecord == null)
+                {
+                    var centerRecord = await _context.CenterList.FindAsync(id);
+                    if (centerRecord != null || await _context.NrData1.AnyAsync(n => n.Id == id))
+                    {
+                        var nr1 = new NrData1Controller(_context, _loggerService, _apiSettings, _dispatchService) { ControllerContext = this.ControllerContext };
+                        return await nr1.UpdateSingle(id, inputData, lotNo);
+                    }
                     return NotFound($"NRData with ID {id} not found");
+                }
 
                 if (lotNo.HasValue && existingRecord.LotNo != lotNo.Value)
                 {
@@ -1884,7 +1906,15 @@ namespace Tools.Controllers
                 var records = await query.ToListAsync();
 
                 if (!records.Any())
+                {
+                    var isNewModel = await _context.NrData1.AnyAsync(x => x.CatchNo == catchNo && (projectId == 0 || x.ProjectId == projectId) && x.Status);
+                    if (isNewModel)
+                    {
+                        return await UpdateCatchwiseNrData1(catchNo, inputData, lotNo, projectId, transaction);
+                    }
+
                     return NotFound($"No active NRData records found for catch {catchNo}");
+                }
 
                 var firstRecord = records.First();
                 var existingRecord = firstRecord;
@@ -2130,6 +2160,285 @@ namespace Tools.Controllers
                 await transaction.RollbackAsync();
                 return StatusCode(500, ex.Message);
             }
+        }
+
+        private async Task<IActionResult> UpdateCatchwiseNrData1(string catchNo, JsonElement inputData, int? lotNo, int projectId, Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction transaction)
+        {
+            var nr1Query = _context.NrData1
+                .Where(x => x.CatchNo == catchNo && (projectId == 0 || x.ProjectId == projectId) && x.Status);
+
+            if (lotNo.HasValue)
+            {
+                nr1Query = nr1Query.Where(x => x.LotNo == lotNo.Value);
+            }
+
+            var nr1Records = await nr1Query.ToListAsync();
+            if (!nr1Records.Any())
+                return NotFound($"No active NrData1 records found for catch {catchNo}");
+
+            var firstRecord = nr1Records.First();
+            if (projectId == 0) projectId = firstRecord.ProjectId;
+
+            var nr1Properties = typeof(NrData1)
+                .GetProperties()
+                .ToDictionary(p => p.Name.ToLower(), p => p);
+
+            var centerProperties = typeof(CenterList)
+                .GetProperties()
+                .ToDictionary(p => p.Name.ToLower(), p => p);
+
+            static string NormalizeKey(string key) =>
+                string.IsNullOrWhiteSpace(key)
+                    ? string.Empty
+                    : key.Replace(" ", "").ToLowerInvariant();
+
+            var uniqueFieldsFromDb = await _context.Fields
+                .Where(f => f.IsUnique)
+                .Select(f => f.Name)
+                .ToListAsync();
+
+            var normalizedUniqueFields = new HashSet<string>(
+                uniqueFieldsFromDb.Select(NormalizeKey)
+            );
+
+            var extraData = new Dictionary<string, string>();
+            var centerUpdates = new Dictionary<string, string>();
+            var changedFields = new List<string>();
+
+            Dictionary<string, string> existingExtraData = new();
+            if (!string.IsNullOrWhiteSpace(firstRecord.NRDatas))
+            {
+                try
+                {
+                    existingExtraData = JsonSerializer.Deserialize<Dictionary<string, string>>(firstRecord.NRDatas) ?? new();
+                }
+                catch { }
+            }
+
+            bool hasUniqueFieldsEdited = false;
+
+            foreach (var prop in inputData.EnumerateObject())
+            {
+                string key = NormalizeKey(prop.Name);
+                string value = prop.Value.ToString();
+
+                if (key == "id" || key == "projectid")
+                    continue;
+
+                if (nr1Properties.TryGetValue(key, out var propInfo))
+                {
+                    var currentValue = propInfo.GetValue(firstRecord)?.ToString() ?? "";
+                    if (currentValue != value)
+                    {
+                        changedFields.Add(key);
+                        if (normalizedUniqueFields.Contains(key))
+                        {
+                            hasUniqueFieldsEdited = true;
+                        }
+                    }
+                }
+                else if (centerProperties.TryGetValue(key, out var cpInfo))
+                {
+                    changedFields.Add(key);
+                    centerUpdates[prop.Name] = value;
+                    if (normalizedUniqueFields.Contains(key))
+                    {
+                        hasUniqueFieldsEdited = true;
+                    }
+                }
+                else
+                {
+                    var matchedKey = existingExtraData.Keys.FirstOrDefault(k => NormalizeKey(k) == key);
+                    var currentDynamicValue = matchedKey != null ? existingExtraData[matchedKey] ?? "" : "";
+                    if (currentDynamicValue != value)
+                    {
+                        changedFields.Add(key);
+                        extraData[prop.Name] = value;
+                        if (normalizedUniqueFields.Contains(key))
+                        {
+                            hasUniqueFieldsEdited = true;
+                        }
+                    }
+                }
+            }
+
+            // Apply updates to all NrData1 records for this catch
+            foreach (var record in nr1Records)
+            {
+                foreach (var prop in inputData.EnumerateObject())
+                {
+                    string key = NormalizeKey(prop.Name);
+                    string value = prop.Value.ToString();
+
+                    if (key == "id" || key == "projectid")
+                        continue;
+
+                    if (nr1Properties.TryGetValue(key, out var propInfo))
+                    {
+                        var targetType = Nullable.GetUnderlyingType(propInfo.PropertyType) ?? propInfo.PropertyType;
+                        object? convertedValue;
+                        if (string.IsNullOrWhiteSpace(value))
+                        {
+                            convertedValue = Nullable.GetUnderlyingType(propInfo.PropertyType) != null || !propInfo.PropertyType.IsValueType
+                                ? null
+                                : Activator.CreateInstance(targetType);
+                        }
+                        else
+                        {
+                            convertedValue = Convert.ChangeType(value, targetType);
+                        }
+
+                        propInfo.SetValue(record, convertedValue);
+                    }
+                }
+
+                if (extraData.Any())
+                {
+                    Dictionary<string, string> recordExtraData = new();
+                    if (!string.IsNullOrWhiteSpace(record.NRDatas))
+                    {
+                        try
+                        {
+                            recordExtraData = JsonSerializer.Deserialize<Dictionary<string, string>>(record.NRDatas) ?? new();
+                        }
+                        catch { }
+                    }
+
+                    foreach (var kv in extraData)
+                    {
+                        var matchedKey = recordExtraData.Keys
+                            .FirstOrDefault(k => NormalizeKey(k) == NormalizeKey(kv.Key))
+                            ?? kv.Key;
+
+                        recordExtraData[matchedKey] = kv.Value;
+                    }
+
+                    record.NRDatas = JsonSerializer.Serialize(recordExtraData);
+                }
+
+                _context.NrData1.Update(record);
+            }
+
+            if (centerUpdates.Any())
+            {
+                var nr1Ids = nr1Records.Select(r => r.Id).ToList();
+                var centers = await _context.CenterList
+                    .Where(c => nr1Ids.Contains(c.NRDataId) && c.Status)
+                    .ToListAsync();
+
+                foreach (var center in centers)
+                {
+                    foreach (var kv in centerUpdates)
+                    {
+                        string key = NormalizeKey(kv.Key);
+                        if (centerProperties.TryGetValue(key, out var cpInfo))
+                        {
+                            var targetType = Nullable.GetUnderlyingType(cpInfo.PropertyType) ?? cpInfo.PropertyType;
+                            object? convertedValue;
+                            if (string.IsNullOrWhiteSpace(kv.Value))
+                            {
+                                convertedValue = Nullable.GetUnderlyingType(cpInfo.PropertyType) != null || !cpInfo.PropertyType.IsValueType
+                                    ? null
+                                    : Activator.CreateInstance(targetType);
+                            }
+                            else
+                            {
+                                convertedValue = Convert.ChangeType(kv.Value, targetType);
+                            }
+                            cpInfo.SetValue(center, convertedValue);
+                        }
+                    }
+                    _context.CenterList.Update(center);
+                }
+            }
+
+            // Reset pipeline steps if criteria fields changed
+            var config = await _context.ProjectConfigs
+                .FirstOrDefaultAsync(c => c.ProjectId == projectId);
+
+            var allFields = await _context.Fields.ToListAsync();
+
+            var envelopeFieldNames = allFields
+                .Where(f => (config?.EnvelopeMakingCriteria ?? new List<int>()).Contains(f.FieldId))
+                .Select(f => NormalizeKey(f.Name))
+                .ToHashSet();
+
+            var boxFieldIds = new List<int>();
+            if (config != null)
+            {
+                boxFieldIds.AddRange(config.BoxBreakingCriteria ?? new List<int>());
+                boxFieldIds.AddRange(config.SortingBoxReport ?? new List<int>());
+                boxFieldIds.AddRange(config.InnerBundlingCriteria ?? new List<int>());
+                boxFieldIds.AddRange(config.DuplicateRemoveFields ?? new List<int>());
+            }
+
+            var boxFieldNames = allFields
+                .Where(f => boxFieldIds.Contains(f.FieldId))
+                .Select(f => NormalizeKey(f.Name))
+                .ToHashSet();
+
+            bool envelopeFieldAffected = changedFields.Any(f => envelopeFieldNames.Contains(f));
+            bool boxFieldAffected = changedFields.Any(f => boxFieldNames.Contains(f));
+
+            var requiredLabelFields = await GetRequiredLabelFields(projectId);
+            bool labelFieldAffected = changedFields.Any(f => requiredLabelFields.Any(rf => NormalizeKey(rf) == f));
+            bool isBothSerialsPositive = config != null && config.OmrSerialNumber > 0 && (config.BookletSerialNumber ?? 0) > 0;
+            bool resetBookletSerial = config?.ResetBookletSerialOnCatchChange ?? false;
+            int resetStep = (isBothSerialsPositive && !resetBookletSerial) ? 4 : 5;
+
+            if (envelopeFieldAffected || boxFieldAffected || labelFieldAffected)
+            {
+                int targetStep = envelopeFieldAffected ? 4 : resetStep;
+
+                foreach (var row in nr1Records)
+                {
+                    if (row.Steps > targetStep)
+                    {
+                        row.Steps = targetStep;
+                        _context.NrData1.Update(row);
+                    }
+                }
+
+                if (firstRecord.LotNo >= 0)
+                {
+                    await _context.NrData1
+                        .Where(x => x.ProjectId == projectId && x.LotNo == firstRecord.LotNo && (string.IsNullOrWhiteSpace(catchNo) || x.CatchNo != catchNo) && x.Status && x.Steps > resetStep)
+                        .ExecuteUpdateAsync(s => s.SetProperty(x => x.Steps, resetStep));
+                }
+            }
+
+            bool pagesChanged = changedFields.Contains("pages");
+            if (pagesChanged && firstRecord.LotNo > 0)
+            {
+                await _context.NrData1
+                    .Where(x => x.ProjectId == projectId && x.LotNo == firstRecord.LotNo && x.Status && x.Steps == 6)
+                    .ExecuteUpdateAsync(s => s.SetProperty(x => x.Steps, 5));
+
+                foreach (var record in nr1Records)
+                {
+                    if (record.Steps == 6)
+                    {
+                        record.Steps = 5;
+                    }
+                }
+            }
+
+            await _context.SaveChangesAsync();
+            await transaction.CommitAsync();
+
+            if (changedFields.Any() && projectId > 0)
+            {
+                await _templateRegenerationService.HandleFieldChangeAndRegenerateTemplates(
+                    projectId,
+                    changedFields
+                );
+            }
+
+            return Ok(new
+            {
+                message = "Data updated catchwise successfully",
+                data = firstRecord
+            });
         }
 
 
@@ -2551,6 +2860,13 @@ namespace Tools.Controllers
             try
             {
                 int projectId = inputData.GetProperty("projectId").GetInt32();
+                var isNewModel = await _context.NrData1.AnyAsync(p => p.ProjectId == projectId);
+                if (isNewModel)
+                {
+                    var nr1 = new NrData1Controller(_context, _loggerService, _apiSettings, _dispatchService) { ControllerContext = this.ControllerContext };
+                    return await nr1.PostSingleCatch(inputData, lotNo);
+                }
+
                 var incomingDataArray = inputData.GetProperty("data");
 
                 if (incomingDataArray.GetArrayLength() == 0)
@@ -3196,11 +3512,26 @@ namespace Tools.Controllers
                 var rowIds = payload.RowIds ?? new List<int>();
                 if (rowIds.Any())
                 {
-                    var invalidRowsExist = await _context.NRDatas
-                        .AnyAsync(r => rowIds.Contains(r.Id) && r.LotNo != lotNo.Value);
-                    if (invalidRowsExist)
+                    var isNewModel = await _context.NrData1.AnyAsync(p => p.ProjectId == ProjectId);
+                    if (isNewModel)
                     {
-                        return BadRequest("One or more conflict records do not belong to the selected lot.");
+                        var invalidRowsExist = await (from c in _context.CenterList
+                                                      join nr in _context.NrData1 on c.NRDataId equals nr.Id
+                                                      where rowIds.Contains(c.Id) && nr.LotNo != lotNo.Value
+                                                      select c.Id).AnyAsync();
+                        if (invalidRowsExist)
+                        {
+                            return BadRequest("One or more conflict records do not belong to the selected lot.");
+                        }
+                    }
+                    else
+                    {
+                        var invalidRowsExist = await _context.NRDatas
+                            .AnyAsync(r => rowIds.Contains(r.Id) && r.LotNo != lotNo.Value);
+                        if (invalidRowsExist)
+                        {
+                            return BadRequest("One or more conflict records do not belong to the selected lot.");
+                        }
                     }
                 }
             }
@@ -4299,18 +4630,75 @@ namespace Tools.Controllers
 
             try
             {
-                var allRows = await _context.NRDatas
+                var isNewModel = await _context.NrData1.AnyAsync(p => p.ProjectId == projectId);
+                if (isNewModel)
+                {
+                    var allRows = await _context.NrData1
+                        .Where(x => x.ProjectId == projectId && x.Status && !string.IsNullOrEmpty(x.CatchNo))
+                        .ToListAsync();
+
+                    if (!allRows.Any())
+                    {
+                        return Ok(new List<object>());
+                    }
+
+                    var uniqueCatchData = new List<Dictionary<string, object>>();
+                    foreach (var row in allRows.GroupBy(x => x.CatchNo, StringComparer.OrdinalIgnoreCase).Select(group => group.First()).OrderBy(x => x.CatchNo))
+                    {
+                        var result = new Dictionary<string, object>
+                        {
+                            ["catchNo"] = row.CatchNo ?? ""
+                        };
+
+                        if (!string.IsNullOrWhiteSpace(row.NRDatas))
+                        {
+                            try
+                            {
+                                var nrDatasDict = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object>>(row.NRDatas);
+                                if (nrDatasDict != null)
+                                {
+                                    foreach (var kvp in nrDatasDict)
+                                    {
+                                        result[kvp.Key] = kvp.Value;
+                                    }
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                await _loggerService.LogErrorAsync(
+                                    $"Failed to parse NRDatas JSON for CatchNo {row.CatchNo}",
+                                    ex.Message,
+                                    nameof(NRDatasController));
+                            }
+                        }
+
+                        if (!string.IsNullOrWhiteSpace(row.ExamDate))
+                        {
+                            result["ExamDate"] = row.ExamDate;
+                        }
+                        if (!string.IsNullOrWhiteSpace(row.ExamTime))
+                        {
+                            result["ExamTime"] = row.ExamTime;
+                        }
+
+                        uniqueCatchData.Add(result);
+                    }
+
+                    return Ok(uniqueCatchData);
+                }
+
+                var allRowsLegacy = await _context.NRDatas
                     .Where(x => x.ProjectId == projectId && x.Status == true && !string.IsNullOrEmpty(x.CatchNo))
                     .ToListAsync();
 
-                if (!allRows.Any())
+                if (!allRowsLegacy.Any())
                 {
                     return Ok(new List<object>());
                 }
 
                 // Group by CatchNo and take first occurrence
-                var uniqueCatchData = new List<Dictionary<string, object>>();
-                foreach (var row in allRows.GroupBy(x => x.CatchNo, StringComparer.OrdinalIgnoreCase).Select(group => group.First()).OrderBy(x => x.CatchNo))
+                var uniqueCatchDataLegacy = new List<Dictionary<string, object>>();
+                foreach (var row in allRowsLegacy.GroupBy(x => x.CatchNo, StringComparer.OrdinalIgnoreCase).Select(group => group.First()).OrderBy(x => x.CatchNo))
                 {
                     var result = new Dictionary<string, object>
                     {
@@ -4350,10 +4738,10 @@ namespace Tools.Controllers
                         result["ExamTime"] = row.ExamTime;
                     }
 
-                    uniqueCatchData.Add(result);
+                    uniqueCatchDataLegacy.Add(result);
                 }
 
-                return Ok(uniqueCatchData);
+                return Ok(uniqueCatchDataLegacy);
             }
             catch (Exception ex)
             {
@@ -5375,6 +5763,15 @@ namespace Tools.Controllers
                     var nr1Data = await _context.NrData1.FindAsync(id);
                     if (nr1Data == null)
                     {
+                        var center = await _context.CenterList.FindAsync(id);
+                        if (center != null)
+                        {
+                            center.Status = false;
+                            _context.CenterList.Update(center);
+                            await _context.SaveChangesAsync();
+                            await _loggerService.LogEventAsync($"Soft deleted CenterList of {id}", "CenterList", LogHelper.GetTriggeredBy(User), center.ProjectId);
+                            return NoContent();
+                        }
                         return NotFound();
                     }
 
@@ -5650,109 +6047,205 @@ namespace Tools.Controllers
             page = page < 1 ? 1 : page;
             pageSize = pageSize <= 0 ? 20 : pageSize;
 
-            // Fetch one representative row for each distinct CatchNo
-            var query = _context.NRDatas
-                .Where(x =>
-                    x.ProjectId == projectId &&
-                    x.Status == true &&
-                    x.CatchNo != null
-                );
-
-            // Optional lot filter applied at DB level
-            if (!string.IsNullOrWhiteSpace(lotNo))
-            {
-                if (int.TryParse(lotNo, out int lotNoInt))
-                    query = query.Where(x => x.LotNo == lotNoInt);
-                else
-                    query = query.Where(x => false); // invalid lot → empty result
-            }
-
-            // Total unique catches with non-empty remarks for this project/lot
-            int totalCorrectionCatches = await query
-                .Where(x => x.Remarksss != null && x.Remarksss.Trim() != "")
-                .Select(x => x.CatchNo)
-                .Distinct()
-                .CountAsync();
-
-            // Filter for records with/without remarks (Correction filter)
-            bool? filterHasRemark = hasRemark ?? isCorrection;
-            if (filterHasRemark.HasValue)
-            {
-                if (filterHasRemark.Value)
-                    query = query.Where(x => x.Remarksss != null && x.Remarksss.Trim() != "");
-                else
-                    query = query.Where(x => x.Remarksss == null || x.Remarksss.Trim() == "");
-            }
-
-            var records = await query
-                .GroupBy(x => x.CatchNo)
-                .Select(g => g.First())
-                .ToListAsync();
-
+            var isNewModel = await _context.NrData1.AnyAsync(p => p.ProjectId == projectId);
+            int totalCorrectionCatches = 0;
             var result = new List<object>();
+            bool? filterHasRemark = hasRemark ?? isCorrection;
 
-            foreach (var nrData in records)
+            if (isNewModel)
             {
-                Dictionary<string, JsonElement> data = new();
+                var query1 = _context.NrData1
+                    .Where(x =>
+                        x.ProjectId == projectId &&
+                        x.Status &&
+                        x.CatchNo != null
+                    );
 
-                if (!string.IsNullOrWhiteSpace(nrData.NRDatas))
+                if (!string.IsNullOrWhiteSpace(lotNo))
                 {
-                    try
-                    {
-                        data =
-                            JsonSerializer.Deserialize<
-                                Dictionary<string, JsonElement>
-                            >(nrData.NRDatas)
-                            ?? new Dictionary<string, JsonElement>();
-                    }
-                    catch
-                    {
-                        data = new Dictionary<string, JsonElement>();
-                    }
+                    if (int.TryParse(lotNo, out int lotNoInt))
+                        query1 = query1.Where(x => x.LotNo == lotNoInt);
+                    else
+                        query1 = query1.Where(x => false);
                 }
 
-                string GetJsonValue(string key)
+                totalCorrectionCatches = await query1
+                    .Where(x => x.Remarksss != null && x.Remarksss.Trim() != "")
+                    .Select(x => x.CatchNo)
+                    .Distinct()
+                    .CountAsync();
+
+                if (filterHasRemark.HasValue)
                 {
-                    if (data.TryGetValue(key, out var value))
+                    if (filterHasRemark.Value)
+                        query1 = query1.Where(x => x.Remarksss != null && x.Remarksss.Trim() != "");
+                    else
+                        query1 = query1.Where(x => x.Remarksss == null || x.Remarksss.Trim() == "");
+                }
+
+                var records1 = await query1
+                    .GroupBy(x => x.CatchNo)
+                    .Select(g => g.First())
+                    .ToListAsync();
+
+                foreach (var nrData in records1)
+                {
+                    Dictionary<string, JsonElement> data = new();
+                    if (!string.IsNullOrWhiteSpace(nrData.NRDatas))
                     {
-                        return value.ValueKind == JsonValueKind.String
-                            ? value.GetString() ?? ""
-                            : value.ToString();
+                        try
+                        {
+                            data = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(nrData.NRDatas)
+                                ?? new Dictionary<string, JsonElement>();
+                        }
+                        catch
+                        {
+                            data = new Dictionary<string, JsonElement>();
+                        }
                     }
 
-                    return "";
+                    string GetJsonValue(string key)
+                    {
+                        if (data.TryGetValue(key, out var value))
+                        {
+                            return value.ValueKind == JsonValueKind.String
+                                ? value.GetString() ?? ""
+                                : value.ToString();
+                        }
+
+                        return "";
+                    }
+
+                    HeaderVerificationStatus verificationStatus = HeaderVerificationStatus.NotVerified;
+                    if (Enum.IsDefined(typeof(HeaderVerificationStatus), nrData.VerificationStatus))
+                    {
+                        verificationStatus = (HeaderVerificationStatus)nrData.VerificationStatus;
+                    }
+
+                    result.Add(new
+                    {
+                        id = nrData.Id,
+                        projectId = nrData.ProjectId,
+                        catchNo = nrData.CatchNo ?? "",
+                        lotNo = nrData.LotNo.ToString() ?? "",
+                        envLotNo = nrData.EnvLotNo.ToString() ?? "",
+                        A = GetJsonValue("A"),
+                        B = GetJsonValue("B"),
+                        C = GetJsonValue("C"),
+                        DynamicData = data.ToDictionary(kvp => kvp.Key, kvp => GetJsonValue(kvp.Key)),
+                        remark = nrData.Remarksss ?? "",
+                        date = nrData.ExamDate ?? "",
+                        time = nrData.ExamTime ?? "",
+                        status = (int)verificationStatus,
+                        statusLabel = verificationStatus.ToString(),
+                        verifiedBy = (int?)null,
+                        verifiedOn = (string?)null
+                    });
+                }
+            }
+            else
+            {
+                // Fetch one representative row for each distinct CatchNo
+                var query = _context.NRDatas
+                    .Where(x =>
+                        x.ProjectId == projectId &&
+                        x.Status == true &&
+                        x.CatchNo != null
+                    );
+
+                // Optional lot filter applied at DB level
+                if (!string.IsNullOrWhiteSpace(lotNo))
+                {
+                    if (int.TryParse(lotNo, out int lotNoInt))
+                        query = query.Where(x => x.LotNo == lotNoInt);
+                    else
+                        query = query.Where(x => false); // invalid lot → empty result
                 }
 
-                HeaderVerificationStatus verificationStatus =
-                    HeaderVerificationStatus.NotVerified;
+                // Total unique catches with non-empty remarks for this project/lot
+                totalCorrectionCatches = await query
+                    .Where(x => x.Remarksss != null && x.Remarksss.Trim() != "")
+                    .Select(x => x.CatchNo)
+                    .Distinct()
+                    .CountAsync();
 
-                // Use the database VerificationStatus column as the source of truth
-                if (Enum.IsDefined(typeof(HeaderVerificationStatus), nrData.VerificationStatus))
+                // Filter for records with/without remarks (Correction filter)
+                if (filterHasRemark.HasValue)
                 {
-                    verificationStatus = (HeaderVerificationStatus)nrData.VerificationStatus;
+                    if (filterHasRemark.Value)
+                        query = query.Where(x => x.Remarksss != null && x.Remarksss.Trim() != "");
+                    else
+                        query = query.Where(x => x.Remarksss == null || x.Remarksss.Trim() == "");
                 }
 
-                result.Add(new
+                var records = await query
+                    .GroupBy(x => x.CatchNo)
+                    .Select(g => g.First())
+                    .ToListAsync();
+
+                foreach (var nrData in records)
                 {
-                    id = nrData.Id,
-                    projectId = nrData.ProjectId,
-                    catchNo = nrData.CatchNo ?? "",
-                    lotNo = nrData.LotNo.ToString() ?? "",
-                    envLotNo = nrData.EnvLotNo.ToString() ?? "",
-                    A = GetJsonValue("A"),
-                    B = GetJsonValue("B"),
-                    C = GetJsonValue("C"),
-                    DynamicData = data.ToDictionary(kvp => kvp.Key, kvp => GetJsonValue(kvp.Key)),
-                    remark = nrData.Remarksss ?? "",
-                    date = nrData.ExamDate ?? "",
-                    time = nrData.ExamTime ?? "",
-                    status = (int)verificationStatus,
-                    statusLabel = verificationStatus.ToString(),
-                    verifiedBy = nrData.VerifiedBy > 0 ? nrData.VerifiedBy : null,
-                    verifiedOn = nrData.VerifiedOn.HasValue 
-                        ? nrData.VerifiedOn.Value.ToString("dd/MM/yyyy")
-                        : null
-                });
+                    Dictionary<string, JsonElement> data = new();
+
+                    if (!string.IsNullOrWhiteSpace(nrData.NRDatas))
+                    {
+                        try
+                        {
+                            data =
+                                JsonSerializer.Deserialize<
+                                    Dictionary<string, JsonElement>
+                                >(nrData.NRDatas)
+                                ?? new Dictionary<string, JsonElement>();
+                        }
+                        catch
+                        {
+                            data = new Dictionary<string, JsonElement>();
+                        }
+                    }
+
+                    string GetJsonValue(string key)
+                    {
+                        if (data.TryGetValue(key, out var value))
+                        {
+                            return value.ValueKind == JsonValueKind.String
+                                ? value.GetString() ?? ""
+                                : value.ToString();
+                        }
+
+                        return "";
+                    }
+
+                    HeaderVerificationStatus verificationStatus =
+                        HeaderVerificationStatus.NotVerified;
+
+                    // Use the database VerificationStatus column as the source of truth
+                    if (Enum.IsDefined(typeof(HeaderVerificationStatus), nrData.VerificationStatus))
+                    {
+                        verificationStatus = (HeaderVerificationStatus)nrData.VerificationStatus;
+                    }
+
+                    result.Add(new
+                    {
+                        id = nrData.Id,
+                        projectId = nrData.ProjectId,
+                        catchNo = nrData.CatchNo ?? "",
+                        lotNo = nrData.LotNo.ToString() ?? "",
+                        envLotNo = nrData.EnvLotNo.ToString() ?? "",
+                        A = GetJsonValue("A"),
+                        B = GetJsonValue("B"),
+                        C = GetJsonValue("C"),
+                        DynamicData = data.ToDictionary(kvp => kvp.Key, kvp => GetJsonValue(kvp.Key)),
+                        remark = nrData.Remarksss ?? "",
+                        date = nrData.ExamDate ?? "",
+                        time = nrData.ExamTime ?? "",
+                        status = (int)verificationStatus,
+                        statusLabel = verificationStatus.ToString(),
+                        verifiedBy = nrData.VerifiedBy > 0 ? nrData.VerifiedBy : null,
+                        verifiedOn = nrData.VerifiedOn.HasValue 
+                            ? nrData.VerifiedOn.Value.ToString("dd/MM/yyyy")
+                            : null
+                    });
+                }
             }
 
             // SEARCH
@@ -5981,7 +6474,7 @@ namespace Tools.Controllers
                 return Ok(new List<object>());
             }
 
-            var records = await _context.NRDatas
+            var nrRecords = await _context.NRDatas
                 .Where(x => x.Status == true && x.CatchNo != null && (
                     (x.Remarksss != null && x.Remarksss.Trim() != "") ||
                     x.VerificationStatus == (int)HeaderVerificationStatus.NotClear
@@ -5994,6 +6487,22 @@ namespace Tools.Controllers
                     IsReview = x.VerificationStatus == (int)HeaderVerificationStatus.NotClear
                 })
                 .ToListAsync();
+
+            var nr1Records = await _context.NrData1
+                .Where(x => x.Status && x.CatchNo != null && (
+                    (x.Remarksss != null && x.Remarksss.Trim() != "") ||
+                    x.VerificationStatus == (int)HeaderVerificationStatus.NotClear
+                ))
+                .Select(x => new
+                {
+                    x.ProjectId,
+                    x.CatchNo,
+                    HasRemark = x.Remarksss != null && x.Remarksss.Trim() != "",
+                    IsReview = x.VerificationStatus == (int)HeaderVerificationStatus.NotClear
+                })
+                .ToListAsync();
+
+            var records = nrRecords.Concat(nr1Records).ToList();
 
             var projectStats = records
                 .GroupBy(x => x.ProjectId)
@@ -6027,7 +6536,18 @@ namespace Tools.Controllers
                     x.Status == true
                 );
 
+            NrData1? selectedRecordNr1 = null;
             if (selectedRecord == null)
+            {
+                selectedRecordNr1 = await _context.NrData1
+                    .FirstOrDefaultAsync(x =>
+                        x.Id == id &&
+                        x.ProjectId == projectId &&
+                        x.Status
+                    );
+            }
+
+            if (selectedRecord == null && selectedRecordNr1 == null)
             {
                 return NotFound(
                     "Record not found, does not belong to this project, or is inactive."
@@ -6081,6 +6601,151 @@ namespace Tools.Controllers
                 return BadRequest(
                     "At least one of the fields must have a value to update the status."
                 );
+            }
+
+            // ---------------------------------------------------------
+            // 3. Handle NrData1 update if new model
+            // ---------------------------------------------------------
+
+            if (selectedRecordNr1 != null)
+            {
+                var catchRecords1 = await _context.NrData1
+                    .Where(x =>
+                        x.ProjectId == projectId &&
+                        x.CatchNo == selectedRecordNr1.CatchNo &&
+                        x.Status
+                    )
+                    .ToListAsync();
+
+                if (catchRecords1.Count == 0)
+                {
+                    return NotFound("No active records found for this catch.");
+                }
+
+                int userId1 = LogHelper.GetTriggeredBy(User);
+                int roleId1 = LogHelper.GetUserRoleId(User, Request);
+                bool canEditVerifiedFields1 = (roleId1 > 0 && roleId1 <= 4);
+                bool isAlreadyVerified1 = selectedRecordNr1.VerificationStatus == (int)HeaderVerificationStatus.Verified && !canEditVerifiedFields1;
+                if (isAlreadyVerified1)
+                {
+                    statusValue = (int)HeaderVerificationStatus.Verified;
+                }
+
+                bool hasRemark1 = updateModel.TryGetValue("remark", out var remObj1) || updateModel.TryGetValue("Remark", out remObj1);
+                string? newRemark1 = null;
+                if (hasRemark1 && remObj1 != null && !string.IsNullOrWhiteSpace(remObj1.ToString()))
+                {
+                    newRemark1 = remObj1.ToString();
+                }
+                bool hasStatus1 = updateModel.TryGetValue("status", out var statObj1) || updateModel.TryGetValue("Status", out statObj1);
+
+                foreach (var nrData in catchRecords1)
+                {
+                    bool statusIsChanging = false;
+                    if (!isAlreadyVerified1)
+                    {
+                        statusIsChanging = nrData.VerificationStatus != statusValue;
+                        nrData.VerificationStatus = statusValue;
+                    }
+
+                    if (hasRemark1)
+                    {
+                        nrData.Remarksss = newRemark1;
+                    }
+                    else if (hasStatus1 && statusIsChanging)
+                    {
+                        nrData.Remarksss = null;
+                    }
+
+                    Dictionary<string, JsonElement> data = new();
+                    if (!string.IsNullOrWhiteSpace(nrData.NRDatas))
+                    {
+                        try
+                        {
+                            data = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(nrData.NRDatas) ?? new Dictionary<string, JsonElement>();
+                        }
+                        catch
+                        {
+                            data = new Dictionary<string, JsonElement>();
+                        }
+                    }
+
+                    if (!isAlreadyVerified1)
+                    {
+                        data["VerificationStatus"] = JsonSerializer.SerializeToElement(statusValue);
+                    }
+
+                    if (hasRemark1)
+                    {
+                        data["Remark"] = JsonSerializer.SerializeToElement(newRemark1 ?? "");
+                    }
+                    else if (hasStatus1 && statusIsChanging)
+                    {
+                        data["Remark"] = JsonSerializer.SerializeToElement("");
+                    }
+
+                    if (!isAlreadyVerified1)
+                    {
+                        foreach (var kvp in updateModel)
+                        {
+                            if (string.Equals(kvp.Key, "status", StringComparison.OrdinalIgnoreCase) ||
+                                string.Equals(kvp.Key, "remark", StringComparison.OrdinalIgnoreCase) ||
+                                string.Equals(kvp.Key, "projectId", StringComparison.OrdinalIgnoreCase))
+                                continue;
+
+                            if (kvp.Value != null)
+                            {
+                                data[kvp.Key] = JsonSerializer.SerializeToElement(kvp.Value.ToString());
+                            }
+                        }
+                    }
+
+                    nrData.NRDatas = JsonSerializer.Serialize(data);
+                }
+
+                await _context.SaveChangesAsync();
+
+                Dictionary<string, JsonElement> selectedRecordData1 = new();
+                if (!string.IsNullOrWhiteSpace(selectedRecordNr1.NRDatas))
+                {
+                    try { selectedRecordData1 = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(selectedRecordNr1.NRDatas) ?? new(); } catch { }
+                }
+
+                string GetJsonVal1(string key)
+                {
+                    if (selectedRecordData1.TryGetValue(key, out var val))
+                    {
+                        return val.ValueKind == JsonValueKind.String ? val.GetString() ?? "" : val.ToString();
+                    }
+                    return "";
+                }
+
+                var updatedVerificationStatus1 = (HeaderVerificationStatus)selectedRecordNr1.VerificationStatus;
+                await _loggerService.LogEventAsync($"Updated HeaderVerification for CatchNo {selectedRecordNr1.CatchNo} (Status: {updatedVerificationStatus1}) in ProjectId {projectId}", "HeaderVerification", userId1, projectId);
+
+                return Ok(new
+                {
+                    message = "Record updated successfully",
+                    updatedRecord = new
+                    {
+                        id = selectedRecordNr1.Id,
+                        projectId = selectedRecordNr1.ProjectId,
+                        catchNo = selectedRecordNr1.CatchNo ?? "",
+                        lotNo = selectedRecordNr1.LotNo.ToString() ?? "",
+                        envLotNo = selectedRecordNr1.EnvLotNo.ToString() ?? "",
+                        A = GetJsonVal1("A"),
+                        B = GetJsonVal1("B"),
+                        C = GetJsonVal1("C"),
+                        DynamicData = selectedRecordData1.ToDictionary(kvp => kvp.Key, kvp => GetJsonVal1(kvp.Key)),
+                        remark = selectedRecordNr1.Remarksss ?? "",
+                        date = selectedRecordNr1.ExamDate ?? "",
+                        time = selectedRecordNr1.ExamTime ?? "",
+                        status = (int)updatedVerificationStatus1,
+                        statusLabel = updatedVerificationStatus1.ToString(),
+                        verifiedBy = (int?)null,
+                        verifiedOn = (string?)null
+                    }
+                });
             }
 
             // ---------------------------------------------------------
@@ -6341,6 +7006,41 @@ namespace Tools.Controllers
         {
             if (projectId <= 0)
                 return BadRequest("Invalid project ID.");
+
+            var isNewModel = await _context.NrData1.AnyAsync(p => p.ProjectId == projectId);
+            if (isNewModel)
+            {
+                var records1 = await _context.NrData1
+                    .Where(x => x.ProjectId == projectId && x.Status && x.VerificationStatus != (int)HeaderVerificationStatus.Verified)
+                    .ToListAsync();
+
+                if (records1.Count == 0)
+                    return Ok(new { updatedCount = 0, message = "All catches are already verified." });
+
+                foreach (var record in records1)
+                {
+                    record.VerificationStatus = (int)HeaderVerificationStatus.Verified;
+
+                    Dictionary<string, JsonElement> data = new();
+                    if (!string.IsNullOrWhiteSpace(record.NRDatas))
+                    {
+                        try
+                        {
+                            data = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(record.NRDatas)
+                                   ?? new Dictionary<string, JsonElement>();
+                        }
+                        catch
+                        {
+                            data = new Dictionary<string, JsonElement>();
+                        }
+                    }
+                    data["VerificationStatus"] = JsonSerializer.SerializeToElement((int)HeaderVerificationStatus.Verified);
+                    record.NRDatas = JsonSerializer.Serialize(data);
+                }
+
+                await _context.SaveChangesAsync();
+                return Ok(new { updatedCount = records1.Count, message = $"{records1.Count} catch(es) marked as Verified." });
+            }
 
             var records = await _context.NRDatas
                 .Where(x => x.ProjectId == projectId && x.Status == true && x.VerificationStatus != (int)HeaderVerificationStatus.Verified)
@@ -7063,12 +7763,49 @@ namespace Tools.Controllers
                     Console.WriteLine($"[CompareBatches] ProjectId={projectId}, Comparing all records (No Lot Filter)");
                 }
 
+                var isNewModel = await _context.NrData1.AnyAsync(p => p.ProjectId == projectId);
+
                 // Step 2: Base batch (Batch 1)
-                var baseBatchQuery = _context.NRDatas
-                    .Where(x =>
-                        x.ProjectId == projectId &&
-                        x.Batch == 1 &&
-                        x.Status);
+                IQueryable<NRData> baseBatchQuery = isNewModel
+                    ? (from nr in _context.NrData1
+                       join c in _context.CenterList on nr.Id equals c.NRDataId
+                       where nr.ProjectId == projectId && nr.Batch == 1 && nr.Status && c.Status
+                       select new NRData
+                       {
+                           Id = c.Id,
+                           ProjectId = nr.ProjectId,
+                           CatchNo = nr.CatchNo,
+                           CenterCode = c.CenterCode,
+                           ExamDate = nr.ExamDate,
+                           ExamTime = nr.ExamTime,
+                           SubjectName = nr.SubjectName,
+                           CourseName = nr.CourseName,
+                           NodalCode = c.NodalCode,
+                           NRQuantity = c.NRQuantity,
+                           Quantity = c.Quantity,
+                           Route = c.Route,
+                           Pages = nr.Pages,
+                           CenterSort = c.CenterSort,
+                           NodalSort = c.NodalSort,
+                           RouteSort = c.RouteSort,
+                           LotNo = nr.LotNo,
+                           EnvLotNo = nr.EnvLotNo,
+                           Batch = nr.Batch,
+                           NRDatas = nr.NRDatas,
+                           Day = nr.Day,
+                           District = c.District,
+                           DistrictSort = c.DistrictSort,
+                           NRDataId = nr.Id,
+                           Status = c.Status,
+                           Steps = nr.Steps,
+                           VerificationStatus = nr.VerificationStatus,
+                           Remarksss = nr.Remarksss
+                       })
+                    : _context.NRDatas
+                        .Where(x =>
+                            x.ProjectId == projectId &&
+                            x.Batch == 1 &&
+                            x.Status);
 
                 if (lotNo > 0)
                 {
@@ -7084,11 +7821,46 @@ namespace Tools.Controllers
                 }
 
                 // Step 3: Revised batch (compareBatch)
-                var selectedBatchAllQuery = _context.NRDatas
-                    .Where(x =>
-                        x.ProjectId == projectId &&
-                        x.Batch == compareBatch &&
-                        x.Status);
+                IQueryable<NRData> selectedBatchAllQuery = isNewModel
+                    ? (from nr in _context.NrData1
+                       join c in _context.CenterList on nr.Id equals c.NRDataId
+                       where nr.ProjectId == projectId && nr.Batch == compareBatch && nr.Status && c.Status
+                       select new NRData
+                       {
+                           Id = c.Id,
+                           ProjectId = nr.ProjectId,
+                           CatchNo = nr.CatchNo,
+                           CenterCode = c.CenterCode,
+                           ExamDate = nr.ExamDate,
+                           ExamTime = nr.ExamTime,
+                           SubjectName = nr.SubjectName,
+                           CourseName = nr.CourseName,
+                           NodalCode = c.NodalCode,
+                           NRQuantity = c.NRQuantity,
+                           Quantity = c.Quantity,
+                           Route = c.Route,
+                           Pages = nr.Pages,
+                           CenterSort = c.CenterSort,
+                           NodalSort = c.NodalSort,
+                           RouteSort = c.RouteSort,
+                           LotNo = nr.LotNo,
+                           EnvLotNo = nr.EnvLotNo,
+                           Batch = nr.Batch,
+                           NRDatas = nr.NRDatas,
+                           Day = nr.Day,
+                           District = c.District,
+                           DistrictSort = c.DistrictSort,
+                           NRDataId = nr.Id,
+                           Status = c.Status,
+                           Steps = nr.Steps,
+                           VerificationStatus = nr.VerificationStatus,
+                           Remarksss = nr.Remarksss
+                       })
+                    : _context.NRDatas
+                        .Where(x =>
+                            x.ProjectId == projectId &&
+                            x.Batch == compareBatch &&
+                            x.Status);
 
                 if (lotNo > 0)
                 {
@@ -7126,9 +7898,11 @@ namespace Tools.Controllers
                 // Step 4: Check if revised batch has any records in the date range
                 if (!selectedBatch.Any())
                 {
-                    var batchExists = await _context.NRDatas
-                        .Where(x => x.ProjectId == projectId && x.Batch == compareBatch && x.Status)
-                        .AnyAsync();
+                    var batchExists = isNewModel
+                        ? await _context.NrData1.AnyAsync(x => x.ProjectId == projectId && x.Batch == compareBatch && x.Status)
+                        : await _context.NRDatas
+                            .Where(x => x.ProjectId == projectId && x.Batch == compareBatch && x.Status)
+                            .AnyAsync();
 
                     if (!batchExists)
                         return NotFound(new { message = $"Batch {compareBatch} not found." });
@@ -8224,11 +8998,18 @@ namespace Tools.Controllers
             {
                 Console.WriteLine($"[GetComparisonFields] Starting for projectId: {projectId}");
 
+                var isNewModel = await _context.NrData1.AnyAsync(p => p.ProjectId == projectId);
+
                 // Get all NRData records for the project that have NRDatas content
-                var nrDataRecords = await _context.NRDatas
-                    .Where(x => x.ProjectId == projectId && x.NRDatas != null && x.NRDatas != "")
-                    .Select(x => x.NRDatas)
-                    .ToListAsync();
+                var nrDataRecords = isNewModel
+                    ? await _context.NrData1
+                        .Where(x => x.ProjectId == projectId && x.NRDatas != null && x.NRDatas != "")
+                        .Select(x => x.NRDatas)
+                        .ToListAsync()
+                    : await _context.NRDatas
+                        .Where(x => x.ProjectId == projectId && x.NRDatas != null && x.NRDatas != "")
+                        .Select(x => x.NRDatas)
+                        .ToListAsync();
 
                 Console.WriteLine($"[GetComparisonFields] Found {nrDataRecords.Count} records with NRDatas content");
 
@@ -8555,9 +9336,46 @@ namespace Tools.Controllers
                     endDate = parsedEndDate;
                 }
 
+                var isNewModel = await _context.NrData1.AnyAsync(p => p.ProjectId == projectId);
+
                 // Fetch Base Batch (Batch 1)
-                var baseBatchQuery = _context.NRDatas
-                    .Where(x => x.ProjectId == projectId && x.Batch == 1 && x.Status);
+                IQueryable<NRData> baseBatchQuery = isNewModel
+                    ? (from nr in _context.NrData1
+                       join c in _context.CenterList on nr.Id equals c.NRDataId
+                       where nr.ProjectId == projectId && nr.Batch == 1 && nr.Status && c.Status
+                       select new NRData
+                       {
+                           Id = c.Id,
+                           ProjectId = nr.ProjectId,
+                           CatchNo = nr.CatchNo,
+                           CenterCode = c.CenterCode,
+                           ExamDate = nr.ExamDate,
+                           ExamTime = nr.ExamTime,
+                           SubjectName = nr.SubjectName,
+                           CourseName = nr.CourseName,
+                           NodalCode = c.NodalCode,
+                           NRQuantity = c.NRQuantity,
+                           Quantity = c.Quantity,
+                           Route = c.Route,
+                           Pages = nr.Pages,
+                           CenterSort = c.CenterSort,
+                           NodalSort = c.NodalSort,
+                           RouteSort = c.RouteSort,
+                           LotNo = nr.LotNo,
+                           EnvLotNo = nr.EnvLotNo,
+                           Batch = nr.Batch,
+                           NRDatas = nr.NRDatas,
+                           Day = nr.Day,
+                           District = c.District,
+                           DistrictSort = c.DistrictSort,
+                           NRDataId = nr.Id,
+                           Status = c.Status,
+                           Steps = nr.Steps,
+                           VerificationStatus = nr.VerificationStatus,
+                           Remarksss = nr.Remarksss
+                       })
+                    : _context.NRDatas
+                        .Where(x => x.ProjectId == projectId && x.Batch == 1 && x.Status);
 
                 if (lotNo > 0)
                 {
@@ -8573,8 +9391,43 @@ namespace Tools.Controllers
                 }
 
                 // Fetch Comparison Batch
-                var selectedBatchAllQuery = _context.NRDatas
-                    .Where(x => x.ProjectId == projectId && x.Batch == compareBatch && x.Status);
+                IQueryable<NRData> selectedBatchAllQuery = isNewModel
+                    ? (from nr in _context.NrData1
+                       join c in _context.CenterList on nr.Id equals c.NRDataId
+                       where nr.ProjectId == projectId && nr.Batch == compareBatch && nr.Status && c.Status
+                       select new NRData
+                       {
+                           Id = c.Id,
+                           ProjectId = nr.ProjectId,
+                           CatchNo = nr.CatchNo,
+                           CenterCode = c.CenterCode,
+                           ExamDate = nr.ExamDate,
+                           ExamTime = nr.ExamTime,
+                           SubjectName = nr.SubjectName,
+                           CourseName = nr.CourseName,
+                           NodalCode = c.NodalCode,
+                           NRQuantity = c.NRQuantity,
+                           Quantity = c.Quantity,
+                           Route = c.Route,
+                           Pages = nr.Pages,
+                           CenterSort = c.CenterSort,
+                           NodalSort = c.NodalSort,
+                           RouteSort = c.RouteSort,
+                           LotNo = nr.LotNo,
+                           EnvLotNo = nr.EnvLotNo,
+                           Batch = nr.Batch,
+                           NRDatas = nr.NRDatas,
+                           Day = nr.Day,
+                           District = c.District,
+                           DistrictSort = c.DistrictSort,
+                           NRDataId = nr.Id,
+                           Status = c.Status,
+                           Steps = nr.Steps,
+                           VerificationStatus = nr.VerificationStatus,
+                           Remarksss = nr.Remarksss
+                       })
+                    : _context.NRDatas
+                        .Where(x => x.ProjectId == projectId && x.Batch == compareBatch && x.Status);
 
                 var selectedBatchAll = await selectedBatchAllQuery.ToListAsync();
 
@@ -8815,9 +9668,21 @@ namespace Tools.Controllers
                             if (processStep != 7 && processStep != 8 && processStep != 10)
                             {
                                 target.Status = false;
+                                if (isNewModel)
+                                {
+                                    var cRow = _context.CenterList.Local.FirstOrDefault(c => c.Id == target.Id)
+                                        ?? _context.CenterList.FirstOrDefault(c => c.Id == target.Id);
+                                    if (cRow != null) cRow.Status = false;
+                                }
                                 foreach (var r in associatedRRecords)
                                 {
                                     r.Status = false;
+                                    if (isNewModel)
+                                    {
+                                        var assocC = _context.CenterList.Local.FirstOrDefault(c => c.Id == r.Id)
+                                            ?? _context.CenterList.FirstOrDefault(c => c.Id == r.Id);
+                                        if (assocC != null) assocC.Status = false;
+                                    }
                                 }
                             }
 
@@ -8857,7 +9722,55 @@ namespace Tools.Controllers
                                 Remarksss = source.Remarksss
                             };
 
-                            _context.NRDatas.Add(newBaseRecord);
+                            if (isNewModel)
+                            {
+                                var nr1Rec = _context.NrData1.Local.FirstOrDefault(n => n.ProjectId == projectId && n.Batch == 1 && n.CatchNo == newBaseRecord.CatchNo && n.Status)
+                                    ?? _context.NrData1.FirstOrDefault(n => n.ProjectId == projectId && n.Batch == 1 && n.CatchNo == newBaseRecord.CatchNo && n.Status);
+                                if (nr1Rec == null)
+                                {
+                                    nr1Rec = new NrData1
+                                    {
+                                        ProjectId = projectId,
+                                        Batch = 1,
+                                        Status = true,
+                                        CatchNo = newBaseRecord.CatchNo,
+                                        CourseName = newBaseRecord.CourseName,
+                                        SubjectName = newBaseRecord.SubjectName,
+                                        ExamDate = newBaseRecord.ExamDate,
+                                        ExamTime = newBaseRecord.ExamTime,
+                                        Day = newBaseRecord.Day,
+                                        Pages = newBaseRecord.Pages,
+                                        LotNo = newBaseRecord.LotNo,
+                                        EnvLotNo = newBaseRecord.EnvLotNo,
+                                        Steps = newRecordStep,
+                                        NRDatas = newBaseRecord.NRDatas,
+                                        Remarksss = newBaseRecord.Remarksss
+                                    };
+                                    _context.NrData1.Add(nr1Rec);
+                                    _context.SaveChanges();
+                                }
+                                var newCenter = new CenterList
+                                {
+                                    ProjectId = projectId,
+                                    NRDataId = nr1Rec.Id,
+                                    CenterCode = newBaseRecord.CenterCode,
+                                    NodalCode = newBaseRecord.NodalCode,
+                                    Quantity = newBaseRecord.Quantity,
+                                    NRQuantity = newBaseRecord.NRQuantity,
+                                    Route = newBaseRecord.Route,
+                                    RouteSort = newBaseRecord.RouteSort,
+                                    CenterSort = newBaseRecord.CenterSort,
+                                    NodalSort = newBaseRecord.NodalSort,
+                                    District = newBaseRecord.District,
+                                    DistrictSort = newBaseRecord.DistrictSort,
+                                    Status = true
+                                };
+                                _context.CenterList.Add(newCenter);
+                            }
+                            else
+                            {
+                                _context.NRDatas.Add(newBaseRecord);
+                            }
                             baseBatch.Add(newBaseRecord);
                         }
 
@@ -8898,7 +9811,55 @@ namespace Tools.Controllers
                                 NRDataId = target.NRDataId,
                                 Remarksss = source.Remarksss
                             };
-                            _context.NRDatas.Add(remainderRow);
+                            if (isNewModel)
+                            {
+                                var nr1RRec = _context.NrData1.Local.FirstOrDefault(n => n.ProjectId == projectId && n.Batch == 1 && n.CatchNo == remainderRow.CatchNo && n.Status)
+                                    ?? _context.NrData1.FirstOrDefault(n => n.ProjectId == projectId && n.Batch == 1 && n.CatchNo == remainderRow.CatchNo && n.Status);
+                                if (nr1RRec == null)
+                                {
+                                    nr1RRec = new NrData1
+                                    {
+                                        ProjectId = projectId,
+                                        Batch = 1,
+                                        Status = true,
+                                        CatchNo = remainderRow.CatchNo,
+                                        CourseName = remainderRow.CourseName,
+                                        SubjectName = remainderRow.SubjectName,
+                                        ExamDate = remainderRow.ExamDate,
+                                        ExamTime = remainderRow.ExamTime,
+                                        Day = remainderRow.Day,
+                                        Pages = remainderRow.Pages,
+                                        LotNo = remainderRow.LotNo,
+                                        EnvLotNo = remainderRow.EnvLotNo,
+                                        Steps = 1,
+                                        NRDatas = remainderRow.NRDatas,
+                                        Remarksss = remainderRow.Remarksss
+                                    };
+                                    _context.NrData1.Add(nr1RRec);
+                                    _context.SaveChanges();
+                                }
+                                var newRCenter = new CenterList
+                                {
+                                    ProjectId = projectId,
+                                    NRDataId = nr1RRec.Id,
+                                    CenterCode = remainderRow.CenterCode,
+                                    NodalCode = remainderRow.NodalCode,
+                                    Quantity = remainderRow.Quantity,
+                                    NRQuantity = remainderRow.NRQuantity,
+                                    Route = remainderRow.Route,
+                                    RouteSort = remainderRow.RouteSort,
+                                    CenterSort = remainderRow.CenterSort,
+                                    NodalSort = remainderRow.NodalSort,
+                                    District = remainderRow.District,
+                                    DistrictSort = remainderRow.DistrictSort,
+                                    Status = true
+                                };
+                                _context.CenterList.Add(newRCenter);
+                            }
+                            else
+                            {
+                                _context.NRDatas.Add(remainderRow);
+                            }
                             baseBatch.Add(remainderRow);
                         }
                     };
@@ -9140,7 +10101,55 @@ namespace Tools.Controllers
                                     EnvLotNo = (addedStep == 4) ? 0 : newRec.EnvLotNo,
                                     Remarksss = newRec.Remarksss
                                 };
-                                _context.NRDatas.Add(addedRecord);
+                                if (isNewModel)
+                                {
+                                    var nr1Rec = _context.NrData1.Local.FirstOrDefault(n => n.ProjectId == projectId && n.Batch == 1 && n.CatchNo == addedRecord.CatchNo && n.Status)
+                                        ?? _context.NrData1.FirstOrDefault(n => n.ProjectId == projectId && n.Batch == 1 && n.CatchNo == addedRecord.CatchNo && n.Status);
+                                    if (nr1Rec == null)
+                                    {
+                                        nr1Rec = new NrData1
+                                        {
+                                            ProjectId = projectId,
+                                            Batch = 1,
+                                            Status = true,
+                                            CatchNo = addedRecord.CatchNo,
+                                            CourseName = addedRecord.CourseName,
+                                            SubjectName = addedRecord.SubjectName,
+                                            ExamDate = addedRecord.ExamDate,
+                                            ExamTime = addedRecord.ExamTime,
+                                            Day = addedRecord.Day,
+                                            Pages = addedRecord.Pages,
+                                            LotNo = addedRecord.LotNo,
+                                            EnvLotNo = addedRecord.EnvLotNo,
+                                            Steps = addedStep,
+                                            NRDatas = addedRecord.NRDatas,
+                                            Remarksss = addedRecord.Remarksss
+                                        };
+                                        _context.NrData1.Add(nr1Rec);
+                                        _context.SaveChanges();
+                                    }
+                                    var newCenter = new CenterList
+                                    {
+                                        ProjectId = projectId,
+                                        NRDataId = nr1Rec.Id,
+                                        CenterCode = addedRecord.CenterCode,
+                                        NodalCode = addedRecord.NodalCode,
+                                        Quantity = addedRecord.Quantity,
+                                        NRQuantity = addedRecord.NRQuantity,
+                                        Route = addedRecord.Route,
+                                        RouteSort = addedRecord.RouteSort,
+                                        CenterSort = addedRecord.CenterSort,
+                                        NodalSort = addedRecord.NodalSort,
+                                        District = addedRecord.District,
+                                        DistrictSort = addedRecord.DistrictSort,
+                                        Status = true
+                                    };
+                                    _context.CenterList.Add(newCenter);
+                                }
+                                else
+                                {
+                                    _context.NRDatas.Add(addedRecord);
+                                }
                                 addedCount++;
                             }
                         }
@@ -9153,6 +10162,12 @@ namespace Tools.Controllers
                                 if (processStep != 7 && processStep != 8 && processStep != 10)
                                 {
                                     oldRec.Status = false;
+                                    if (isNewModel)
+                                    {
+                                        var cToDeactivate = _context.CenterList.Local.FirstOrDefault(c => c.Id == oldRec.Id)
+                                            ?? _context.CenterList.FirstOrDefault(c => c.Id == oldRec.Id);
+                                        if (cToDeactivate != null) cToDeactivate.Status = false;
+                                    }
                                 }
                                 removedCount++;
 
@@ -9206,6 +10221,38 @@ namespace Tools.Controllers
                         }
                     }
 
+                    if (isNewModel)
+                    {
+                        var affectedCatchKeys = updatedCatchLevelData.Keys.ToList();
+                        var nr1BatchList = await _context.NrData1
+                            .Where(n => n.ProjectId == projectId && n.Batch == 1 && n.Status && affectedCatchKeys.Contains(n.CatchNo))
+                            .ToListAsync();
+                        foreach (var nr1 in nr1BatchList)
+                        {
+                            if (updatedCatchLevelData.TryGetValue(nr1.CatchNo ?? "", out var sourceRec))
+                            {
+                                nr1.CourseName = sourceRec.CourseName;
+                                nr1.SubjectName = sourceRec.SubjectName;
+                                nr1.ExamDate = sourceRec.ExamDate;
+                                nr1.ExamTime = sourceRec.ExamTime;
+                                nr1.Day = sourceRec.Day;
+                                nr1.Pages = sourceRec.Pages;
+                                if (IsFieldUnique("Remark") && !string.IsNullOrWhiteSpace(sourceRec.Remarksss))
+                                {
+                                    nr1.Remarksss = sourceRec.Remarksss;
+                                }
+                                if (!string.IsNullOrWhiteSpace(sourceRec.NRDatas))
+                                {
+                                    nr1.NRDatas = MergeUniqueJsonFields(nr1.NRDatas, sourceRec.NRDatas);
+                                }
+                                if (nr1.Steps > processStep)
+                                {
+                                    nr1.Steps = processStep;
+                                }
+                            }
+                        }
+                    }
+
                     // For step 6 (and step 5): If any row's step is set to 4, check its EnvLotNo and reset EnvLotNo = 0
                     // for ALL active records across the Base Batch that have that EnvLotNo
                     if ((processStep == 6 || processStep == 5) && affectedEnvLots.Any())
@@ -9213,13 +10260,26 @@ namespace Tools.Controllers
                         var envLotsList = affectedEnvLots.Where(x => x > 0).Distinct().ToList();
                         if (envLotsList.Any())
                         {
-                            var affectedBaseRecords = await _context.NRDatas
-                                .Where(x => x.ProjectId == projectId && x.Batch == 1 && x.Status && envLotsList.Contains(x.EnvLotNo))
-                                .ToListAsync();
-
-                            foreach (var rec in affectedBaseRecords)
+                            if (isNewModel)
                             {
-                                rec.EnvLotNo = 0;
+                                var affectedNr1 = await _context.NrData1
+                                    .Where(x => x.ProjectId == projectId && x.Batch == 1 && x.Status && envLotsList.Contains(x.EnvLotNo))
+                                    .ToListAsync();
+                                foreach (var rec in affectedNr1)
+                                {
+                                    rec.EnvLotNo = 0;
+                                }
+                            }
+                            else
+                            {
+                                var affectedBaseRecords = await _context.NRDatas
+                                    .Where(x => x.ProjectId == projectId && x.Batch == 1 && x.Status && envLotsList.Contains(x.EnvLotNo))
+                                    .ToListAsync();
+
+                                foreach (var rec in affectedBaseRecords)
+                                {
+                                    rec.EnvLotNo = 0;
+                                }
                             }
 
                             foreach (var rec in baseBatch.Where(x => x.Status && envLotsList.Contains(x.EnvLotNo)))
@@ -9234,13 +10294,27 @@ namespace Tools.Controllers
                         var lotList = affectedLotNos.Where(x => x > 0).Distinct().ToList();
                         if (lotList.Any())
                         {
-                            var affectedBaseRecords = await _context.NRDatas
-                                .Where(x => x.ProjectId == projectId && x.Batch == 1 && x.Status && lotList.Contains(x.LotNo))
-                                .ToListAsync();
-
-                            foreach (var rec in affectedBaseRecords.Where(x => !(x.CatchNo ?? "").Trim().EndsWith("-R", StringComparison.OrdinalIgnoreCase)))
+                            if (isNewModel)
                             {
-                                rec.Steps = 5;
+                                var affectedNr1Records = await _context.NrData1
+                                    .Where(x => x.ProjectId == projectId && x.Batch == 1 && x.Status && lotList.Contains(x.LotNo))
+                                    .ToListAsync();
+
+                                foreach (var rec in affectedNr1Records.Where(x => !(x.CatchNo ?? "").Trim().EndsWith("-R", StringComparison.OrdinalIgnoreCase)))
+                                {
+                                    rec.Steps = 5;
+                                }
+                            }
+                            else
+                            {
+                                var affectedBaseRecords = await _context.NRDatas
+                                    .Where(x => x.ProjectId == projectId && x.Batch == 1 && x.Status && lotList.Contains(x.LotNo))
+                                    .ToListAsync();
+
+                                foreach (var rec in affectedBaseRecords.Where(x => !(x.CatchNo ?? "").Trim().EndsWith("-R", StringComparison.OrdinalIgnoreCase)))
+                                {
+                                    rec.Steps = 5;
+                                }
                             }
 
                             foreach (var rec in baseBatch.Where(x => x.Status && lotList.Contains(x.LotNo) && !(x.CatchNo ?? "").Trim().EndsWith("-R", StringComparison.OrdinalIgnoreCase)))
@@ -9261,9 +10335,22 @@ namespace Tools.Controllers
                     }
 
                     // Global Step Clamping: Ensure no active record in the base batch has a step > processStep
-                    foreach (var record in baseBatch.Where(x => x.Status && x.Steps > processStep))
+                    if (isNewModel)
                     {
-                        record.Steps = processStep;
+                        var baseNr1Clamping = await _context.NrData1
+                            .Where(x => x.ProjectId == projectId && x.Batch == 1 && x.Status && x.Steps > processStep)
+                            .ToListAsync();
+                        foreach (var rec in baseNr1Clamping)
+                        {
+                            rec.Steps = processStep;
+                        }
+                    }
+                    else
+                    {
+                        foreach (var record in baseBatch.Where(x => x.Status && x.Steps > processStep))
+                        {
+                            record.Steps = processStep;
+                        }
                     }
 
                     await _context.SaveChangesAsync();
@@ -9311,8 +10398,8 @@ namespace Tools.Controllers
                     return BadRequest("Invalid Project ID.");
                 }
 
-                var query = _context.NRDatas
-                    .Where(x => x.ProjectId == projectId && x.Status == true);
+                var isNewModel = await _context.NrData1.AnyAsync(p => p.ProjectId == projectId);
+                var query = GetBaseQuery(projectId, isNewModel);
 
                 if (batchNo.HasValue)
                 {

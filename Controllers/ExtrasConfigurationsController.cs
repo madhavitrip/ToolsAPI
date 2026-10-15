@@ -99,16 +99,32 @@ namespace Tools.Controllers
         [HttpGet("DistinctNodals/{projectId}")]
         public async Task<IActionResult> GetDistinctNodalsByProject(int projectId)
         {
-            // Only filter by project and return distinct NodalCode from NRData where Status == true
-            var nodalCodes = await _context.NRDatas
-                .Where(n => n.ProjectId == projectId 
-                         && n.Status == true 
-                         && !string.IsNullOrEmpty(n.NodalCode))
-                .Select(n => n.NodalCode)
-                .Distinct()
-                .OrderBy(n => n)
-                .ToListAsync();
-            return Ok(nodalCodes);
+            var isNewModel = await _context.NrData1.AnyAsync(p => p.ProjectId == projectId);
+            if (isNewModel)
+            {
+                var nodalCodes = await _context.CenterList
+                    .Where(n => n.ProjectId == projectId 
+                             && n.Status == true 
+                             && !string.IsNullOrEmpty(n.NodalCode))
+                    .Select(n => n.NodalCode)
+                    .Distinct()
+                    .OrderBy(n => n)
+                    .ToListAsync();
+                return Ok(nodalCodes);
+            }
+            else
+            {
+                // Only filter by project and return distinct NodalCode from NRData where Status == true
+                var nodalCodes = await _context.NRDatas
+                    .Where(n => n.ProjectId == projectId 
+                             && n.Status == true 
+                             && !string.IsNullOrEmpty(n.NodalCode))
+                    .Select(n => n.NodalCode)
+                    .Distinct()
+                    .OrderBy(n => n)
+                    .ToListAsync();
+                return Ok(nodalCodes);
+            }
         }
 
         // PUT: api/ExtrasConfigurations/5
