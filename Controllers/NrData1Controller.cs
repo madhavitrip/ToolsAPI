@@ -3553,11 +3553,15 @@ namespace Tools.Controllers
         }
 
         // DELETE: api/NrData1/DeleteCatchNo/5/Catch123
-        [HttpDelete("DeleteCatchNo/{projectId}/{catchNo}")]
-        public async Task<IActionResult> DeleteCatchNo(int projectId, string catchNo)
+        [HttpDelete("DeleteCatchNo/{projectId}/{*catchNo}")]
+        [HttpDelete("DeleteCatchNo/{projectId}")]
+        public async Task<IActionResult> DeleteCatchNo(int projectId, string? catchNo, [FromQuery] string? queryCatchNo = null)
         {
             try
             {
+                if (string.IsNullOrWhiteSpace(catchNo))
+                    catchNo = queryCatchNo;
+
                 if (string.IsNullOrWhiteSpace(catchNo))
                     return BadRequest("Catch number cannot be empty");
 

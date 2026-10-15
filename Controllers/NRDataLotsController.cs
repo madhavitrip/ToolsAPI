@@ -74,11 +74,15 @@ namespace Tools.Controllers
             public List<string> CatchNos { get; set; } = new();
         }
 
-        [HttpGet("GetCatchVerificationStatus/{projectId}/{catchNo}")]
-        public async Task<IActionResult> GetCatchVerificationStatus(int projectId, string catchNo)
+        [HttpGet("GetCatchVerificationStatus/{projectId}/{*catchNo}")]
+        [HttpGet("GetCatchVerificationStatus/{projectId}")]
+        public async Task<IActionResult> GetCatchVerificationStatus(int projectId, string? catchNo, [FromQuery] string? queryCatchNo = null)
         {
             if (projectId <= 0)
                 return BadRequest("ProjectId is required.");
+
+            if (string.IsNullOrWhiteSpace(catchNo))
+                catchNo = queryCatchNo;
 
             if (string.IsNullOrWhiteSpace(catchNo))
                 return BadRequest("CatchNo is required.");

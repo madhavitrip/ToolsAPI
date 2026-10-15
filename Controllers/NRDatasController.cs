@@ -1881,10 +1881,29 @@ namespace Tools.Controllers
         }
 
 
-        // PUT: api/NRDatas/UpdateCatchwise/{catchNo}
-        [HttpPut("UpdateCatchwise/{catchNo}")]
-        public async Task<IActionResult> UpdateCatchwiseNRData(string catchNo, [FromBody] JsonElement inputData, [FromQuery] int? lotNo = null)
+        // PUT: api/NRDatas/UpdateCatchwise/{*catchNo}
+        [HttpPut("UpdateCatchwise/{*catchNo}")]
+        [HttpPut("UpdateCatchwise")]
+        public async Task<IActionResult> UpdateCatchwiseNRData(string? catchNo, [FromBody] JsonElement inputData, [FromQuery] int? lotNo = null, [FromQuery] string? queryCatchNo = null)
         {
+            if (string.IsNullOrWhiteSpace(catchNo))
+            {
+                catchNo = queryCatchNo;
+            }
+
+            if (string.IsNullOrWhiteSpace(catchNo) && inputData.ValueKind == JsonValueKind.Object)
+            {
+                if (inputData.TryGetProperty("catchNo", out var cProp) || inputData.TryGetProperty("CatchNo", out cProp))
+                {
+                    catchNo = cProp.GetString();
+                }
+            }
+
+            if (string.IsNullOrWhiteSpace(catchNo))
+            {
+                return BadRequest("Catch number is required.");
+            }
+
             using var transaction = await _context.Database.BeginTransactionAsync();
 
             try
@@ -1893,6 +1912,21 @@ namespace Tools.Controllers
                 if (inputData.TryGetProperty("projectId", out var projProp))
                 {
                     projectId = projProp.GetInt32();
+                }
+
+                bool isNewModel = false;
+                if (projectId > 0)
+                {
+                    isNewModel = await _context.NrData1.AnyAsync(p => p.ProjectId == projectId);
+                }
+                else
+                {
+                    isNewModel = await _context.NrData1.AnyAsync(x => x.CatchNo == catchNo);
+                }
+
+                if (isNewModel)
+                {
+                    return await UpdateCatchwiseNrData1(catchNo, inputData, lotNo, projectId, transaction);
                 }
 
                 var query = _context.NRDatas
@@ -1907,12 +1941,6 @@ namespace Tools.Controllers
 
                 if (!records.Any())
                 {
-                    var isNewModel = await _context.NrData1.AnyAsync(x => x.CatchNo == catchNo && (projectId == 0 || x.ProjectId == projectId) && x.Status);
-                    if (isNewModel)
-                    {
-                        return await UpdateCatchwiseNrData1(catchNo, inputData, lotNo, projectId, transaction);
-                    }
-
                     return NotFound($"No active NRData records found for catch {catchNo}");
                 }
 
@@ -2165,7 +2193,7 @@ namespace Tools.Controllers
         private async Task<IActionResult> UpdateCatchwiseNrData1(string catchNo, JsonElement inputData, int? lotNo, int projectId, Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction transaction)
         {
             var nr1Query = _context.NrData1
-                .Where(x => x.CatchNo == catchNo && (projectId == 0 || x.ProjectId == projectId) && x.Status);
+                .Where(x => x.CatchNo == catchNo && (projectId == 0 || x.ProjectId == projectId));
 
             if (lotNo.HasValue)
             {
@@ -2173,6 +2201,11 @@ namespace Tools.Controllers
             }
 
             var nr1Records = await nr1Query.ToListAsync();
+            if (nr1Records.Any(x => x.Status))
+            {
+                nr1Records = nr1Records.Where(x => x.Status).ToList();
+            }
+
             if (!nr1Records.Any())
                 return NotFound($"No active NrData1 records found for catch {catchNo}");
 
@@ -2420,6 +2453,33 @@ namespace Tools.Controllers
                     {
                         record.Steps = 5;
                     }
+                }
+            }
+
+            // Also keep any legacy NRDatas records in sync if they exist
+            var legacyNRDataRecords = await _context.NRDatas
+                .Where(x => x.CatchNo == catchNo && (projectId == 0 || x.ProjectId == projectId) && x.Status)
+                .ToListAsync();
+
+            if (legacyNRDataRecords.Any())
+            {
+                var nrProps = typeof(NRData).GetProperties().ToDictionary(p => p.Name.ToLower(), p => p);
+                foreach (var leg in legacyNRDataRecords)
+                {
+                    foreach (var prop in inputData.EnumerateObject())
+                    {
+                        string key = NormalizeKey(prop.Name);
+                        if (key == "id" || key == "projectid") continue;
+                        if (nrProps.TryGetValue(key, out var pInfo))
+                        {
+                            var targetType = Nullable.GetUnderlyingType(pInfo.PropertyType) ?? pInfo.PropertyType;
+                            object? convertedVal = string.IsNullOrWhiteSpace(prop.Value.ToString())
+                                ? (Nullable.GetUnderlyingType(pInfo.PropertyType) != null || !pInfo.PropertyType.IsValueType ? null : Activator.CreateInstance(targetType))
+                                : Convert.ChangeType(prop.Value.ToString(), targetType);
+                            pInfo.SetValue(leg, convertedVal);
+                        }
+                    }
+                    _context.NRDatas.Update(leg);
                 }
             }
 
@@ -7082,11 +7142,15 @@ namespace Tools.Controllers
         }
 
 
-        [HttpDelete("DeleteCatchNo/{projectId}/{catchNo}")]
-        public async Task<IActionResult> DeleteCatchNo(int projectId, string catchNo)
+        [HttpDelete("DeleteCatchNo/{projectId}/{*catchNo}")]
+        [HttpDelete("DeleteCatchNo/{projectId}")]
+        public async Task<IActionResult> DeleteCatchNo(int projectId, string? catchNo, [FromQuery] string? queryCatchNo = null)
         {
             try
             {
+                if (string.IsNullOrWhiteSpace(catchNo))
+                    catchNo = queryCatchNo;
+
                 if (string.IsNullOrWhiteSpace(catchNo))
                     return BadRequest("Catch number cannot be empty");
 
