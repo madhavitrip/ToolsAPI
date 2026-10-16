@@ -172,22 +172,42 @@ namespace Tools.Controllers
                 bool attachExtraForAllNodal = nodalExtraConfig?.AttachExtraForEachCatchForAllNodal == true ||
                                               extrasconfig.Any(e => e.AttachExtraForEachCatchForAllNodal);
 
-                var allProjectNodals = await _context.NRDatas
-                    .Where(n => n.ProjectId == ProjectId && n.Status == true && !string.IsNullOrEmpty(n.NodalCode))
-                    .GroupBy(n => n.NodalCode)
-                    .Select(g => new {
-                        NodalCode = g.Key,
-                        NodalSort = g.Max(n => n.NodalSort),
-                        Route = g.Select(n => n.Route).FirstOrDefault(r => !string.IsNullOrEmpty(r)) ?? "",
-                        RouteSort = g.Max(n => n.RouteSort),
-                        District = g.Select(n => n.District).FirstOrDefault(d => !string.IsNullOrEmpty(d)) ?? "",
-                        DistrictSort = g.Max(n => n.DistrictSort),
-                        CenterCode = g.Select(n => n.CenterCode).FirstOrDefault() ?? "",
-                        NrDataId = g.Select(n => n.Id).FirstOrDefault()
-                    })
-                    .OrderBy(n => n.RouteSort)
-                    .ThenBy(n => n.NodalSort)
-                    .ToListAsync();
+                var allProjectNodals = new List<ProjectNodalGroup>();
+                if (attachExtraForAllNodal)
+                {
+                    var nodalRows = await _context.NRDatas
+                        .Where(n => n.ProjectId == ProjectId && n.Status == true && !string.IsNullOrEmpty(n.NodalCode))
+                        .Select(n => new
+                        {
+                            n.Id,
+                            n.NodalCode,
+                            n.NodalSort,
+                            n.Route,
+                            n.RouteSort,
+                            n.District,
+                            n.DistrictSort,
+                            n.CenterCode
+                        })
+                        .AsNoTracking()
+                        .ToListAsync();
+
+                    allProjectNodals = nodalRows
+                        .GroupBy(n => n.NodalCode!)
+                        .Select(g => new ProjectNodalGroup
+                        {
+                            NodalCode = g.Key,
+                            NodalSort = g.Max(n => n.NodalSort),
+                            Route = g.Select(n => n.Route).FirstOrDefault(r => !string.IsNullOrEmpty(r)) ?? "",
+                            RouteSort = g.Max(n => n.RouteSort),
+                            District = g.Select(n => n.District).FirstOrDefault(d => !string.IsNullOrEmpty(d)) ?? "",
+                            DistrictSort = g.Max(n => n.DistrictSort),
+                            CenterCode = g.Select(n => n.CenterCode).FirstOrDefault(c => !string.IsNullOrEmpty(c)) ?? "",
+                            NrDataId = g.Select(n => n.Id).FirstOrDefault()
+                        })
+                        .OrderBy(n => n.RouteSort)
+                        .ThenBy(n => n.NodalSort)
+                        .ToList();
+                }
 
                 // ✅ Load sorting field names EARLY so they're available inside helpers
                 var sortFields = await _context.Fields
@@ -1137,11 +1157,11 @@ namespace Tools.Controllers
                     .Where(p => p.ProjectId == ProjectId && p.Status==true)
                     .ToDictionaryAsync(p => p.Id);
 
-                // Catch-wise NR mapping (for MSS rows)
-                var nrDataByCatch = await _context.NRDatas
-                    .Where(p => p.ProjectId == ProjectId && p.Status==true)
-                    .GroupBy(p => p.CatchNo)
-                    .ToDictionaryAsync(g => g.Key, g => g.First());
+                // Catch-wise NR mapping (for MSS rows) computed in memory from nrDataDict
+                var nrDataByCatch = nrDataDict.Values
+                    .Where(p => !string.IsNullOrEmpty(p.CatchNo))
+                    .GroupBy(p => p.CatchNo!)
+                    .ToDictionary(g => g.Key, g => g.First());
 
                 var fields = await _context.Fields
                     .Where(f => projectconfig.EnvelopeMakingCriteria.Contains(f.FieldId))
@@ -1579,6 +1599,18 @@ namespace Tools.Controllers
             {
                 await _loggerService.LogErrorAsync("Report Status Reset Error", ex.Message, nameof(EnvelopeBreakageProcessingController));
             }
+        }
+
+        private class ProjectNodalGroup
+        {
+            public string NodalCode { get; set; } = "";
+            public double NodalSort { get; set; }
+            public string Route { get; set; } = "";
+            public int RouteSort { get; set; }
+            public string District { get; set; } = "";
+            public int DistrictSort { get; set; }
+            public string CenterCode { get; set; } = "";
+            public int NrDataId { get; set; }
         }
     }
 }
