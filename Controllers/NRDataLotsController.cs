@@ -85,13 +85,20 @@ namespace Tools.Controllers
         }
 
         [HttpGet("GetMissingEnvLotCatches/{projectId}")]
-        public async Task<IActionResult> GetMissingEnvLotCatches(int projectId)
+        public async Task<IActionResult> GetMissingEnvLotCatches(int projectId, [FromQuery] int? lotNo = null)
         {
             if (projectId <= 0)
                 return BadRequest("ProjectId is required.");
 
-            var catchItems = await _context.NRDatas
-                .Where(x => x.ProjectId == projectId && x.Status == true && x.EnvLotNo == 0 && x.VerificationStatus == 1 && !string.IsNullOrWhiteSpace(x.CatchNo))
+            var query = _context.NRDatas
+                .Where(x => x.ProjectId == projectId && x.Status == true && x.EnvLotNo == 0 && x.VerificationStatus == 1 && !string.IsNullOrWhiteSpace(x.CatchNo));
+
+            if (lotNo.HasValue && lotNo.Value > 0)
+            {
+                query = query.Where(x => x.LotNo == lotNo.Value);
+            }
+
+            var catchItems = await query
                 .GroupBy(x => x.CatchNo)
                 .Select(g => new
                 {
@@ -113,7 +120,7 @@ namespace Tools.Controllers
             var query = _context.NRDatas
                 .Where(x => x.ProjectId == projectId && x.Status == true && x.EnvLotNo > 0 && !string.IsNullOrWhiteSpace(x.CatchNo));
 
-            if (lotNo.HasValue)
+            if (lotNo.HasValue && lotNo.Value > 0)
             {
                 query = query.Where(x => x.LotNo == lotNo.Value);
             }
