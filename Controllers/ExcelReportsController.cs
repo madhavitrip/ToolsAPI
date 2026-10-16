@@ -217,6 +217,29 @@ namespace Tools.Controllers
                 fullPath = FindFallbackExcelFileByIdOrPath(id, report?.FilePath, report?.ProjectId);
             }
 
+            // If it's a Duplicate Tool report (ModuleId == 1), ensure it contains all fields of nrdatas
+            if (report != null && report.ModuleId == 1 && report.ProjectId.HasValue && report.ProjectId.Value > 0)
+            {
+                if (string.IsNullOrEmpty(fullPath) || !System.IO.File.Exists(fullPath) || ToolsAPI.Helpers.DuplicateReportHelper.ShouldRegenerateDuplicateReport(fullPath))
+                {
+                    try
+                    {
+                        var targetFile = !string.IsNullOrEmpty(fullPath) ? fullPath : report.FilePath;
+                        if (string.IsNullOrEmpty(targetFile))
+                        {
+                            var rootFolder = FileStorageHelper.GetProjectFolder(report.ProjectId.Value);
+                            var lotStr = report.Lot.HasValue && report.Lot.Value > 0 ? report.Lot.Value.ToString() : "All";
+                            targetFile = Path.Combine(rootFolder, $"DuplicateTool_{lotStr}_v{report.Version}.xlsx");
+                        }
+                        fullPath = await ToolsAPI.Helpers.DuplicateReportHelper.RegenerateReportFileAsync(_context, report.ProjectId.Value, report.Lot, targetFile);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[ExcelReportsController] Failed to regenerate Duplicate report: {ex.Message}");
+                    }
+                }
+            }
+
             if (string.IsNullOrEmpty(fullPath) || !System.IO.File.Exists(fullPath))
             {
                 return NotFound($"Report file not found on server.");
@@ -230,7 +253,7 @@ namespace Tools.Controllers
 
         // GET: api/ExcelReports/DownloadByPath
         [HttpGet("DownloadByPath")]
-        public IActionResult DownloadReportByPath([FromQuery] string filePath)
+        public async Task<IActionResult> DownloadReportByPath([FromQuery] string filePath)
         {
             if (string.IsNullOrWhiteSpace(filePath))
                 return BadRequest("filePath parameter is required.");
@@ -239,6 +262,42 @@ namespace Tools.Controllers
             if (string.IsNullOrEmpty(fullPath) || !System.IO.File.Exists(fullPath))
             {
                 fullPath = FileStorageHelper.FindExistingFilePath(filePath);
+            }
+
+            var fileName = Path.GetFileName(filePath);
+            if (!string.IsNullOrEmpty(fileName) && fileName.StartsWith("DuplicateTool", StringComparison.OrdinalIgnoreCase))
+            {
+                if (string.IsNullOrEmpty(fullPath) || !System.IO.File.Exists(fullPath) || ToolsAPI.Helpers.DuplicateReportHelper.ShouldRegenerateDuplicateReport(fullPath))
+                {
+                    try
+                    {
+                        var matchingReport = await _context.ExcelReports.FirstOrDefaultAsync(r => r.ModuleId == 1 && (r.FilePath == filePath || (fullPath != null && r.FilePath == FileStorageHelper.GetRelativePath(fullPath))));
+                        int? projId = matchingReport?.ProjectId;
+                        if (!projId.HasValue)
+                        {
+                            var parts = filePath.Replace('\\', '/').Split('/');
+                            for (int i = 0; i < parts.Length - 1; i++)
+                            {
+                                if (int.TryParse(parts[i], out int pid) && pid > 0)
+                                {
+                                    projId = pid;
+                                    break;
+                                }
+                            }
+                        }
+
+                        if (projId.HasValue && projId.Value > 0)
+                        {
+                            var lotMatch = System.Text.RegularExpressions.Regex.Match(fileName, @"DuplicateTool_(\d+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                            int? lotNo = matchingReport?.Lot ?? (lotMatch.Success ? int.Parse(lotMatch.Groups[1].Value) : null);
+                            fullPath = await ToolsAPI.Helpers.DuplicateReportHelper.RegenerateReportFileAsync(_context, projId.Value, lotNo, fullPath ?? filePath);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[ExcelReportsController] Failed to regenerate Duplicate report by path: {ex.Message}");
+                    }
+                }
             }
 
             if (string.IsNullOrEmpty(fullPath) || !System.IO.File.Exists(fullPath))

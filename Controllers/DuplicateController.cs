@@ -203,128 +203,32 @@ namespace Tools.Controllers
                 var fileName = ReportVersionHelper.GetNextVersionFileName(reportPath, $"DuplicateTool_{lotStr}.xlsx");
                 var filePath = Path.Combine(reportPath, fileName);
 
-                var baseProperties = typeof(NRData).GetProperties(BindingFlags.Public | BindingFlags.Instance)
-                    .Where(p => p.Name != "NRDatas" && p.Name != "Id" && p.Name != "ProjectId")
-                    .Where(p => reportRows.Any(row => p.GetValue(row) != null && !string.IsNullOrEmpty(p.GetValue(row)?.ToString())))
-                    .ToList();
+                var cleanRowsQuery = _context.NRDatas
+                    .Where(x => x.ProjectId == ProjectId && x.Status == true);
 
-                var extraHeaders = new HashSet<string>();
-                var parsedRows = new List<(NRData row, Dictionary<string, string> extras)>();
-
-                foreach (var row in reportRows)
+                if (lotNo.HasValue && lotNo.Value > 0)
                 {
-                    var extras = new Dictionary<string, string>();
-
-                    if (!string.IsNullOrEmpty(row.NRDatas))
-                    {
-                        try
-                        {
-                            extras = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(row.NRDatas);
-                            if (extras != null)
-                            {
-                                foreach (var key in extras.Keys)
-                                    extraHeaders.Add(key);
-                            }
-                        }
-                        catch
-                        {
-                            extras = new Dictionary<string, string>();
-                        }
-                    }
-
-                    parsedRows.Add((row, extras));
+                    cleanRowsQuery = cleanRowsQuery.Where(x => x.LotNo == lotNo.Value);
                 }
 
-                using (var package = new ExcelPackage())
+                var cleanRows = await cleanRowsQuery.ToListAsync();
+
+                if (!hasPendingDuplicateRows)
                 {
-                    var ws = package.Workbook.Worksheets.Add("Merge Report");
-
-                    int col = 1;
-                    foreach (var prop in baseProperties)
-                    {
-                        ws.Cells[1, col].Value = prop.Name;
-                        ws.Cells[1, col].Style.Font.Bold = true;
-                        col++;
-                    }
-
-                    var extraHeaderList = extraHeaders.OrderBy(x => x).ToList();
-
-                    foreach (var key in extraHeaderList)
-                    {
-                        ws.Cells[1, col].Value = key;
-                        ws.Cells[1, col].Style.Font.Bold = true;
-                        col++;
-                    }
-
-                    int rowIdx = 2;
-
-                    foreach (var (item, extras) in parsedRows)
-                    {
-                        col = 1;
-
-                        foreach (var prop in baseProperties)
-                            ws.Cells[rowIdx, col++].Value = prop.GetValue(item)?.ToString() ?? "";
-
-                        foreach (var key in extraHeaderList)
-                        {
-                            extras.TryGetValue(key, out var val);
-                            ws.Cells[rowIdx, col++].Value = val ?? "";
-                        }
-
-                        using (var range = ws.Cells[rowIdx, 1, rowIdx, col - 1])
-                        {
-                            range.Style.Fill.PatternType = ExcelFillStyle.Solid;
-
-                            if (deletedRows.Any(x => x.Id == item.Id))
-                                range.Style.Fill.BackgroundColor.SetColor(Color.LightCoral); // 🔴 old
-
-                            else if (newRows.Any(x => x.Id == item.Id))
-                                range.Style.Fill.BackgroundColor.SetColor(Color.LightGreen); // 🟢 new
-                        }
-
-                        rowIdx++;
-                    }
-
-                    if (ws.Dimension != null)
-                    {
-                        ws.Cells[ws.Dimension.Address].AutoFitColumns();
-                        ws.View.FreezePanes(2, 1);
-                    }
-
-                    // ✅ CLEAN SHEET (FINAL DATA)
-                    var wsClean = package.Workbook.Worksheets.Add("Clean NRData");
-
-                    col = 1;
-                    foreach (var prop in baseProperties)
-                    {
-                        wsClean.Cells[1, col].Value = prop.Name;
-                        wsClean.Cells[1, col].Style.Font.Bold = true;
-                        col++;
-                    }
-
-                    var cleanRows = await _context.NRDatas
-                        .Where(x => x.ProjectId == ProjectId && x.Status == true)
-                        .ToListAsync();
-
-                    int cleanRow = 2;
-
-                    foreach (var item in cleanRows)
-                    {
-                        col = 1;
-                        foreach (var prop in baseProperties)
-                            wsClean.Cells[cleanRow, col++].Value = prop.GetValue(item)?.ToString() ?? "";
-
-                        cleanRow++;
-                    }
-
-                    if (wsClean.Dimension != null)
-                    {
-                        wsClean.Cells[wsClean.Dimension.Address].AutoFitColumns();
-                        wsClean.View.FreezePanes(2, 1);
-                    }
-
-                    package.SaveAs(new FileInfo(filePath));
+                    reportRows = cleanRows;
                 }
+
+                var deletedRowIds = new HashSet<int>(deletedRows.Select(x => x.Id));
+                var newRowIds = new HashSet<int>(newRows.Select(x => x.Id));
+
+                ToolsAPI.Helpers.DuplicateReportHelper.GenerateDuplicateReportPackage(
+                    filePath,
+                    reportRows,
+                    cleanRows,
+                    deletedRowIds,
+                    newRowIds,
+                    "Merge Report"
+                );
 
                 // Record in ExcelReports table
                 var dupVersionMatch = System.Text.RegularExpressions.Regex.Match(fileName, @"_v(\d+)\.xlsx$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
@@ -765,60 +669,24 @@ WHERE ProjectId = {0};", ProjectId);
                 if (System.IO.File.Exists(filePath))
                     System.IO.File.Delete(filePath);
 
-                var baseProperties = typeof(NRData).GetProperties(BindingFlags.Public | BindingFlags.Instance)
-                    .Where(p => p.Name != "NRDatas" && p.Name != "Id" && p.Name != "ProjectId")
-                    .ToList();
+                var cleanRowsQuery = _context.NRDatas
+                    .Where(x => x.ProjectId == ProjectId && x.Status == true);
 
-                var extraHeaders = new HashSet<string>();
-                var parsedRows = new List<(NRData row, Dictionary<string, string> extras)>();
-
-                foreach (var row in reportRows)
+                if (lotNo.HasValue && lotNo.Value > 0)
                 {
-                    var extras = new Dictionary<string, string>();
-                    if (!string.IsNullOrEmpty(row.NRDatas))
-                    {
-                        try { extras = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(row.NRDatas); } catch { }
-                    }
-                    if (extras != null) foreach (var key in extras.Keys) extraHeaders.Add(key);
-                    parsedRows.Add((row, extras));
+                    cleanRowsQuery = cleanRowsQuery.Where(x => x.LotNo == lotNo.Value);
                 }
 
-                using (var package = new ExcelPackage())
-                {
-                    var ws = package.Workbook.Worksheets.Add("Duplicate Report");
-                    int col = 1;
-                    foreach (var prop in baseProperties)
-                    {
-                        ws.Cells[1, col].Value = prop.Name;
-                        ws.Cells[1, col].Style.Font.Bold = true;
-                        col++;
-                    }
-                    var extraHeaderList = extraHeaders.OrderBy(x => x).ToList();
-                    foreach (var key in extraHeaderList)
-                    {
-                        ws.Cells[1, col].Value = key;
-                        ws.Cells[1, col].Style.Font.Bold = true;
-                        col++;
-                    }
+                var cleanRows = await cleanRowsQuery.ToListAsync();
 
-                    int rowIdx = 2;
-                    foreach (var (item, extras) in parsedRows)
-                    {
-                        col = 1;
-                        foreach (var prop in baseProperties)
-                            ws.Cells[rowIdx, col++].Value = prop.GetValue(item)?.ToString() ?? "";
-                        foreach (var key in extraHeaderList)
-                        {
-                            extras.TryGetValue(key, out var val);
-                            ws.Cells[rowIdx, col++].Value = val ?? "";
-                        }
-                        rowIdx++;
-                    }
-
-                    ws.Cells[ws.Dimension.Address].AutoFitColumns();
-                    ws.View.FreezePanes(2, 1);
-                    package.SaveAs(new FileInfo(filePath));
-                }
+                ToolsAPI.Helpers.DuplicateReportHelper.GenerateDuplicateReportPackage(
+                    filePath,
+                    reportRows,
+                    cleanRows,
+                    null,
+                    null,
+                    "Duplicate Report"
+                );
 
                 await ToolsAPI.Helpers.ExcelReportHelper.RecordExcelReportAsync(
                     _context,
