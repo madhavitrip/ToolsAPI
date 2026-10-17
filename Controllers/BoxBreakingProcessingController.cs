@@ -968,7 +968,7 @@ namespace Tools.Controllers
         };
 
                 if (resetOnSymbolChange) { headers.Add("Symbol"); headers.Add("CourseName"); }
-                if (projectconfig.BookletSerialNumber > 0) headers.Add("BookletSerial");
+                if ((projectconfig.BookletSerialNumber ?? 0) > 0 || projectconfig.UseCustomCatchSerial) headers.Add("BookletSerial");
                 if (projectconfig.OmrSerialNumber > 0) headers.Add("OmrSerial");
                 if (projectconfig.IsInnerBundlingDone) headers.Add("InnerBundlingSerial");
 
@@ -1047,7 +1047,7 @@ namespace Tools.Controllers
                             ws.Cells[row, col++].Value = nrRow?.CourseName;
                         }
 
-                        if (projectconfig.BookletSerialNumber > 0) ws.Cells[row, col++].Value = result.BookletSerial;
+                        if ((projectconfig.BookletSerialNumber ?? 0) > 0 || projectconfig.UseCustomCatchSerial) ws.Cells[row, col++].Value = result.BookletSerial;
                         if (projectconfig.OmrSerialNumber > 0) ws.Cells[row, col++].Value = result.OmrSerial;
                         if (projectconfig.IsInnerBundlingDone) ws.Cells[row, col++].Value = result.InnerBundlingSerial;
 

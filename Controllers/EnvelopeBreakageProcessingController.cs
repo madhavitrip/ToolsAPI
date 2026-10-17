@@ -895,37 +895,79 @@ namespace Tools.Controllers
                 bool resetBookletSerialOnCatchChange = projectconfig?.ResetBookletSerialOnCatchChange ?? false;
                 int serial = 1;
 
+                bool useCustomCatchSerial = projectconfig?.UseCustomCatchSerial ?? false;
+                var customCatchSerialMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                if (useCustomCatchSerial && !string.IsNullOrWhiteSpace(projectconfig?.CustomCatchSerials))
+                {
+                    try
+                    {
+                        using var doc = System.Text.Json.JsonDocument.Parse(projectconfig.CustomCatchSerials);
+                        if (doc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Array)
+                        {
+                            foreach (var el in doc.RootElement.EnumerateArray())
+                            {
+                                string c = el.TryGetProperty("catchNo", out var cProp) ? cProp.GetString() ?? "" : "";
+                                int s = el.TryGetProperty("startSerial", out var sProp) && sProp.TryGetInt32(out var sVal) ? sVal : 1;
+                                if (!string.IsNullOrEmpty(c)) customCatchSerialMap[c] = s;
+                            }
+                        }
+                        else if (doc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Object)
+                        {
+                            foreach (var prop in doc.RootElement.EnumerateObject())
+                            {
+                                if (prop.Value.TryGetInt32(out var sVal))
+                                {
+                                    customCatchSerialMap[prop.Name] = sVal;
+                                }
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        await _loggerService.LogErrorAsync("Failed to parse CustomCatchSerials", ex.Message, nameof(EnvelopeBreakageProcessingController));
+                    }
+                }
+
                 // ✅ Continuity: if not resetting on catch change and we are doing a targeted run, 
                 // find the last used serials in the project to continue the sequence.
-                if (!string.IsNullOrEmpty(catchNo) && !resetOmrSerialOnCatchChange)
+                if (!string.IsNullOrEmpty(catchNo))
                 {
-                    var lastResult = await _context.EnvelopeBreakingResults
-                        .Where(r => r.ProjectId == ProjectId && r.CatchNo != catchNo && r.Status)
-                        .OrderByDescending(r => r.SerialNumber)
-                        .FirstOrDefaultAsync();
-
-                    if (lastResult != null)
+                    if (useCustomCatchSerial && customCatchSerialMap.TryGetValue(catchNo, out int customStart))
                     {
-                        serial = lastResult.SerialNumber + 1;
+                        bookletStart = customStart;
+                    }
 
-                        if (!string.IsNullOrEmpty(lastResult.OmrSerial))
-                        {
-                            var parts = lastResult.OmrSerial.Split('-');
-                            if (parts.Length == 2 && int.TryParse(parts[1], out int lastOmr)) omrStart = lastOmr + 1;
-                            else if (int.TryParse(lastResult.OmrSerial, out int lastOmrSing)) omrStart = lastOmrSing + 1;
-                        }
+                    if (!resetOmrSerialOnCatchChange)
+                    {
+                        var lastResult = await _context.EnvelopeBreakingResults
+                            .Where(r => r.ProjectId == ProjectId && r.CatchNo != catchNo && r.Status)
+                            .OrderByDescending(r => r.SerialNumber)
+                            .FirstOrDefaultAsync();
 
-                        if (!string.IsNullOrEmpty(lastResult.BookletSerial))
+                        if (lastResult != null)
                         {
-                            var parts = lastResult.BookletSerial.Split('-');
-                            if (parts.Length == 2 && int.TryParse(parts[1], out int lastBooklet)) bookletStart = lastBooklet + 1;
-                            else if (int.TryParse(lastResult.BookletSerial, out int lastBookletSing)) bookletStart = lastBookletSing + 1;
+                            serial = lastResult.SerialNumber + 1;
+
+                            if (!string.IsNullOrEmpty(lastResult.OmrSerial))
+                            {
+                                var parts = lastResult.OmrSerial.Split('-');
+                                if (parts.Length == 2 && int.TryParse(parts[1], out int lastOmr)) omrStart = lastOmr + 1;
+                                else if (int.TryParse(lastResult.OmrSerial, out int lastOmrSing)) omrStart = lastOmrSing + 1;
+                            }
+
+                            if (!useCustomCatchSerial || !customCatchSerialMap.ContainsKey(catchNo))
+                            {
+                                if (!string.IsNullOrEmpty(lastResult.BookletSerial))
+                                {
+                                    var parts = lastResult.BookletSerial.Split('-');
+                                    if (parts.Length == 2 && int.TryParse(parts[1], out int lastBooklet)) bookletStart = lastBooklet + 1;
+                                    else if (int.TryParse(lastResult.BookletSerial, out int lastBookletSing)) bookletStart = lastBookletSing + 1;
+                                }
+                            }
                         }
                     }
                 }
 
-                bool assignBookletSerial = bookletStart > 0;
-                bool assignOmrSerial = omrStart > 0;
                 string prevCatchForSerial = null;
 
                 var envelopeResults = new List<EnvelopeBreakingResult>();
@@ -937,11 +979,29 @@ namespace Tools.Controllers
                     bool isExtra = (bool)dict["ExtraAttached"];
                     string cNo = dict["CatchNo"]?.ToString();
 
-                    if (!isMssRow && prevCatchForSerial != null && cNo != prevCatchForSerial)
+                    if (!isMssRow)
                     {
-                        serial = 1;
-                        if (resetOmrSerialOnCatchChange) omrStart = projectconfig.OmrSerialNumber;
-                        if (resetBookletSerialOnCatchChange) bookletStart = projectconfig?.BookletSerialNumber ?? 0;
+                        if (prevCatchForSerial == null)
+                        {
+                            if (useCustomCatchSerial && cNo != null && customCatchSerialMap.TryGetValue(cNo, out int customStart))
+                            {
+                                bookletStart = customStart;
+                            }
+                        }
+                        else if (cNo != prevCatchForSerial)
+                        {
+                            serial = 1;
+                            if (resetOmrSerialOnCatchChange) omrStart = projectconfig.OmrSerialNumber;
+
+                            if (useCustomCatchSerial && cNo != null && customCatchSerialMap.TryGetValue(cNo, out int customStart))
+                            {
+                                bookletStart = customStart;
+                            }
+                            else if (resetBookletSerialOnCatchChange || (projectconfig?.BookletSerialNumber ?? 0) == 0)
+                            {
+                                bookletStart = projectconfig?.BookletSerialNumber ?? 0;
+                            }
+                        }
                     }
 
                     if (isMssRow)
@@ -991,16 +1051,30 @@ namespace Tools.Controllers
                     string bookletSerial = "";
                     string omrSerial = "";
 
-                    if (assignBookletSerial)
+                    if (bookletStart > 0)
                     {
-                        int envQuantity = (int)dict["EnvQuantity"];
+                        int envQuantity = 1;
+                        if (dict.ContainsKey("EnvQuantity") && dict["EnvQuantity"] != null)
+                        {
+                            if (dict["EnvQuantity"] is int eqInt) envQuantity = eqInt;
+                            else if (int.TryParse(dict["EnvQuantity"].ToString(), out int parsedEq)) envQuantity = parsedEq;
+                        }
+                        if (envQuantity <= 0) envQuantity = 1;
+
                         bookletSerial = $"{bookletStart}-{bookletStart + envQuantity - 1}";
                         bookletStart += envQuantity;
                     }
 
-                    if (assignOmrSerial)
+                    if (omrStart > 0)
                     {
-                        int envQuantity = (int)dict["EnvQuantity"];
+                        int envQuantity = 1;
+                        if (dict.ContainsKey("EnvQuantity") && dict["EnvQuantity"] != null)
+                        {
+                            if (dict["EnvQuantity"] is int eqInt) envQuantity = eqInt;
+                            else if (int.TryParse(dict["EnvQuantity"].ToString(), out int parsedEq)) envQuantity = parsedEq;
+                        }
+                        if (envQuantity <= 0) envQuantity = 1;
+
                         omrSerial = $"{omrStart}-{omrStart + envQuantity - 1}";
                         omrStart += envQuantity;
                     }

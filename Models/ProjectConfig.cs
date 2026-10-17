@@ -33,6 +33,8 @@ namespace Tools.Models
         public List<int>? BoxBreakingCriteriaForUniExtra { get; set; } = new List<int>();
         public List<int>? BoxBreakingCriteriaForOffcExtra { get; set; } = new List<int>();
         public List<int>? HeaderVerificationFields { get; set; } = new List<int>();
+        public bool UseCustomCatchSerial { get; set; } = false;
+        public string? CustomCatchSerials { get; set; }
     }
 
     public static class PipelineNavigator
