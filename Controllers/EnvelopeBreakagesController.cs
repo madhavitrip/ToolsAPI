@@ -386,6 +386,16 @@ namespace Tools.Controllers
         {
             try
             {
+                var isNewModel = await _context.NrData1.AnyAsync(p => p.ProjectId == ProjectId && p.Status);
+                if (isNewModel)
+                {
+                    var nrData1Controller = new NrData1Controller(_context, _loggerService, null, null)
+                    {
+                        ControllerContext = this.ControllerContext
+                    };
+                    return await nrData1Controller.EnvelopeConfiguration(ProjectId, bypassDispatch);
+                }
+
                 var projectConfig = await _context.ProjectConfigs
                     .FirstOrDefaultAsync(s => s.ProjectId == ProjectId);
 
@@ -969,6 +979,12 @@ namespace Tools.Controllers
         {
             try
             {
+                var isNewModel = await _context.NrData1.AnyAsync(p => p.ProjectId == ProjectId);
+                if (isNewModel)
+                {
+                    return await GenerateNewModelEnvelopeSummaryReport(ProjectId, uploadId, lotNo);
+                }
+
                 List<NRData> nrDataList;
                 if (uploadId.HasValue)
                 {
@@ -1265,6 +1281,12 @@ namespace Tools.Controllers
         {
             try
             {
+                var isNewModel = await _context.NrData1.AnyAsync(p => p.ProjectId == ProjectId);
+                if (isNewModel)
+                {
+                    return await GenerateNewModelCatchEnvelopeSummaryWithExtras(ProjectId, uploadId, lotNo);
+                }
+
                 // ==============================
                 // 1️⃣ Get NRData
                 // ==============================
@@ -1587,6 +1609,483 @@ namespace Tools.Controllers
                 return StatusCode(500, "Internal Server Error");
             }
 
+        }
+
+        private async Task<IActionResult> GenerateNewModelEnvelopeSummaryReport(int ProjectId, int? uploadId, int? lotNo)
+        {
+            var nrQuery = _context.NrData1.Where(x => x.ProjectId == ProjectId && x.Status);
+            if (lotNo.HasValue && lotNo.Value > 0)
+                nrQuery = nrQuery.Where(x => x.LotNo == lotNo.Value);
+            var nrList = await nrQuery.ToListAsync();
+            if (!nrList.Any()) return NotFound("No NRData found.");
+
+            var nrIds = nrList.Select(x => x.Id).ToList();
+            var centerList = await _context.CenterList
+                .Where(c => c.ProjectId == ProjectId && c.Status && nrIds.Contains(c.NRDataId))
+                .ToListAsync();
+
+            var breakages = await _context.NewEnvelopeBreakages
+                .Where(x => x.ProjectId == ProjectId && x.Status && nrIds.Contains(x.NrDataId))
+                .ToListAsync();
+
+            var extraEnvelopes = await _context.ExtrasEnvelope
+                .Where(x => x.ProjectId == ProjectId && x.Status == 1)
+                .ToListAsync();
+
+            var extraConfigs = await _context.ExtraConfigurations
+                .Where(x => x.ProjectId == ProjectId)
+                .ToListAsync();
+
+            if (!breakages.Any() && !extraEnvelopes.Any())
+                return NotFound("No EnvelopeBreakages or ExtraEnvelopes found.");
+
+            var allInnerKeys = new HashSet<string>();
+            var allOuterKeys = new HashSet<string>();
+
+            foreach (var b in breakages)
+            {
+                if (!string.IsNullOrEmpty(b.InnerEnvelope))
+                {
+                    try
+                    {
+                        var innerDict = JsonSerializer.Deserialize<Dictionary<string, string>>(b.InnerEnvelope);
+                        if (innerDict != null) foreach (var k in innerDict.Keys) allInnerKeys.Add($"Inner_{k}");
+                    }
+                    catch { }
+                }
+                if (!string.IsNullOrEmpty(b.OuterEnvelope))
+                {
+                    try
+                    {
+                        var outerDict = JsonSerializer.Deserialize<Dictionary<string, string>>(b.OuterEnvelope);
+                        if (outerDict != null) foreach (var k in outerDict.Keys) allOuterKeys.Add($"Outer_{k}");
+                    }
+                    catch { }
+                }
+            }
+
+            foreach (var extra in extraEnvelopes)
+            {
+                var config = extraConfigs.FirstOrDefault(c => c.ExtraType == extra.ExtraId);
+                if (config != null)
+                {
+                    try
+                    {
+                        var envelopeType = JsonSerializer.Deserialize<Dictionary<string, string>>(config.EnvelopeType);
+                        if (envelopeType != null)
+                        {
+                            if (envelopeType.ContainsKey("Inner")) allInnerKeys.Add($"Inner_{envelopeType["Inner"]}");
+                            if (envelopeType.ContainsKey("Outer")) allOuterKeys.Add($"Outer_{envelopeType["Outer"]}");
+                        }
+                    }
+                    catch { }
+                }
+            }
+
+            using var package = new ExcelPackage();
+            var worksheet = package.Workbook.Worksheets.Add("EnvelopeSummary");
+
+            var baseColumns = new List<string>
+            {
+                "Id", "CatchNo", "CourseName", "SubjectName", "ExamDate", "ExamTime",
+                "CenterCode", "NodalCode", "Quantity", "District", "Route", "LotNo"
+            };
+
+            var headers = new List<string>();
+            headers.AddRange(baseColumns);
+            headers.AddRange(allInnerKeys.OrderBy(x => x));
+            headers.AddRange(allOuterKeys.OrderBy(x => x));
+            headers.Add("TotalEnvelope");
+
+            for (int i = 0; i < headers.Count; i++)
+                worksheet.Cells[1, i + 1].Value = headers[i];
+
+            using (var range = worksheet.Cells[1, 1, 1, headers.Count])
+            {
+                range.Style.Font.Bold = true;
+                range.Style.Fill.PatternType = OfficeOpenXml.Style.ExcelFillStyle.Solid;
+                range.Style.Fill.BackgroundColor.SetColor(System.Drawing.Color.LightGray);
+            }
+
+            int rowIndex = 2;
+            var nrMap = nrList.ToDictionary(x => x.Id, x => x);
+
+            // Regular rows from CenterList + NrData1
+            foreach (var c in centerList)
+            {
+                if (!nrMap.TryGetValue(c.NRDataId, out var nr)) continue;
+
+                var breakage = breakages.FirstOrDefault(x => x.CenterListId == c.Id)
+                            ?? breakages.FirstOrDefault(x => x.NrDataId == nr.Id && x.CenterListId == 0);
+
+                var rowDict = new Dictionary<string, object>
+                {
+                    ["Id"] = c.Id,
+                    ["CatchNo"] = nr.CatchNo,
+                    ["CourseName"] = nr.CourseName,
+                    ["SubjectName"] = nr.SubjectName,
+                    ["ExamDate"] = nr.ExamDate,
+                    ["ExamTime"] = nr.ExamTime,
+                    ["CenterCode"] = c.CenterCode,
+                    ["NodalCode"] = c.NodalCode,
+                    ["Quantity"] = c.Quantity,
+                    ["District"] = c.District ?? "",
+                    ["Route"] = c.Route ?? "",
+                    ["LotNo"] = nr.LotNo,
+                    ["TotalEnvelope"] = breakage?.TotalEnvelope ?? 0
+                };
+
+                foreach (var k in allInnerKeys) rowDict[k] = 0;
+                foreach (var k in allOuterKeys) rowDict[k] = 0;
+
+                if (breakage != null)
+                {
+                    if (!string.IsNullOrEmpty(breakage.InnerEnvelope))
+                    {
+                        try
+                        {
+                            var dict = JsonSerializer.Deserialize<Dictionary<string, string>>(breakage.InnerEnvelope);
+                            if (dict != null) foreach (var kv in dict) rowDict[$"Inner_{kv.Key}"] = kv.Value;
+                        }
+                        catch { }
+                    }
+                    if (!string.IsNullOrEmpty(breakage.OuterEnvelope))
+                    {
+                        try
+                        {
+                            var dict = JsonSerializer.Deserialize<Dictionary<string, string>>(breakage.OuterEnvelope);
+                            if (dict != null) foreach (var kv in dict) rowDict[$"Outer_{kv.Key}"] = kv.Value;
+                        }
+                        catch { }
+                    }
+                }
+
+                for (int col = 0; col < headers.Count; col++)
+                    worksheet.Cells[rowIndex, col + 1].Value = rowDict.ContainsKey(headers[col]) ? rowDict[headers[col]] : 0;
+
+                rowIndex++;
+            }
+
+            // Extra Envelopes
+            foreach (var extra in extraEnvelopes)
+            {
+                var baseRow = nrList.FirstOrDefault(x => x.CatchNo == extra.CatchNo);
+                if (baseRow == null) continue;
+
+                var config = extraConfigs.FirstOrDefault(c => c.ExtraType == extra.ExtraId);
+                if (config == null) continue;
+
+                string centerDesc = extra.ExtraId switch
+                {
+                    1 => "Nodal Extra",
+                    2 => "University Extra",
+                    3 => "Office Extra",
+                    _ => "Extra"
+                };
+
+                var rowDict = new Dictionary<string, object>
+                {
+                    ["Id"] = 0,
+                    ["CatchNo"] = extra.CatchNo,
+                    ["CourseName"] = baseRow.CourseName,
+                    ["SubjectName"] = baseRow.SubjectName,
+                    ["ExamDate"] = baseRow.ExamDate,
+                    ["ExamTime"] = baseRow.ExamTime,
+                    ["CenterCode"] = centerDesc,
+                    ["NodalCode"] = extra.NodalCode,
+                    ["Quantity"] = extra.Quantity,
+                    ["District"] = "",
+                    ["Route"] = "",
+                    ["LotNo"] = baseRow.LotNo
+                };
+
+                foreach (var k in allInnerKeys) rowDict[k] = 0;
+                foreach (var k in allOuterKeys) rowDict[k] = 0;
+
+                try
+                {
+                    var envelopeType = JsonSerializer.Deserialize<Dictionary<string, string>>(config.EnvelopeType);
+                    if (envelopeType != null)
+                    {
+                        if (envelopeType.ContainsKey("Inner") && !string.IsNullOrEmpty(extra.InnerEnvelope))
+                            rowDict[$"Inner_{envelopeType["Inner"]}"] = extra.InnerEnvelope;
+                        if (envelopeType.ContainsKey("Outer") && !string.IsNullOrEmpty(extra.OuterEnvelope))
+                            rowDict[$"Outer_{envelopeType["Outer"]}"] = extra.OuterEnvelope;
+                    }
+                }
+                catch { }
+
+                int totalOuter = 0;
+                foreach (var k in allOuterKeys)
+                {
+                    if (rowDict.ContainsKey(k) && int.TryParse(rowDict[k]?.ToString(), out var v))
+                        totalOuter += v;
+                }
+                rowDict["TotalEnvelope"] = totalOuter;
+
+                for (int col = 0; col < headers.Count; col++)
+                    worksheet.Cells[rowIndex, col + 1].Value = rowDict.ContainsKey(headers[col]) ? rowDict[headers[col]] : 0;
+
+                rowIndex++;
+            }
+
+            if (worksheet.Dimension != null)
+            {
+                worksheet.Cells[worksheet.Dimension.Address].AutoFitColumns();
+                worksheet.View.FreezePanes(2, 1);
+            }
+
+            var folderPath = FileStorageHelper.GetProjectFolder(ProjectId);
+            var fileName = uploadId.HasValue ? $"EnvelopeSummary_v{uploadId}.xlsx" : ReportVersionHelper.GetNextVersionFileName(folderPath, "EnvelopeSummary.xlsx");
+            var filePath = Path.Combine(folderPath, fileName);
+            package.SaveAs(new FileInfo(filePath));
+
+            await ToolsAPI.Helpers.ExcelReportHelper.RecordExcelReportAsync(
+                _context, ProjectId, 4, uploadId ?? 1, lotNo.HasValue && lotNo.Value > 0 ? lotNo : null, filePath, true, LogHelper.GetTriggeredBy(User, Request)
+            );
+
+            await _loggerService.LogEventAsync("EnvelopeSummary report created", "EnvelopeSummary", LogHelper.GetTriggeredBy(User), ProjectId);
+            return Ok(new { message = $"EnvelopeSummary.xlsx generated at: {filePath}", fileName });
+        }
+
+        private async Task<IActionResult> GenerateNewModelCatchEnvelopeSummaryWithExtras(int ProjectId, int? uploadId, int? lotNo)
+        {
+            var nrQuery = _context.NrData1.Where(x => x.ProjectId == ProjectId && x.Status);
+            if (lotNo.HasValue && lotNo.Value > 0)
+                nrQuery = nrQuery.Where(x => x.LotNo == lotNo.Value);
+            var nrList = await nrQuery.ToListAsync();
+            if (!nrList.Any()) return NotFound("No NRData found.");
+
+            var nrIds = nrList.Select(x => x.Id).ToList();
+            var centerList = await _context.CenterList
+                .Where(c => c.ProjectId == ProjectId && c.Status && nrIds.Contains(c.NRDataId))
+                .ToListAsync();
+
+            var breakages = await _context.NewEnvelopeBreakages
+                .Where(x => x.ProjectId == ProjectId && x.Status && nrIds.Contains(x.NrDataId))
+                .ToListAsync();
+
+            var extraEnvelopes = await _context.ExtrasEnvelope
+                .Where(x => x.ProjectId == ProjectId && x.Status == 1)
+                .ToListAsync();
+
+            var extraConfigs = await _context.ExtraConfigurations
+                .Where(x => x.ProjectId == ProjectId)
+                .ToListAsync();
+
+            var configMap = extraConfigs.ToDictionary(c => c.ExtraType, c => c);
+
+            var uniqueFields = await _context.Fields
+                .Where(f => f.IsUnique)
+                .Select(f => f.Name)
+                .ToListAsync();
+
+            // Distinct Nodal count per CatchNo
+            var nodalCountMap = (from c in centerList
+                                 join n in nrList on c.NRDataId equals n.Id
+                                 where !string.IsNullOrEmpty(n.CatchNo) && !string.IsNullOrEmpty(c.NodalCode)
+                                 group c by n.CatchNo into g
+                                 select new { CatchNo = g.Key, NodalCount = g.Select(x => x.NodalCode).Distinct().Count() })
+                                 .ToDictionary(x => x.CatchNo, x => x.NodalCount);
+
+            var summaryData = new Dictionary<string, Dictionary<string, int>>();
+            var qtyData = new Dictionary<string, int>();
+
+            var allInnerKeys = new HashSet<string>();
+            var allOuterKeys = new HashSet<string>();
+
+            var nrMapByCatch = nrList.GroupBy(x => x.CatchNo).ToDictionary(g => g.Key, g => g.First());
+
+            foreach (var catchNo in nrMapByCatch.Keys)
+            {
+                if (string.IsNullOrEmpty(catchNo)) continue;
+                if (!summaryData.ContainsKey(catchNo)) summaryData[catchNo] = new Dictionary<string, int>();
+                if (!qtyData.ContainsKey(catchNo)) qtyData[catchNo] = 0;
+            }
+
+            // Base quantity per CatchNo from CenterList
+            foreach (var c in centerList)
+            {
+                var nr = nrList.FirstOrDefault(x => x.Id == c.NRDataId);
+                if (nr != null && !string.IsNullOrEmpty(nr.CatchNo))
+                {
+                    qtyData[nr.CatchNo] = (qtyData.TryGetValue(nr.CatchNo, out var currQ) ? currQ : 0) + c.Quantity;
+                }
+            }
+
+            // Process breakages
+            foreach (var b in breakages)
+            {
+                var nr = nrList.FirstOrDefault(x => x.Id == b.NrDataId);
+                if (nr == null || string.IsNullOrEmpty(nr.CatchNo)) continue;
+                string catchNo = nr.CatchNo;
+
+                if (!summaryData.ContainsKey(catchNo)) summaryData[catchNo] = new Dictionary<string, int>();
+
+                if (!string.IsNullOrEmpty(b.InnerEnvelope))
+                {
+                    try
+                    {
+                        var dict = JsonSerializer.Deserialize<Dictionary<string, string>>(b.InnerEnvelope);
+                        if (dict != null)
+                        {
+                            foreach (var kvp in dict)
+                            {
+                                string key = $"Inner_{kvp.Key}";
+                                allInnerKeys.Add(key);
+                                int val = int.TryParse(kvp.Value, out var v) ? v : 0;
+                                if (!summaryData[catchNo].ContainsKey(key)) summaryData[catchNo][key] = 0;
+                                summaryData[catchNo][key] += val;
+                            }
+                        }
+                    }
+                    catch { }
+                }
+
+                if (!string.IsNullOrEmpty(b.OuterEnvelope))
+                {
+                    try
+                    {
+                        var dict = JsonSerializer.Deserialize<Dictionary<string, string>>(b.OuterEnvelope);
+                        if (dict != null)
+                        {
+                            foreach (var kvp in dict)
+                            {
+                                string key = $"Outer_{kvp.Key}";
+                                allOuterKeys.Add(key);
+                                int val = int.TryParse(kvp.Value, out var v) ? v : 0;
+                                if (!summaryData[catchNo].ContainsKey(key)) summaryData[catchNo][key] = 0;
+                                summaryData[catchNo][key] += val;
+                            }
+                        }
+                    }
+                    catch { }
+                }
+            }
+
+            // Process Extras
+            foreach (var extra in extraEnvelopes)
+            {
+                string catchNo = extra.CatchNo;
+                if (string.IsNullOrEmpty(catchNo)) continue;
+
+                if (!summaryData.ContainsKey(catchNo)) summaryData[catchNo] = new Dictionary<string, int>();
+                if (!qtyData.ContainsKey(catchNo)) qtyData[catchNo] = 0;
+
+                int multiplier = 1;
+                if (extra.ExtraId == 1 && nodalCountMap.ContainsKey(catchNo))
+                {
+                    multiplier = nodalCountMap[catchNo];
+                }
+
+                qtyData[catchNo] += extra.Quantity * multiplier;
+
+                if (!configMap.TryGetValue(extra.ExtraId, out var config)) continue;
+
+                try
+                {
+                    var envelopeType = JsonSerializer.Deserialize<Dictionary<string, string>>(config.EnvelopeType);
+                    if (envelopeType != null)
+                    {
+                        if (envelopeType.ContainsKey("Inner") && !string.IsNullOrEmpty(extra.InnerEnvelope))
+                        {
+                            string key = $"Inner_{envelopeType["Inner"]}";
+                            allInnerKeys.Add(key);
+                            int val = int.TryParse(extra.InnerEnvelope, out var v) ? v : 0;
+                            val *= multiplier;
+                            if (!summaryData[catchNo].ContainsKey(key)) summaryData[catchNo][key] = 0;
+                            summaryData[catchNo][key] += val;
+                        }
+
+                        if (envelopeType.ContainsKey("Outer") && !string.IsNullOrEmpty(extra.OuterEnvelope))
+                        {
+                            string key = $"Outer_{envelopeType["Outer"]}";
+                            allOuterKeys.Add(key);
+                            int val = int.TryParse(extra.OuterEnvelope, out var v) ? v : 0;
+                            val *= multiplier;
+                            if (!summaryData[catchNo].ContainsKey(key)) summaryData[catchNo][key] = 0;
+                            summaryData[catchNo][key] += val;
+                        }
+                    }
+                }
+                catch { }
+            }
+
+            var allHeaders = summaryData.SelectMany(x => x.Value.Keys).Distinct().ToList();
+            var orderedHeaders = new List<string>();
+            orderedHeaders.AddRange(uniqueFields);
+            orderedHeaders.Add("CatchNo");
+            orderedHeaders.Add("Qty");
+            orderedHeaders.AddRange(allHeaders.Where(x => x.StartsWith("Inner_")).OrderBy(x => x));
+            orderedHeaders.AddRange(allHeaders.Where(x => x.StartsWith("Outer_")).OrderBy(x => x));
+            orderedHeaders.Add("TotalEnvelope");
+
+            using var package = new ExcelPackage();
+            var ws = package.Workbook.Worksheets.Add("CatchSummary");
+
+            for (int i = 0; i < orderedHeaders.Count; i++) ws.Cells[1, i + 1].Value = orderedHeaders[i];
+            ws.Cells[1, 1, 1, orderedHeaders.Count].Style.Font.Bold = true;
+
+            int row = 2;
+            foreach (var catchEntry in summaryData.OrderBy(x => x.Key))
+            {
+                var catchNo = catchEntry.Key;
+                var nrRow = nrMapByCatch.ContainsKey(catchNo) ? nrMapByCatch[catchNo] : null;
+
+                int col = 1;
+                foreach (var field in uniqueFields)
+                {
+                    object val = null;
+                    if (nrRow != null)
+                    {
+                        var prop = typeof(NrData1).GetProperty(field);
+                        if (prop != null) val = prop.GetValue(nrRow);
+                        else if (!string.IsNullOrEmpty(nrRow.NRDatas))
+                        {
+                            try
+                            {
+                                using var doc = JsonDocument.Parse(nrRow.NRDatas);
+                                if (doc.RootElement.TryGetProperty(field, out var elem))
+                                    val = elem.ToString();
+                            }
+                            catch { }
+                        }
+                    }
+                    ws.Cells[row, col++].Value = val;
+                }
+
+                ws.Cells[row, col++].Value = catchNo;
+                ws.Cells[row, col++].Value = qtyData.ContainsKey(catchNo) ? qtyData[catchNo] : 0;
+
+                int totalOuter = 0;
+                foreach (var key in orderedHeaders.Skip(uniqueFields.Count + 2).Take(orderedHeaders.Count - (uniqueFields.Count + 3)))
+                {
+                    int val = catchEntry.Value.ContainsKey(key) ? catchEntry.Value[key] : 0;
+                    ws.Cells[row, col++].Value = val;
+                    if (key.StartsWith("Outer_")) totalOuter += val;
+                }
+
+                ws.Cells[row, col].Value = totalOuter;
+                row++;
+            }
+
+            if (ws.Dimension != null)
+            {
+                ws.Cells[ws.Dimension.Address].AutoFitColumns();
+                ws.View.FreezePanes(2, 1);
+            }
+
+            var folderPath = FileStorageHelper.GetProjectFolder(ProjectId);
+            var fileName = uploadId.HasValue ? $"CatchSummary_v{uploadId}.xlsx" : ReportVersionHelper.GetNextVersionFileName(folderPath, "CatchSummary.xlsx");
+            var filePath = Path.Combine(folderPath, fileName);
+            package.SaveAs(new FileInfo(filePath));
+
+            await ToolsAPI.Helpers.ExcelReportHelper.RecordExcelReportAsync(
+                _context, ProjectId, 7, uploadId ?? 1, lotNo.HasValue && lotNo.Value > 0 ? lotNo : null, filePath, true, LogHelper.GetTriggeredBy(User, Request)
+            );
+
+            await _loggerService.LogEventAsync("CatchSummary report created", "CatchSummary", LogHelper.GetTriggeredBy(User), ProjectId);
+            return Ok(new { message = $"CatchSummary.xlsx generated at: {filePath}", fileName });
         }
 
         private bool EnvelopeBreakageExists(int id)

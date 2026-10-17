@@ -907,27 +907,57 @@ namespace Tools.Controllers
             }
         }
 
-        private async Task GenerateBoxBreakingReportAsync(int projectId, List<int> lotNumbers, string authHeader = null, int? userId = null)
+        private async Task GenerateBoxBreakingReportAsync(int projectId, List<int>? lotNumbers, string? authHeader = null, int? userId = null)
         {
             try
             {
-                using var client = new HttpClient();
-                if (!string.IsNullOrEmpty(authHeader))
-                    client.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", authHeader);
-
-                foreach (var lot in lotNumbers)
+                var lots = lotNumbers != null && lotNumbers.Any() ? lotNumbers : new List<int> { 0 };
+                foreach (var lot in lots)
                 {
-                    var userIdParam = userId.HasValue ? $"&userId={userId.Value}" : "";
-                    var url = $"{_apiSettings.BoxBreaking}?ProjectId={projectId}&LotNo={lot}{userIdParam}";
-                    var response = await client.GetAsync(url);
-
-                    if (!response.IsSuccessStatusCode)
+                    try
                     {
-                        await _loggerService.LogErrorAsync($"Failed to generate box breaking report for Lot {lot}", $"Status: {response.StatusCode}", nameof(BoxBreakingProcessingController));
+                        var lotList = lot > 0 ? new List<int> { lot } : null;
+                        var result = await GetBoxBreakingReport(projectId, lotList, null, userId);
+                        if (result is OkObjectResult || result is FileResult)
+                        {
+                            await _loggerService.LogEventAsync($"Box breaking report for Lot {lot} generated successfully", "BoxBreakingProcessing", 0, projectId);
+                        }
+                        else
+                        {
+                            await _loggerService.LogErrorAsync($"Failed to generate box breaking report for Lot {lot}", $"Result: {result}", nameof(BoxBreakingProcessingController));
+                        }
                     }
-                    else
+                    catch (Exception inProcEx)
                     {
-                        await _loggerService.LogEventAsync($"Box breaking report for Lot {lot} generated successfully", "BoxBreakingProcessing", 0, projectId);
+                        // Fallback to HTTP request if in-process invocation encountered an issue
+                        try
+                        {
+                            var handler = new HttpClientHandler
+                            {
+                                ServerCertificateCustomValidationCallback = (sender, cert, chain, sslPolicyErrors) => true
+                            };
+                            using var client = new HttpClient(handler);
+                            if (!string.IsNullOrEmpty(authHeader))
+                                client.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", authHeader);
+
+                            var userIdParam = userId.HasValue ? $"&userId={userId.Value}" : "";
+                            var lotParam = lot > 0 ? $"&LotNo={lot}" : "";
+                            var url = $"{_apiSettings.BoxBreaking}?ProjectId={projectId}{lotParam}{userIdParam}";
+                            var response = await client.GetAsync(url);
+
+                            if (!response.IsSuccessStatusCode)
+                            {
+                                await _loggerService.LogErrorAsync($"Failed to generate box breaking report for Lot {lot}", $"Status: {response.StatusCode}", nameof(BoxBreakingProcessingController));
+                            }
+                            else
+                            {
+                                await _loggerService.LogEventAsync($"Box breaking report for Lot {lot} generated successfully via HTTP", "BoxBreakingProcessing", 0, projectId);
+                            }
+                        }
+                        catch (Exception httpEx)
+                        {
+                            await _loggerService.LogErrorAsync($"Error generating box breaking report for Lot {lot}", $"{inProcEx.Message} | {httpEx.Message}", nameof(BoxBreakingProcessingController));
+                        }
                     }
                 }
             }
@@ -936,6 +966,7 @@ namespace Tools.Controllers
                 await _loggerService.LogErrorAsync("Error generating box breaking report(s)", ex.Message, nameof(BoxBreakingProcessingController));
             }
         }
+
 
         [HttpGet("GetBoxBreakingReport")]
         public async Task<IActionResult> GetBoxBreakingReport(int ProjectId, [FromQuery] List<int>? LotNo = null, [FromQuery] int? uploadId = null, [FromQuery] int? userId = null)
@@ -1004,11 +1035,9 @@ namespace Tools.Controllers
                 }
 
                 // ✅ Get envelope results for this lot's catches
-                var envelopeResults = await _context.EnvelopeBreakingResults
-                    .Where(nr => nrCatchNos.Contains(nr.CatchNo) && nr.ProjectId == ProjectId && nr.Status)
-                    .ToListAsync();
+                List<EnvelopeBreakingResult> envelopeResults = new List<EnvelopeBreakingResult>();
 
-                if (!envelopeResults.Any() && isNewModel)
+                if (isNewModel)
                 {
                     var newEnvBreakings = await _context.NewEnvelopeBreakingResults
                         .Where(r => r.ProjectId == ProjectId && r.Status && r.SerialNumber != 0)
@@ -1027,12 +1056,18 @@ namespace Tools.Controllers
                         centerListMap.TryGetValue(eb.CenterListId, out var c);
                         nr1Map.TryGetValue(eb.NrDataId, out var n);
 
+                        string catchNo = n?.CatchNo ?? "";
+                        if (nrCatchNos.Any() && !nrCatchNos.Contains(catchNo))
+                        {
+                            continue;
+                        }
+
                         envelopeResults.Add(new EnvelopeBreakingResult
                         {
                             Id = eb.Id,
                             ProjectId = eb.ProjectId,
                             NrDataId = eb.NrDataId,
-                            CatchNo = n?.CatchNo ?? "",
+                            CatchNo = catchNo,
                             CenterCode = c?.CenterCode ?? "",
                             CenterSort = c?.CenterSort ?? 0,
                             ExamTime = n?.ExamTime ?? "",
@@ -1049,6 +1084,12 @@ namespace Tools.Controllers
                             DistrictSort = c?.DistrictSort ?? 0
                         });
                     }
+                }
+                else
+                {
+                    envelopeResults = await _context.EnvelopeBreakingResults
+                        .Where(nr => nrCatchNos.Contains(nr.CatchNo) && nr.ProjectId == ProjectId && nr.Status)
+                        .ToListAsync();
                 }
 
                 var envelopeResultIds = envelopeResults.Select(e => e.Id).ToHashSet();
@@ -1182,16 +1223,24 @@ namespace Tools.Controllers
                     package.SaveAs(new FileInfo(filePath));
                 }
 
+                int reportVer = uploadId ?? 1;
+                var vMatch = System.Text.RegularExpressions.Regex.Match(fileName, @"_v(\d+)\.xlsx$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (vMatch.Success && int.TryParse(vMatch.Groups[1].Value, out int parsedVer))
+                {
+                    reportVer = parsedVer;
+                }
+
                 await ToolsAPI.Helpers.ExcelReportHelper.RecordExcelReportAsync(
                     _context,
                     ProjectId,
                     5, // Module 5 (Box Breaking)
-                    uploadId ?? 1,
+                    reportVer,
                     LotNo != null && LotNo.Any() ? LotNo.First() : null,
                     filePath,
                     true,
                     Tools.Services.LogHelper.GetTriggeredBy(User, Request) is int tid && tid > 0 ? tid : userId
                 );
+
 
                 return Ok(new { message = "Report generated successfully", filePath, lot = LotNo });
             }
@@ -1671,6 +1720,10 @@ namespace Tools.Controllers
                     "BoxBreakingProcessing",
                     Tools.Services.LogHelper.GetTriggeredBy(User),
                     ProjectId);
+
+                var authHeader = Request.Headers.ContainsKey("Authorization") ? Request.Headers["Authorization"].ToString() : null;
+                var triggeredBy = Tools.Services.LogHelper.GetTriggeredBy(User, Request);
+                await GenerateBoxBreakingReportAsync(ProjectId, LotNo, authHeader, triggeredBy > 0 ? triggeredBy : (int?)null);
 
                 return Ok(new
                 {

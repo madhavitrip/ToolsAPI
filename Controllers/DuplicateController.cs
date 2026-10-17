@@ -42,9 +42,8 @@ namespace Tools.Controllers
                 // Log incoming parameters for debugging
                 Console.WriteLine($"[DuplicateController] Received ProjectId: {ProjectId}, batchId: {batchId}, lotNo: {lotNo}");
 
-                // If this project has records in NrData1 and no active records in NRDatas, delegate to NrData1Controller
-                if (!await _context.NRDatas.AnyAsync(p => p.ProjectId == ProjectId && p.Status == true) &&
-                    await _context.NrData1.AnyAsync(p => p.ProjectId == ProjectId))
+                // If this project has records in NrData1, delegate to NrData1Controller
+                if (await _context.NrData1.AnyAsync(p => p.ProjectId == ProjectId && p.Status == true))
                 {
                     var nrData1Controller = new NrData1Controller(_context, _logger, _apiSettingsOptions, _dispatchService)
                     {
@@ -278,9 +277,8 @@ namespace Tools.Controllers
             {
                 Console.WriteLine($"ApplyEnhancement API called for ProjectId: {ProjectId}, batch: {batch}, lotNo: {lotNo}");
 
-                // If this project has records in NrData1 and no active records in NRDatas, delegate to NrData1Controller
-                if (!await _context.NRDatas.AnyAsync(p => p.ProjectId == ProjectId && p.Status == true) &&
-                    await _context.NrData1.AnyAsync(p => p.ProjectId == ProjectId))
+                // If this project has records in NrData1, delegate to NrData1Controller
+                if (await _context.NrData1.AnyAsync(p => p.ProjectId == ProjectId && p.Status == true))
                 {
                     var nrData1Controller = new NrData1Controller(_context, _logger, _apiSettingsOptions, _dispatchService)
                     {
@@ -573,16 +571,28 @@ WHERE ProjectId = {0};", ProjectId);
             }
 
             // Step 1: Group NRData by CatchNo and sum the quantity
-            var NRdataGrouped = await _context.NRDatas
-                .Where(p => p.ProjectId == ProjectId && p.Status==true)
-                .GroupBy(p => p.CatchNo)
-                .Select(g => new
-                {
-                    CatchNo = g.Key,
-                    TotalQuantity = g.Sum(p => p.Quantity),
-                    NRDataId = g.Select(p => p.Id).ToList()
-                })
-                .ToListAsync();
+            var isNewModel = await _context.NrData1.AnyAsync(p => p.ProjectId == ProjectId && p.Status == true);
+            var NRdataGrouped = isNewModel
+                ? await (from nr in _context.NrData1
+                         join c in _context.CenterList on nr.Id equals c.NRDataId
+                         where nr.ProjectId == ProjectId && nr.Status && c.Status
+                         group c by nr.CatchNo into g
+                         select new
+                         {
+                             CatchNo = g.Key,
+                             TotalQuantity = g.Sum(p => p.Quantity),
+                             NRDataId = g.Select(p => p.Id).ToList()
+                         }).ToListAsync()
+                : await _context.NRDatas
+                    .Where(p => p.ProjectId == ProjectId && p.Status == true)
+                    .GroupBy(p => p.CatchNo)
+                    .Select(g => new
+                    {
+                        CatchNo = g.Key,
+                        TotalQuantity = g.Sum(p => p.Quantity),
+                        NRDataId = g.Select(p => p.Id).ToList()
+                    })
+                    .ToListAsync();
 
             // Step 2: Fetch ExtrasEnvelope data and then group/sum in-memory
             var extraEnvelopeData = await _context.ExtrasEnvelope
@@ -657,22 +667,69 @@ WHERE ProjectId = {0};", ProjectId);
         {
             try
             {
+                var isNewModel = await _context.NrData1.AnyAsync(p => p.ProjectId == ProjectId);
                 List<NRData> reportRows;
-                if (uploadId.HasValue)
+                if (isNewModel)
                 {
-                    var all = await _context.NRDatas.Where(p => p.ProjectId == ProjectId).ToListAsync();
-                    reportRows = all.Where(x => x.UploadList != null && x.UploadList.Contains(uploadId.Value)).ToList();
+                    var query = from nr in _context.NrData1
+                                join c in _context.CenterList on nr.Id equals c.NRDataId
+                                where nr.ProjectId == ProjectId && nr.Status && c.Status
+                                select new NRData
+                                {
+                                    Id = c.Id,
+                                    ProjectId = nr.ProjectId,
+                                    CatchNo = nr.CatchNo,
+                                    CenterCode = c.CenterCode,
+                                    ExamDate = nr.ExamDate,
+                                    ExamTime = nr.ExamTime,
+                                    SubjectName = nr.SubjectName,
+                                    CourseName = nr.CourseName,
+                                    NodalCode = c.NodalCode,
+                                    NRQuantity = c.NRQuantity,
+                                    Quantity = c.Quantity,
+                                    Route = c.Route,
+                                    Pages = nr.Pages,
+                                    CenterSort = c.CenterSort,
+                                    NodalSort = c.NodalSort,
+                                    RouteSort = c.RouteSort,
+                                    LotNo = nr.LotNo,
+                                    EnvLotNo = nr.EnvLotNo,
+                                    Batch = nr.Batch,
+                                    NRDatas = nr.NRDatas,
+                                    Day = nr.Day,
+                                    District = c.District,
+                                    DistrictSort = c.DistrictSort,
+                                    NRDataId = nr.Id,
+                                    Status = c.Status,
+                                    Steps = nr.Steps,
+                                    VerificationStatus = nr.VerificationStatus,
+                                    Remarksss = nr.Remarksss
+                                };
+
+                    if (lotNo.HasValue && lotNo.Value > 0)
+                    {
+                        query = query.Where(r => r.LotNo == lotNo.Value);
+                    }
+                    reportRows = await query.ToListAsync();
                 }
                 else
                 {
-                    reportRows = await _context.NRDatas
-                        .Where(p => p.ProjectId == ProjectId && p.Status == true)
-                        .ToListAsync();
-                }
+                    if (uploadId.HasValue)
+                    {
+                        var all = await _context.NRDatas.Where(p => p.ProjectId == ProjectId).ToListAsync();
+                        reportRows = all.Where(x => x.UploadList != null && x.UploadList.Contains(uploadId.Value)).ToList();
+                    }
+                    else
+                    {
+                        reportRows = await _context.NRDatas
+                            .Where(p => p.ProjectId == ProjectId && p.Status == true)
+                            .ToListAsync();
+                    }
 
-                if (lotNo.HasValue && lotNo.Value > 0)
-                {
-                    reportRows = reportRows.Where(r => r.LotNo == lotNo.Value).ToList();
+                    if (lotNo.HasValue && lotNo.Value > 0)
+                    {
+                        reportRows = reportRows.Where(r => r.LotNo == lotNo.Value).ToList();
+                    }
                 }
 
                 if (!reportRows.Any())

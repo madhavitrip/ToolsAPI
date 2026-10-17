@@ -72,16 +72,9 @@ namespace Tools.Controllers
                 .Where(e => e.ProjectId == projectId)
                 .ToListAsync();
 
-            if (extras == null || extras.Count == 0)
+            if (extras == null)
             {
-                return NotFound(new { message = $"No configurations found for ProjectId: {projectId}" });
-            }
-
-            // Log what's being returned
-            Console.WriteLine($" Returning {extras.Count} ExtrasConfiguration(s) for ProjectId {projectId}:");
-            foreach (var extra in extras)
-            {
-                Console.WriteLine($"   ID: {extra.Id}, ExtraType: {extra.ExtraType}, Mode: {extra.Mode}, nodalValue: {(string.IsNullOrEmpty(extra.nodalValue) ? "NULL/EMPTY" : "HAS DATA")}");
+                extras = new List<ExtrasConfiguration>();
             }
 
             return Ok(extras);
@@ -106,16 +99,32 @@ namespace Tools.Controllers
         [HttpGet("DistinctNodals/{projectId}")]
         public async Task<IActionResult> GetDistinctNodalsByProject(int projectId)
         {
-            // Only filter by project and return distinct NodalCode from NRData where Status == true
-            var nodalCodes = await _context.NRDatas
-                .Where(n => n.ProjectId == projectId 
-                         && n.Status == true 
-                         && !string.IsNullOrEmpty(n.NodalCode))
-                .Select(n => n.NodalCode)
-                .Distinct()
-                .OrderBy(n => n)
-                .ToListAsync();
-            return Ok(nodalCodes);
+            var isNewModel = await _context.NrData1.AnyAsync(p => p.ProjectId == projectId);
+            if (isNewModel)
+            {
+                var nodalCodes = await _context.CenterList
+                    .Where(n => n.ProjectId == projectId 
+                             && n.Status == true 
+                             && !string.IsNullOrEmpty(n.NodalCode))
+                    .Select(n => n.NodalCode)
+                    .Distinct()
+                    .OrderBy(n => n)
+                    .ToListAsync();
+                return Ok(nodalCodes);
+            }
+            else
+            {
+                // Only filter by project and return distinct NodalCode from NRData where Status == true
+                var nodalCodes = await _context.NRDatas
+                    .Where(n => n.ProjectId == projectId 
+                             && n.Status == true 
+                             && !string.IsNullOrEmpty(n.NodalCode))
+                    .Select(n => n.NodalCode)
+                    .Distinct()
+                    .OrderBy(n => n)
+                    .ToListAsync();
+                return Ok(nodalCodes);
+            }
         }
 
         // PUT: api/ExtrasConfigurations/5

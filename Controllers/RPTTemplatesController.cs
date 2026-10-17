@@ -240,7 +240,10 @@ namespace Tools.Controllers
                 envDirectColumns.Add(col);
 
             var envColumns = FilterColumns(envDirectColumns.ToList());
-            var envBreakageCols = FilterColumns(GetModelColumns<EnvelopeBreakage>());
+            var envBreakageDirectCols = new HashSet<string>(GetModelColumns<EnvelopeBreakage>(), StringComparer.OrdinalIgnoreCase);
+            foreach (var col in GetModelColumns<NewEnvelopeBreakage>())
+                envBreakageDirectCols.Add(col);
+            var envBreakageCols = FilterColumns(envBreakageDirectCols.ToList());
             var boxColumns = FilterColumns(GetModelColumns<BoxBreakingResult>());
             var extraConfigCols = FilterColumns(GetModelColumns<ExtrasConfiguration>());
 
@@ -256,7 +259,7 @@ namespace Tools.Controllers
                     .ToListAsync();
             }
 
-            // NR JSON keys
+            // NR JSON keys (Legacy NRDatas)
             var nrQuery = _context.NRDatas.AsQueryable();
             if (projectIds.Count > 0) nrQuery = nrQuery.Where(n => projectIds.Contains(n.ProjectId));
             foreach (var json in await nrQuery.Where(n => !string.IsNullOrWhiteSpace(n.NRDatas)).Select(n => n.NRDatas).ToListAsync())
@@ -272,7 +275,23 @@ namespace Tools.Controllers
                 catch { }
             }
 
-            // EnvBreakage JSON keys
+            // NR JSON keys (New Model NrData1)
+            var nr1Query = _context.NrData1.AsQueryable();
+            if (projectIds.Count > 0) nr1Query = nr1Query.Where(n => projectIds.Contains(n.ProjectId));
+            foreach (var json in await nr1Query.Where(n => !string.IsNullOrWhiteSpace(n.NRDatas)).Select(n => n.NRDatas).ToListAsync())
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(json);
+                    foreach (var p in doc.RootElement.EnumerateObject())
+                        if (!string.IsNullOrWhiteSpace(p.Name)
+                            && !p.Name.StartsWith("json:", StringComparison.OrdinalIgnoreCase))
+                            nrJsonKeys.Add(p.Name);
+                }
+                catch { }
+            }
+
+            // EnvBreakage JSON keys (Legacy EnvelopeBreakages)
             var ebQuery = _context.EnvelopeBreakages.Where(e => e.Status == true).AsQueryable();
             if (projectIds.Count > 0) ebQuery = ebQuery.Where(e => projectIds.Contains(e.ProjectId));
             foreach (var json in await ebQuery.Where(e => !string.IsNullOrWhiteSpace(e.InnerEnvelope)).Select(e => e.InnerEnvelope).ToListAsync())
@@ -281,7 +300,16 @@ namespace Tools.Controllers
                 catch { }
             }
 
-            // ExtraConfig � only expose Inner from EnvelopeType JSON, label = actual value (e.g. "E10")
+            // EnvBreakage JSON keys (New Model NewEnvelopeBreakages)
+            var newEbQuery = _context.NewEnvelopeBreakages.Where(e => e.Status == true).AsQueryable();
+            if (projectIds.Count > 0) newEbQuery = newEbQuery.Where(e => projectIds.Contains(e.ProjectId));
+            foreach (var json in await newEbQuery.Where(e => !string.IsNullOrWhiteSpace(e.InnerEnvelope)).Select(e => e.InnerEnvelope).ToListAsync())
+            {
+                try { using var doc = JsonDocument.Parse(json); foreach (var p in doc.RootElement.EnumerateObject()) if (!string.IsNullOrWhiteSpace(p.Name)) envBreakageJsonKeys.Add(p.Name); }
+                catch { }
+            }
+
+            // ExtraConfig  only expose Inner from EnvelopeType JSON, label = actual value (e.g. "E10")
             // Use projectId directly if provided, otherwise fall back to projectIds from group+type
             string innerEnvelopeValue = null;
             var extraProjectIds = projectId.HasValue && projectId.Value > 0
@@ -316,7 +344,7 @@ namespace Tools.Controllers
                 : null;
             var preferEnvelopeOverBox = string.Equals(preferredSerialPrefix, "e", StringComparison.OrdinalIgnoreCase);
 
-            // Build single deduplicated flat list � priority: b ? e ? n ? eb ? x
+            // Build single deduplicated flat list  priority: b ? e ? n ? eb ? x
             // Each column name appears exactly once, mapped to the highest-priority table prefix
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var result = new List<Dictionary<string, string>>();
@@ -350,7 +378,7 @@ namespace Tools.Controllers
             AddColumns(envBreakageCols,                               "eb.");
             AddColumns(envBreakageJsonKeys.Where(k => !excludeColumns.Contains(k)), "eb.");
 
-            // Add Fields table entries � always use n. prefix.
+            // Add Fields table entries  always use n. prefix.
             // BuildSourceExpression handles the rest: direct column ? n.`col`, otherwise ? JSON_EXTRACT(n.NRDatas, ...)
             foreach (var field in allFields)
             {
@@ -367,7 +395,9 @@ namespace Tools.Controllers
             }
 
             // Calculated fields for quantity sheet (sourced directly from SP result)
+            result.Add(new Dictionary<string, string> { ["value"] = "c.Center", ["label"] = "Center" });
             result.Add(new Dictionary<string, string> { ["value"] = "c.TotalCenters", ["label"] = "TotalCenters" });
+            result.Add(new Dictionary<string, string> { ["value"] = "c.Nodal", ["label"] = "Nodal" });
             result.Add(new Dictionary<string, string> { ["value"] = "c.TotalNodal", ["label"] = "TotalNodal" });
             result.Add(new Dictionary<string, string> { ["value"] = "c.TotalInnerEnvelope", ["label"] = "TotalInnerEnvelope" });
             result.Add(new Dictionary<string, string> { ["value"] = "c.TotalEnvelope", ["label"] = "TotalEnvelope" });

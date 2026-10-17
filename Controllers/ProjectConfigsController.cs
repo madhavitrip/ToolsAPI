@@ -231,6 +231,10 @@ namespace Tools.Controllers
                         await _context.NRDatas
                             .Where(x => x.ProjectId == projectConfig.ProjectId && x.Status == true && x.Steps > minResetStep)
                             .ExecuteUpdateAsync(s => s.SetProperty(x => x.Steps, minResetStep));
+
+                        await _context.NrData1
+                            .Where(x => x.ProjectId == projectConfig.ProjectId && x.Status == true && x.Steps > minResetStep)
+                            .ExecuteUpdateAsync(s => s.SetProperty(x => x.Steps, minResetStep));
                     }
                 }
                 else

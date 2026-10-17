@@ -70,46 +70,686 @@ namespace Tools.Controllers
             });
         }
 
+        private static string NormalizeText(string? value)
+        {
+            return string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
+        }
+
         // GET: api/NrData1/GetByProjectId/5
         [HttpGet("GetByProjectId/{projectId}")]
         public async Task<ActionResult> GetByProjectId(
             int projectId,
-            [FromQuery] int? batchNo = null,
-            [FromQuery] int pageNo = 1,
             [FromQuery] int pageSize = 50,
-            [FromQuery] string? search = null)
+            [FromQuery] int pageNo = 1,
+            [FromQuery] string? search = null,
+            [FromQuery] string? key = null,
+            [FromQuery] string? sortField = null,
+            [FromQuery] string? sortOrder = null,
+            [FromQuery] string? filters = null,
+            [FromQuery] int? lotNo = null,
+            [FromQuery] int? batchNo = null)
         {
-            var query = _context.NrData1
-                .Where(d => d.ProjectId == projectId && d.Status);
+            var query = from nr in _context.NrData1
+                        join c in _context.CenterList on nr.Id equals c.NRDataId
+                        where nr.ProjectId == projectId && nr.Status && c.Status
+                        select new ToolsAPI.Models.NRDataDto
+                        {
+                            Id = c.Id,
+                            NRDataId = nr.Id,
+                            ProjectId = nr.ProjectId,
+                            CatchNo = nr.CatchNo,
+                            CenterCode = c.CenterCode,
+                            ExamDate = nr.ExamDate,
+                            ExamTime = nr.ExamTime,
+                            SubjectName = nr.SubjectName,
+                            CourseName = nr.CourseName,
+                            NodalCode = c.NodalCode,
+                            NRQuantity = c.NRQuantity,
+                            Quantity = c.Quantity,
+                            Route = c.Route,
+                            Pages = nr.Pages,
+                            CenterSort = c.CenterSort,
+                            NodalSort = c.NodalSort,
+                            RouteSort = c.RouteSort,
+                            Symbol = null,
+                            LotNo = nr.LotNo,
+                            EnvLotNo = nr.EnvLotNo,
+                            Batch = nr.Batch,
+                            NRDatas = nr.NRDatas,
+                            Day = nr.Day,
+                            District = c.District,
+                            DistrictSort = c.DistrictSort,
+                            Status = c.Status,
+                            Steps = nr.Steps,
+                            VerificationStatus = nr.VerificationStatus,
+                            Remarksss = nr.Remarksss
+                        };
 
             if (batchNo.HasValue)
             {
                 query = query.Where(d => d.Batch == batchNo.Value);
             }
 
-            if (!string.IsNullOrWhiteSpace(search))
+            if (lotNo.HasValue)
             {
-                string s = search.Trim().ToLower();
-                query = query.Where(d =>
-                    (d.CatchNo != null && d.CatchNo.ToLower().Contains(s)) ||
-                    (d.CourseName != null && d.CourseName.ToLower().Contains(s)) ||
-                    (d.SubjectName != null && d.SubjectName.ToLower().Contains(s)));
+                query = query.Where(d => d.LotNo == lotNo.Value);
             }
 
-            int totalRecords = await query.CountAsync();
-            var records = await query
-                .OrderBy(d => d.Id)
+            // Apply combination filters if provided
+            if (!string.IsNullOrWhiteSpace(filters))
+            {
+                try
+                {
+                    var filterDict = JsonSerializer.Deserialize<Dictionary<string, string>>(filters);
+                    if (filterDict != null)
+                    {
+                        foreach (var kvp in filterDict)
+                        {
+                            var filterKey = kvp.Key;
+                            var filterVal = kvp.Value?.Trim().ToLowerInvariant();
+
+                            if (string.IsNullOrWhiteSpace(filterVal))
+                                continue;
+
+                            var prop = typeof(ToolsAPI.Models.NRDataDto).GetProperties()
+                                .FirstOrDefault(p => p.Name.Equals(filterKey, StringComparison.OrdinalIgnoreCase));
+
+                            if (prop != null)
+                            {
+                                query = prop.Name.ToLowerInvariant() switch
+                                {
+                                    "catchno" => query.Where(d => d.CatchNo != null && d.CatchNo.ToLower().Contains(filterVal)),
+                                    "centercode" => query.Where(d => d.CenterCode != null && d.CenterCode.ToLower().Contains(filterVal)),
+                                    "subjectname" => query.Where(d => d.SubjectName != null && d.SubjectName.ToLower().Contains(filterVal)),
+                                    "coursename" => query.Where(d => d.CourseName != null && d.CourseName.ToLower().Contains(filterVal)),
+                                    "nodalcode" => query.Where(d => d.NodalCode != null && d.NodalCode.ToLower().Contains(filterVal)),
+                                    "route" => query.Where(d => d.Route != null && d.Route.ToLower().Contains(filterVal)),
+                                    "examdate" => query.Where(d => d.ExamDate != null && d.ExamDate.ToLower().Contains(filterVal)),
+                                    "examtime" => query.Where(d => d.ExamTime != null && d.ExamTime.ToLower().Contains(filterVal)),
+                                    "symbol" => query.Where(d => d.Symbol != null && d.Symbol.ToLower().Contains(filterVal)),
+                                    _ => query
+                                };
+                            }
+                            else
+                            {
+                                var likePattern = $"%\"{filterKey}\":%";
+                                var valLikePattern = $"%\"{filterKey}\":\"%{filterVal}%\"%";
+                                query = query.Where(d => d.NRDatas != null && EF.Functions.Like(d.NRDatas, likePattern) && EF.Functions.Like(d.NRDatas, valLikePattern));
+                            }
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    await _loggerService.LogErrorAsync("Error parsing filters in NrData1.GetByProjectId", ex.Message, nameof(NrData1Controller));
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(search) && !string.IsNullOrWhiteSpace(key))
+            {
+                search = search.ToLower();
+                switch (key)
+                {
+                    case "CatchNo":
+                        query = query.Where(d => d.CatchNo.ToLower().Contains(search));
+                        break;
+                    case "CenterCode":
+                        query = query.Where(d => d.CenterCode.ToLower().Contains(search));
+                        break;
+                    case "SubjectName":
+                        query = query.Where(d => d.SubjectName.ToLower().Contains(search));
+                        break;
+                    case "CourseName":
+                        query = query.Where(d => d.CourseName.ToLower().Contains(search));
+                        break;
+                    case "NodalCode":
+                        query = query.Where(d => d.NodalCode.ToLower().Contains(search));
+                        break;
+                    case "Route":
+                        query = query.Where(d => d.Route.ToLower().Contains(search));
+                        break;
+                    case "ExamDate":
+                        query = query.Where(d => (d.ExamDate != null && d.ExamDate.ToLower().Contains(search)) || Convert.ToString(d.ExamDate).Contains(search));
+                        break;
+                    case "ExamTime":
+                        query = query.Where(d => (d.ExamTime != null && d.ExamTime.ToLower().Contains(search)) || Convert.ToString(d.ExamTime).Contains(search));
+                        break;
+                    case "NRQuantity":
+                        query = query.Where(d => Convert.ToString(d.NRQuantity).Contains(search));
+                        break;
+                    case "Quantity":
+                        query = query.Where(d => Convert.ToString(d.Quantity).Contains(search));
+                        break;
+                    default:
+                        return BadRequest($"Key '{key}' is not searchable.");
+                }
+            }
+            else if (!string.IsNullOrEmpty(search))
+            {
+                search = search.ToLower();
+                query = query.Where(n =>
+                    (n.CatchNo ?? "").ToLower().Contains(search) ||
+                    (n.CenterCode ?? "").ToLower().Contains(search) ||
+                    (n.SubjectName ?? "").ToLower().Contains(search) ||
+                    (n.CourseName ?? "").ToLower().Contains(search) ||
+                    (n.NodalCode ?? "").ToLower().Contains(search) ||
+                    (n.Route ?? "").ToLower().Contains(search) ||
+                    (n.NRDatas ?? "").ToLower().Contains(search)
+                );
+            }
+
+            var normalizedSortField = NormalizeText(sortField);
+            var normalizedSortOrder = NormalizeText(sortOrder).ToLowerInvariant();
+            var isAscending = normalizedSortOrder != "descend";
+
+            if (!string.IsNullOrWhiteSpace(normalizedSortField))
+            {
+                query = normalizedSortField switch
+                {
+                    "CatchNo" => isAscending ? query.OrderBy(d => d.CatchNo) : query.OrderByDescending(d => d.CatchNo),
+                    "CenterCode" => isAscending ? query.OrderBy(d => d.CenterCode) : query.OrderByDescending(d => d.CenterCode),
+                    "ExamDate" => isAscending ? query.OrderBy(d => d.ExamDate) : query.OrderByDescending(d => d.ExamDate),
+                    "ExamTime" => isAscending ? query.OrderBy(d => d.ExamTime) : query.OrderByDescending(d => d.ExamTime),
+                    "NRQuantity" => isAscending ? query.OrderBy(d => d.NRQuantity) : query.OrderByDescending(d => d.NRQuantity),
+                    "Quantity" => isAscending ? query.OrderBy(d => d.Quantity) : query.OrderByDescending(d => d.Quantity),
+                    "NodalCode" => isAscending ? query.OrderBy(d => d.NodalCode) : query.OrderByDescending(d => d.NodalCode),
+                    "CourseName" => isAscending ? query.OrderBy(d => d.CourseName) : query.OrderByDescending(d => d.CourseName),
+                    "SubjectName" => isAscending ? query.OrderBy(d => d.SubjectName) : query.OrderByDescending(d => d.SubjectName),
+                    "Pages" => isAscending ? query.OrderBy(d => d.Pages) : query.OrderByDescending(d => d.Pages),
+                    "CenterSort" => isAscending ? query.OrderBy(d => d.CenterSort) : query.OrderByDescending(d => d.CenterSort),
+                    "LotNo" => isAscending ? query.OrderBy(d => d.LotNo) : query.OrderByDescending(d => d.LotNo),
+                    "Route" => isAscending ? query.OrderBy(d => d.Route) : query.OrderByDescending(d => d.Route),
+                    "District" => isAscending ? query.OrderBy(d => d.District) : query.OrderByDescending(d => d.District),
+                    "EnvLotNo" => isAscending ? query.OrderBy(d => d.EnvLotNo) : query.OrderByDescending(d => d.EnvLotNo),
+                    "Batch" => isAscending ? query.OrderBy(d => d.Batch) : query.OrderByDescending(d => d.Batch),
+                    _ => query.OrderBy(d => d.Id),
+                };
+            }
+            else
+            {
+                query = query.OrderBy(d => d.Id);
+            }
+
+            int totalCount = await query.CountAsync();
+            int totalPages = (int)Math.Ceiling(totalCount / (double)pageSize);
+
+            var nrDataList = await query
                 .Skip((pageNo - 1) * pageSize)
                 .Take(pageSize)
+                .Select(d => new
+                {
+                    d.Id,
+                    d.CatchNo,
+                    d.CenterCode,
+                    d.ExamDate,
+                    d.ExamTime,
+                    d.SubjectName,
+                    d.CourseName,
+                    d.NodalCode,
+                    d.NRQuantity,
+                    d.Quantity,
+                    d.Route,
+                    d.Pages,
+                    d.CenterSort,
+                    d.NodalSort,
+                    d.RouteSort,
+                    d.Symbol,
+                    d.LotNo,
+                    d.EnvLotNo,
+                    d.Batch,
+                    d.NRDatas,
+                    d.Day,
+                    d.District
+                })
                 .ToListAsync();
+
+            if (!nrDataList.Any())
+            {
+                var allColumns = typeof(ToolsAPI.Models.NRDataDto).GetProperties()
+                    .Select(p => p.Name)
+                    .Where(name => name != "Id" && name != "ProjectId" && name != "NRDatas" && name != "NRDataId" && name != "Status" && name != "Steps" && name != "VerificationStatus" && name != "Remarksss")
+                    .ToList();
+
+                return Ok(new
+                {
+                    items = new List<object>(),
+                    columns = allColumns,
+                    totalCount = 0,
+                    totalPages = 0
+                });
+            }
+
+            var properties = nrDataList.First().GetType().GetProperties();
+            var result = nrDataList.Select(d =>
+            {
+                var dict = new Dictionary<string, object>();
+                foreach (var prop in properties)
+                {
+                    dict[prop.Name] = prop.GetValue(d);
+                }
+                return dict;
+            });
 
             return Ok(new
             {
-                Total = totalRecords,
-                PageNo = pageNo,
-                PageSize = pageSize,
-                Data = records
+                items = result,
+                columns = properties.Select(p => p.Name).ToList(),
+                totalCount,
+                totalPages
             });
+        }
+
+        // PUT: api/NrData1/UpdateSingle/{id}
+        [HttpPut("UpdateSingle/{id}")]
+        public async Task<IActionResult> UpdateSingle(int id, [FromBody] JsonElement inputData, [FromQuery] int? lotNo = null)
+        {
+            using var transaction = await _context.Database.BeginTransactionAsync();
+            try
+            {
+                var center = await _context.CenterList.FirstOrDefaultAsync(c => c.Id == id);
+                NrData1? nr1 = null;
+
+                if (center != null)
+                {
+                    nr1 = await _context.NrData1.FirstOrDefaultAsync(n => n.Id == center.NRDataId);
+                }
+                else
+                {
+                    nr1 = await _context.NrData1.FirstOrDefaultAsync(n => n.Id == id);
+                }
+
+                if (center == null && nr1 == null)
+                {
+                    return NotFound($"Record with ID {id} not found.");
+                }
+
+                // Check for soft delete
+                bool isDelete = false;
+                if (inputData.TryGetProperty("Status", out var statusProp) || inputData.TryGetProperty("status", out statusProp))
+                {
+                    if (statusProp.ValueKind == JsonValueKind.False ||
+                        (statusProp.ValueKind == JsonValueKind.String && statusProp.GetString()?.ToLower() == "false"))
+                    {
+                        isDelete = true;
+                    }
+                }
+
+                if (isDelete)
+                {
+                    if (center != null)
+                    {
+                        center.Status = false;
+                        _context.CenterList.Update(center);
+
+                        bool otherActiveCenters = await _context.CenterList
+                            .AnyAsync(c => c.NRDataId == center.NRDataId && c.Id != center.Id && c.Status);
+
+                        if (!otherActiveCenters && nr1 != null)
+                        {
+                            nr1.Status = false;
+                            _context.NrData1.Update(nr1);
+                        }
+                    }
+                    else if (nr1 != null)
+                    {
+                        nr1.Status = false;
+                        _context.NrData1.Update(nr1);
+
+                        var centers = await _context.CenterList
+                            .Where(c => c.NRDataId == nr1.Id && c.Status)
+                            .ToListAsync();
+                        foreach (var c in centers)
+                        {
+                            c.Status = false;
+                            _context.CenterList.Update(c);
+                        }
+                    }
+
+                    await _context.SaveChangesAsync();
+                    await transaction.CommitAsync();
+                    return Ok(new { message = "Record deleted successfully" });
+                }
+
+                // Field update logic
+                var centerProps = typeof(CenterList).GetProperties().ToDictionary(p => p.Name.ToLower(), p => p);
+                var nr1Props = typeof(NrData1).GetProperties().ToDictionary(p => p.Name.ToLower(), p => p);
+
+                var extraData = new Dictionary<string, string>();
+                var existingExtra = new Dictionary<string, string>();
+                if (nr1 != null && !string.IsNullOrWhiteSpace(nr1.NRDatas))
+                {
+                    try
+                    {
+                        existingExtra = JsonSerializer.Deserialize<Dictionary<string, string>>(nr1.NRDatas) ?? new();
+                    }
+                    catch { }
+                }
+
+                foreach (var prop in inputData.EnumerateObject())
+                {
+                    string key = NormalizeKey(prop.Name);
+                    string val = prop.Value.ToString();
+
+                    if (key == "id" || key == "projectid") continue;
+
+                    bool handled = false;
+                    if (center != null && centerProps.TryGetValue(key, out var cp))
+                    {
+                        var targetType = Nullable.GetUnderlyingType(cp.PropertyType) ?? cp.PropertyType;
+                        object? converted = string.IsNullOrWhiteSpace(val) ? null : Convert.ChangeType(val, targetType);
+                        cp.SetValue(center, converted);
+                        handled = true;
+                    }
+
+                    if (nr1 != null && nr1Props.TryGetValue(key, out var np))
+                    {
+                        var targetType = Nullable.GetUnderlyingType(np.PropertyType) ?? np.PropertyType;
+                        object? converted = string.IsNullOrWhiteSpace(val) ? null : Convert.ChangeType(val, targetType);
+                        np.SetValue(nr1, converted);
+                        handled = true;
+                    }
+
+                    if (!handled)
+                    {
+                        extraData[prop.Name] = val;
+                    }
+                }
+
+                if (extraData.Any() && nr1 != null)
+                {
+                    foreach (var kv in extraData)
+                    {
+                        existingExtra[kv.Key] = kv.Value;
+                    }
+                    nr1.NRDatas = JsonSerializer.Serialize(existingExtra);
+                }
+
+                if (center != null)
+                {
+                    _context.CenterList.Update(center);
+                }
+                if (nr1 != null)
+                {
+                    _context.NrData1.Update(nr1);
+                }
+
+                await _context.SaveChangesAsync();
+                await transaction.CommitAsync();
+
+                return Ok(new
+                {
+                    message = "Data updated successfully",
+                    data = (object?)center ?? nr1
+                });
+            }
+            catch (Exception ex)
+            {
+                await transaction.RollbackAsync();
+                await _loggerService.LogErrorAsync("Error in NrData1.UpdateSingle", ex.Message, nameof(NrData1Controller));
+                return StatusCode(500, ex.Message);
+            }
+        }
+
+        // GET: api/NrData1/CheckValueExists/{projectId}
+        [HttpGet("CheckValueExists/{projectId}")]
+        public async Task<IActionResult> CheckValueExists(int projectId, [FromQuery] string fieldName, [FromQuery] string value, [FromQuery] int? lotNo = null)
+        {
+            if (string.IsNullOrWhiteSpace(fieldName) || string.IsNullOrWhiteSpace(value))
+            {
+                return BadRequest("fieldName and value are required.");
+            }
+
+            var normalizedValue = value.Trim().ToLowerInvariant();
+            var normField = fieldName.Trim().ToLowerInvariant();
+
+            // Center-related fields
+            if (normField == "centercode" || normField == "nodalcode" || normField == "route" || normField == "district")
+            {
+                var centerQuery = _context.CenterList.Where(c => c.ProjectId == projectId && c.Status);
+                if (lotNo.HasValue)
+                {
+                    centerQuery = from c in centerQuery
+                                  join nr in _context.NrData1 on c.NRDataId equals nr.Id
+                                  where nr.LotNo == lotNo.Value && nr.Status
+                                  select c;
+                }
+
+                bool exists = normField switch
+                {
+                    "centercode" => await centerQuery.AnyAsync(c => c.CenterCode != null && c.CenterCode.ToLower() == normalizedValue),
+                    "nodalcode" => await centerQuery.AnyAsync(c => c.NodalCode != null && c.NodalCode.ToLower() == normalizedValue),
+                    "route" => await centerQuery.AnyAsync(c => c.Route != null && c.Route.ToLower() == normalizedValue),
+                    "district" => await centerQuery.AnyAsync(c => c.District != null && c.District.ToLower() == normalizedValue),
+                    _ => false
+                };
+                return Ok(new { exists });
+            }
+
+            // Catch-related fields
+            var nr1Query = _context.NrData1.Where(n => n.ProjectId == projectId && n.Status);
+            if (lotNo.HasValue)
+            {
+                nr1Query = nr1Query.Where(n => n.LotNo == lotNo.Value);
+            }
+
+            bool nr1Exists = normField switch
+            {
+                "catchno" => await nr1Query.AnyAsync(n => n.CatchNo != null && n.CatchNo.ToLower() == normalizedValue),
+                "coursename" => await nr1Query.AnyAsync(n => n.CourseName != null && n.CourseName.ToLower() == normalizedValue),
+                "subjectname" => await nr1Query.AnyAsync(n => n.SubjectName != null && n.SubjectName.ToLower() == normalizedValue),
+                "examdate" => await nr1Query.AnyAsync(n => n.ExamDate != null && n.ExamDate.ToLower() == normalizedValue),
+                "examtime" => await nr1Query.AnyAsync(n => n.ExamTime != null && n.ExamTime.ToLower() == normalizedValue),
+                _ => false
+            };
+
+            if (nr1Exists)
+            {
+                return Ok(new { exists = true });
+            }
+
+            // Check dynamic fields in NrData1.NRDatas JSON
+            var likePattern = $"%\"{fieldName}\":%";
+            var jsonRecords = await nr1Query
+                .Where(n => n.NRDatas != null && EF.Functions.Like(n.NRDatas, likePattern))
+                .Select(n => n.NRDatas)
+                .ToListAsync();
+
+            bool jsonExists = false;
+            foreach (var jsonStr in jsonRecords)
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(jsonStr);
+                    if (doc.RootElement.TryGetProperty(fieldName, out var propVal))
+                    {
+                        if (propVal.ToString().Trim().ToLowerInvariant() == normalizedValue)
+                        {
+                            jsonExists = true;
+                            break;
+                        }
+                    }
+                }
+                catch { }
+            }
+
+            return Ok(new { exists = jsonExists });
+        }
+
+        // POST: api/NrData1/single
+        [HttpPost("single")]
+        public async Task<IActionResult> PostSingleCatch([FromBody] JsonElement inputData, [FromQuery] int? lotNo = null)
+        {
+            string catchNo = "";
+            int effectiveLot = lotNo ?? 0;
+            try
+            {
+                if (inputData.TryGetProperty("data", out var dataArr) && dataArr.GetArrayLength() > 0)
+                {
+                    var firstItem = dataArr[0];
+                    foreach (var prop in firstItem.EnumerateObject())
+                    {
+                        if (prop.Name.Equals("catchno", StringComparison.OrdinalIgnoreCase))
+                        {
+                            catchNo = prop.Value.ToString();
+                        }
+                        if (prop.Name.Equals("lotno", StringComparison.OrdinalIgnoreCase) && int.TryParse(prop.Value.ToString(), out int parsedLot))
+                        {
+                            effectiveLot = parsedLot;
+                        }
+                    }
+                }
+            }
+            catch { }
+
+            var res = await PostNRData(inputData, lotNo);
+            if (res is OkObjectResult okObj)
+            {
+                return Ok(new
+                {
+                    message = "Data added successfully",
+                    lotNo = effectiveLot,
+                    catchNo = catchNo,
+                    result = okObj.Value
+                });
+            }
+            return res;
+        }
+
+        // POST: api/NrData1/merge-catchnos
+        [HttpPost("merge-catchnos")]
+        public async Task<ActionResult> MergeCatchNos(int ProjectId, [FromBody] NRDatasController.MergeCatchNoRequest request, [FromQuery] int? lotNo = null)
+        {
+            if (request == null)
+            {
+                return BadRequest("Please select at least 2 catch numbers to merge.");
+            }
+
+            var separator = NormalizeText(request.Separator);
+            if (separator != "/" && separator != "-")
+            {
+                return BadRequest("Separator must be '/' or '-'.");
+            }
+
+            var requestedCatchNos = (request.CatchNos ?? new List<string>())
+                .Select(NormalizeText)
+                .Where(v => !string.IsNullOrWhiteSpace(v))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (requestedCatchNos.Count < 2)
+            {
+                return BadRequest("Please select at least 2 catch numbers to merge.");
+            }
+
+            var nr1Rows = await _context.NrData1
+                .Where(n => n.ProjectId == ProjectId && n.Status && requestedCatchNos.Contains(n.CatchNo))
+                .ToListAsync();
+
+            if (lotNo.HasValue)
+            {
+                nr1Rows = nr1Rows.Where(n => n.LotNo == lotNo.Value).ToList();
+            }
+
+            if (nr1Rows.Count < 2)
+            {
+                var legacy = new NRDatasController(_context, _loggerService, _apiSettings, _dispatchService)
+                {
+                    ControllerContext = this.ControllerContext
+                };
+                return await legacy.MergeCatchNos(ProjectId, request, lotNo);
+            }
+
+            var primaryNr1 = nr1Rows.First();
+            var secondaryNr1List = nr1Rows.Skip(1).ToList();
+            var mergedCatchNo = string.Join(separator, requestedCatchNos);
+
+            primaryNr1.CatchNo = mergedCatchNo;
+            if (!string.IsNullOrWhiteSpace(request.ExamDate)) primaryNr1.ExamDate = request.ExamDate;
+            if (!string.IsNullOrWhiteSpace(request.ExamTime)) primaryNr1.ExamTime = request.ExamTime;
+
+            var primaryCenters = await _context.CenterList
+                .Where(c => c.NRDataId == primaryNr1.Id && c.Status)
+                .ToListAsync();
+
+            var primaryCenterMap = new Dictionary<string, CenterList>(StringComparer.OrdinalIgnoreCase);
+            foreach (var c in primaryCenters)
+            {
+                var k = (c.CenterCode ?? "").Trim().ToLowerInvariant();
+                if (!primaryCenterMap.ContainsKey(k))
+                {
+                    primaryCenterMap[k] = c;
+                }
+            }
+
+            foreach (var sec in secondaryNr1List)
+            {
+                sec.Status = false;
+                var secCenters = await _context.CenterList
+                    .Where(c => c.NRDataId == sec.Id && c.Status)
+                    .ToListAsync();
+
+                foreach (var sc in secCenters)
+                {
+                    var cKey = (sc.CenterCode ?? "").Trim().ToLowerInvariant();
+                    if (primaryCenterMap.TryGetValue(cKey, out var existingCenter))
+                    {
+                        existingCenter.Quantity += sc.Quantity;
+                        existingCenter.NRQuantity += sc.NRQuantity;
+                        sc.Status = false;
+                    }
+                    else
+                    {
+                        sc.NRDataId = primaryNr1.Id;
+                        primaryCenterMap[cKey] = sc;
+                    }
+                }
+            }
+
+            try
+            {
+                var legacy = new NRDatasController(_context, _loggerService, _apiSettings, _dispatchService)
+                {
+                    ControllerContext = this.ControllerContext
+                };
+                await legacy.MergeCatchNos(ProjectId, request, lotNo);
+            }
+            catch { }
+
+            await _context.SaveChangesAsync();
+            return Ok(new { message = $"Catch numbers merged successfully into {mergedCatchNo}." });
+        }
+
+        // GET: api/NrData1/ErrorReport
+        [HttpGet("ErrorReport")]
+        public async Task<ActionResult> ErrorReport([FromQuery] int ProjectId, [FromQuery] int? lotNo = null)
+        {
+            var legacy = new NRDatasController(_context, _loggerService, _apiSettings, _dispatchService)
+            {
+                ControllerContext = this.ControllerContext
+            };
+            return await legacy.GetDuplicateswrtCatch(ProjectId, lotNo);
+        }
+
+        // PUT: api/NrData1
+        [HttpPut]
+        public async Task<ActionResult> ResolveConflicts([FromQuery] int ProjectId, [FromBody] NRDatasController.ConflictResolutionDto payload, [FromQuery] int? lotNo = null)
+        {
+            var legacy = new NRDatasController(_context, _loggerService, _apiSettings, _dispatchService)
+            {
+                ControllerContext = this.ControllerContext
+            };
+            return await legacy.ResolveConflicts(ProjectId, payload, lotNo);
+        }
+
+        // PUT: api/NrData1/conflicts/status
+        [HttpPut("conflicts/status")]
+        public async Task<ActionResult> UpdateConflictStatus([FromQuery] int ProjectId, [FromBody] NRDatasController.ConflictStatusUpdateDto payload, [FromQuery] int? lotNo = null)
+        {
+            var legacy = new NRDatasController(_context, _loggerService, _apiSettings, _dispatchService)
+            {
+                ControllerContext = this.ControllerContext
+            };
+            return await legacy.UpdateConflictStatus(ProjectId, payload, lotNo);
         }
 
         // GET: api/NrData1/centers/5
@@ -122,6 +762,17 @@ namespace Tools.Controllers
 
             return Ok(centers);
         }
+
+        // GET: api/NrData1/center-debug/5
+        [HttpGet("center-debug/{projectId}")]
+        public async Task<ActionResult> GetCenterDebug(int projectId)
+        {
+            var centers = await _context.CenterList
+                .Where(c => c.ProjectId == projectId && c.Status)
+                .ToListAsync();
+            return Ok(centers);
+        }
+
 
         // POST: api/NrData1
         [HttpPost]
@@ -377,8 +1028,16 @@ namespace Tools.Controllers
                     }
                
                     // Build CenterList record
-                    bool isExtraRow = !string.IsNullOrWhiteSpace(itemCenterCode) && extraTypesByName.ContainsKey(itemCenterCode.Trim());
-                    int? extraTypeId = isExtraRow ? extraTypesByName[itemCenterCode.Trim()] : null;
+                    string itemRemark = "";
+                    if (centerExtraData.TryGetValue("Remark", out var remVal)) itemRemark = remVal;
+                    else if (uniqueExtraData.TryGetValue("Remark", out var uremVal)) itemRemark = uremVal;
+
+                    bool isReserveRemark = !string.IsNullOrWhiteSpace(itemRemark) &&
+                        (itemRemark.Contains("Reserve", StringComparison.OrdinalIgnoreCase) ||
+                         itemRemark.Contains("Extra", StringComparison.OrdinalIgnoreCase));
+
+                    bool isExtraRow = (!string.IsNullOrWhiteSpace(itemCenterCode) && extraTypesByName.ContainsKey(itemCenterCode.Trim())) || isReserveRemark;
+                    int? extraTypeId = isReserveRemark ? 1 : (isExtraRow ? extraTypesByName[itemCenterCode.Trim()] : null);
 
                     var centerList = new CenterList
                     {
@@ -398,7 +1057,14 @@ namespace Tools.Controllers
                         }
                     }
 
-                    if (!isExtraRow)
+                    if (isReserveRemark && centerList.Quantity <= 0 && itemQty > 0)
+                    {
+                        centerList.Quantity = itemQty;
+                        centerList.NRQuantity = itemQty;
+                    }
+
+                    // Reserve centers are associated with a specific center code and must be saved in catchGroup.Centers
+                    if (!isExtraRow || isReserveRemark)
                     {
                         catchGroup.Centers.Add(centerList);
                     }
@@ -1699,7 +2365,11 @@ namespace Tools.Controllers
                     .Where(c => c.ProjectId == ProjectId && nrDataIds.Contains(c.NRDataId) && c.ExtraId == 0 && c.Status)
                     .ToListAsync();
 
-                bool isOnlyReport = extraConfig.Any(c => c.IsExtraProcessingAsPerNR);
+                bool hasExistingExtraCenters = await _context.CenterList
+                    .AnyAsync(c => c.ProjectId == ProjectId && c.Status &&
+                        (c.ExtraId > 0 || (c.CenterData != null && (c.CenterData.Contains("Reserve") || c.CenterData.Contains("Extra"))) || (c.CenterSort > 0 && Math.Abs(c.CenterSort - Math.Round(c.CenterSort)) > 0.001)));
+
+                bool isOnlyReport = extraConfig.Any(c => c.IsExtraProcessingAsPerNR) || (!extraConfig.Any() && hasExistingExtraCenters);
                 var envelopesToUse = new List<ExtraEnvelopeReportDto>();
 
                 if (isOnlyReport)
@@ -1709,32 +2379,286 @@ namespace Tools.Controllers
                         .ToListAsync();
 
                     if (!extraCenters.Any())
-                        return BadRequest("No existing Extra Envelope data found in centerlist for report.");
-
-                    var extraCenterIds = extraCenters.Select(c => c.Id).ToList();
-                    var breakages = await _context.NewEnvelopeBreakages
-                        .Where(b => b.ProjectId == ProjectId && extraCenterIds.Contains(b.CenterListId) && b.Status)
-                        .ToListAsync();
-
-                    var nrLookup = nrDataList.ToDictionary(n => n.Id, n => n.CatchNo);
-
-                    foreach (var c in extraCenters)
                     {
-                        var b = breakages.FirstOrDefault(x => x.CenterListId == c.Id);
-                        nrLookup.TryGetValue(c.NRDataId, out var catchNo);
+                        var centersWithExtraName = await _context.CenterList
+                            .Where(c => c.ProjectId == ProjectId && c.Status && c.CenterCode != null)
+                            .ToListAsync();
 
-                        envelopesToUse.Add(new ExtraEnvelopeReportDto
+                        var matchedCenters = centersWithExtraName
+                            .Where(c => allExtraTypes.Any(et => !string.IsNullOrEmpty(et.Type) && c.CenterCode!.Contains(et.Type, StringComparison.OrdinalIgnoreCase)) ||
+                                        c.CenterCode!.Contains("Extra", StringComparison.OrdinalIgnoreCase))
+                            .ToList();
+
+                        if (matchedCenters.Any())
                         {
-                            CatchNo = catchNo,
-                            NodalCode = c.NodalCode,
-                            ExtraId = c.ExtraId,
-                            Quantity = c.Quantity > 0 ? c.Quantity : c.NRQuantity,
-                            InnerEnvelope = b?.InnerEnvelope,
-                            OuterEnvelope = b?.OuterEnvelope
-                        });
+                            foreach (var mc in matchedCenters)
+                            {
+                                if (mc.ExtraId == 0)
+                                {
+                                    var matchedType = allExtraTypes.FirstOrDefault(et =>
+                                        !string.IsNullOrEmpty(et.Type) && mc.CenterCode!.Contains(et.Type, StringComparison.OrdinalIgnoreCase));
+                                    mc.ExtraId = matchedType?.ExtraTypeId ?? 1;
+                                    _context.CenterList.Update(mc);
+                                }
+                            }
+                            await _context.SaveChangesAsync();
+                            extraCenters = matchedCenters;
+                        }
+                    }
+
+                    // Check for Option 2: Reserve Quantity rows specified in Remark column or decimal CenterSort
+                    if (!extraCenters.Any())
+                    {
+                        var potentialReserveCenters = await _context.CenterList
+                            .Where(c => c.ProjectId == ProjectId && nrDataIds.Contains(c.NRDataId) && c.Status)
+                            .ToListAsync();
+
+                        var matchedReserveCenters = new List<CenterList>();
+                        foreach (var c in potentialReserveCenters)
+                        {
+                            bool isReserve = false;
+                            int reserveQty = c.Quantity > 0 ? c.Quantity : c.NRQuantity;
+
+                            if (!string.IsNullOrWhiteSpace(c.CenterData))
+                            {
+                                try
+                                {
+                                    using var doc = JsonDocument.Parse(c.CenterData);
+                                    foreach (var prop in doc.RootElement.EnumerateObject())
+                                    {
+                                        string pName = prop.Name;
+                                        string pVal = prop.Value.ToString();
+
+                                        if (pName.Contains("Remark", StringComparison.OrdinalIgnoreCase) &&
+                                            pVal.Contains("Reserve", StringComparison.OrdinalIgnoreCase))
+                                        {
+                                            isReserve = true;
+                                        }
+
+                                        if (reserveQty <= 0 &&
+                                            (pName.Equals("Qty", StringComparison.OrdinalIgnoreCase) ||
+                                             pName.Equals("Quantity", StringComparison.OrdinalIgnoreCase) ||
+                                             pName.Contains("Reserve", StringComparison.OrdinalIgnoreCase)) &&
+                                            int.TryParse(pVal, out int parsedQty) && parsedQty > 0)
+                                        {
+                                            reserveQty = parsedQty;
+                                        }
+                                    }
+                                }
+                                catch { }
+                            }
+
+                            // Decimal CenterSort like 1.1 indicates a reserve center
+                            if (!isReserve && c.CenterSort > 0 && Math.Abs(c.CenterSort - Math.Round(c.CenterSort)) > 0.001)
+                            {
+                                isReserve = true;
+                            }
+
+                            if (isReserve)
+                            {
+                                if (c.ExtraId == 0)
+                                {
+                                    c.ExtraId = 1; // Default to Nodal Extra / Reserve
+                                }
+                                if (reserveQty > 0)
+                                {
+                                    c.Quantity = reserveQty;
+                                    c.NRQuantity = reserveQty;
+                                }
+                                _context.CenterList.Update(c);
+                                matchedReserveCenters.Add(c);
+                            }
+                        }
+
+                        if (matchedReserveCenters.Any())
+                        {
+                            await _context.SaveChangesAsync();
+                            extraCenters = matchedReserveCenters;
+                        }
+                    }
+
+                    if (extraCenters.Any())
+                    {
+                        var extraCenterIds = extraCenters.Select(c => c.Id).ToList();
+                        var breakages = await _context.NewEnvelopeBreakages
+                            .Where(b => b.ProjectId == ProjectId && extraCenterIds.Contains(b.CenterListId) && b.Status)
+                            .ToListAsync();
+
+                        // Ensure every extra center has NewEnvelopeBreakage & EnvelopeBreakage records for downstream processing
+                        var newBreakagesToInsert = new List<NewEnvelopeBreakage>();
+                        var legBreakagesToInsert = new List<EnvelopeBreakage>();
+
+                        var envConfigObj = extraConfig.FirstOrDefault(ec => ec.IsExtraProcessingAsPerNR)
+                            ?? extraConfig.FirstOrDefault();
+                        string? envJson = envConfigObj?.EnvelopeType ?? projectConfig?.Envelope;
+
+                        int outerCapacity = 30;
+                        int innerCapacity = 0;
+                        if (!string.IsNullOrWhiteSpace(envJson))
+                        {
+                            try
+                            {
+                                var envDict = JsonSerializer.Deserialize<Dictionary<string, string>>(envJson);
+                                if (envDict != null)
+                                {
+                                    if (envDict.TryGetValue("Outer", out var oVal))
+                                    {
+                                        var cleanO = oVal.Trim().ToUpper().Replace("E", "");
+                                        if (int.TryParse(cleanO, out int oCap) && oCap > 0) outerCapacity = oCap;
+                                    }
+                                    if (envDict.TryGetValue("Inner", out var iVal))
+                                    {
+                                        var cleanI = iVal.Trim().ToUpper().Replace("E", "");
+                                        if (int.TryParse(cleanI, out int iCap) && iCap > 0) innerCapacity = iCap;
+                                    }
+                                }
+                            }
+                            catch { }
+                        }
+
+                        foreach (var c in extraCenters)
+                        {
+                            var b = breakages.FirstOrDefault(x => x.CenterListId == c.Id);
+                            if (b == null)
+                            {
+                                int centerQty = c.Quantity > 0 ? c.Quantity : c.NRQuantity;
+                                if (centerQty <= 0) centerQty = outerCapacity;
+
+                                int totalEnv = 1;
+                                if (!string.IsNullOrWhiteSpace(c.CenterData))
+                                {
+                                    try
+                                    {
+                                        using var doc = JsonDocument.Parse(c.CenterData);
+                                        foreach (var prop in doc.RootElement.EnumerateObject())
+                                        {
+                                            if (prop.Name.Contains("Env", StringComparison.OrdinalIgnoreCase) ||
+                                                prop.Name.Contains("Total", StringComparison.OrdinalIgnoreCase))
+                                            {
+                                                if (int.TryParse(prop.Value.ToString(), out int parsedEnv) && parsedEnv > 0)
+                                                {
+                                                    totalEnv = parsedEnv;
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    catch { }
+                                }
+
+                                var innerBreakdown = new Dictionary<string, string>();
+                                var outerBreakdown = new Dictionary<string, string>();
+
+                                string outerKey = $"E{outerCapacity}";
+                                outerBreakdown[outerKey] = totalEnv.ToString();
+
+                                if (innerCapacity > 0)
+                                {
+                                    string innerKey = $"E{innerCapacity}";
+                                    innerBreakdown[innerKey] = totalEnv.ToString();
+                                }
+                                else
+                                {
+                                    innerBreakdown[outerKey] = totalEnv.ToString();
+                                }
+
+                                string innerStr = JsonSerializer.Serialize(innerBreakdown);
+                                string outerStr = JsonSerializer.Serialize(outerBreakdown);
+
+                                var newB = new NewEnvelopeBreakage
+                                {
+                                    ProjectId = ProjectId,
+                                    NrDataId = c.NRDataId,
+                                    CenterListId = c.Id,
+                                    InnerEnvelope = innerStr,
+                                    OuterEnvelope = outerStr,
+                                    TotalEnvelope = totalEnv,
+                                    Status = true
+                                };
+                                newBreakagesToInsert.Add(newB);
+
+                                var legB = new EnvelopeBreakage
+                                {
+                                    ProjectId = ProjectId,
+                                    NrDataId = c.NRDataId,
+                                    InnerEnvelope = innerStr,
+                                    OuterEnvelope = outerStr,
+                                    TotalEnvelope = totalEnv,
+                                    Status = true
+                                };
+                                legBreakagesToInsert.Add(legB);
+                            }
+                        }
+
+                        if (newBreakagesToInsert.Any())
+                        {
+                            await _context.NewEnvelopeBreakages.AddRangeAsync(newBreakagesToInsert);
+                            await _context.EnvelopeBreakages.AddRangeAsync(legBreakagesToInsert);
+                            await _context.SaveChangesAsync();
+
+                            breakages.AddRange(newBreakagesToInsert);
+                        }
+
+                        var nrLookup = nrDataList.ToDictionary(n => n.Id, n => n.CatchNo);
+
+                        foreach (var c in extraCenters)
+                        {
+                            var b = breakages.FirstOrDefault(x => x.CenterListId == c.Id);
+                            nrLookup.TryGetValue(c.NRDataId, out var catchNo);
+
+                            envelopesToUse.Add(new ExtraEnvelopeReportDto
+                            {
+                                CatchNo = catchNo,
+                                NodalCode = c.NodalCode,
+                                ExtraId = c.ExtraId,
+                                Quantity = c.Quantity > 0 ? c.Quantity : c.NRQuantity,
+                                InnerEnvelope = b?.InnerEnvelope,
+                                OuterEnvelope = b?.OuterEnvelope
+                            });
+                        }
+                    }
+                    else
+                    {
+                        // Check ExtrasEnvelope table as alternative storage from upload
+                        var extrasEnvelopeData = await _context.ExtrasEnvelope
+                            .Where(e => e.ProjectId == ProjectId && e.Status == 1)
+                            .ToListAsync();
+
+                        if (extrasEnvelopeData.Any())
+                        {
+                            foreach (var ex in extrasEnvelopeData)
+                            {
+                                envelopesToUse.Add(new ExtraEnvelopeReportDto
+                                {
+                                    CatchNo = ex.CatchNo,
+                                    NodalCode = ex.NodalCode,
+                                    ExtraId = ex.ExtraId,
+                                    Quantity = ex.Quantity,
+                                    InnerEnvelope = ex.InnerEnvelope,
+                                    OuterEnvelope = ex.OuterEnvelope
+                                });
+                            }
+                        }
+                    }
+
+                    if (!envelopesToUse.Any())
+                    {
+                        bool hasConfiguredCalculations = extraConfig.Any(c =>
+                            (!string.IsNullOrWhiteSpace(c.Value) && c.Value != "0") ||
+                            !string.IsNullOrWhiteSpace(c.nodalValue) ||
+                            !string.IsNullOrWhiteSpace(c.RangeConfig));
+
+                        if (!hasConfiguredCalculations)
+                        {
+                            return BadRequest("No existing Extra Envelope data found in CenterList or NR data. 'Extra Processing as per NR' requires extra packet rows (e.g., University Extra, Nodal Extra, or Reserve Quantity) to be present in the uploaded NR file. If your NR file does not contain extra rows, please uncheck 'Extra Processing as per NR' in Project Configuration, configure envelopes and quantities, and re-run.");
+                        }
+
+                        // If user has configured calculations, switch off isOnlyReport and proceed to calculation
+                        isOnlyReport = false;
                     }
                 }
-                else
+
+                if (!isOnlyReport)
                 {
                     if (!extraConfig.Any())
                         return BadRequest("No ExtraConfiguration found");
@@ -2148,7 +3072,7 @@ namespace Tools.Controllers
                 // Update steps for NrData1
                 foreach (var nr in nrDataList)
                 {
-                    nr.Steps = PipelineNavigator.GetNextStep(PipelineNavigator.STEP_ENV_BREAKING, projectConfig?.Modules);
+                    nr.Steps = PipelineNavigator.GetNextStep(PipelineNavigator.STEP_AWAITING_EXTRA, projectConfig?.Modules);
                     _context.NrData1.Update(nr);
                 }
 
@@ -2171,7 +3095,7 @@ namespace Tools.Controllers
                         x.CatchNo == extra.CatchNo);
 
                     var config = extraConfigs.FirstOrDefault(c => c.ExtraType == extra.ExtraId);
-                    if (baseRow == null || config == null) continue;
+                    if (baseRow == null || (!isOnlyReport && config == null)) continue;
 
                     var matchingCenter = existingCenters.FirstOrDefault(c => c.NRDataId == baseRow.Id && (!string.IsNullOrWhiteSpace(extra.NodalCode) && c.NodalCode == extra.NodalCode))
                         ?? existingCenters.FirstOrDefault(c => c.NRDataId == baseRow.Id);
@@ -2206,29 +3130,45 @@ namespace Tools.Controllers
                     dict["OuterEnvelope"] = extra.OuterEnvelope ?? "";
 
                     // Set CenterCode
-                    switch (extra.ExtraId)
+                    var matchingExtraCenter = await _context.CenterList
+                        .Where(c => c.ProjectId == ProjectId && c.NRDataId == baseRow.Id && c.ExtraId == extra.ExtraId && c.Status)
+                        .FirstOrDefaultAsync();
+
+                    if (matchingExtraCenter != null && !string.IsNullOrWhiteSpace(matchingExtraCenter.CenterCode) &&
+                        !matchingExtraCenter.CenterCode.Contains("Extra", StringComparison.OrdinalIgnoreCase))
                     {
-                        case 1:
-                            dict["CenterCode"] = "Nodal Extra";
-                            dict["NodalSort"] = baseNodalSort;
-                            dict["CenterSort"] = 10000;
-                            dict["RouteSort"] = baseRouteSort;
-                            break;
-                        case 2:
-                            dict["CenterCode"] = "University Extra";
-                            dict["NodalSort"] = 10000;
-                            dict["CenterSort"] = 100000;
-                            dict["RouteSort"] = 10000;
-                            break;
-                        case 3:
-                            dict["CenterCode"] = "Office Extra";
-                            dict["NodalSort"] = 100000;
-                            dict["CenterSort"] = 1000000;
-                            dict["RouteSort"] = 100000;
-                            break;
-                        default:
-                            dict["CenterCode"] = "Extra";
-                            break;
+                        dict["CenterCode"] = matchingExtraCenter.CenterCode;
+                        dict["CenterSort"] = matchingExtraCenter.CenterSort;
+                        dict["NodalSort"] = matchingExtraCenter.NodalSort > 0 ? matchingExtraCenter.NodalSort : baseNodalSort;
+                        dict["RouteSort"] = matchingExtraCenter.RouteSort > 0 ? matchingExtraCenter.RouteSort : baseRouteSort;
+                        dict["Remark"] = "Reserve Quantity";
+                    }
+                    else
+                    {
+                        switch (extra.ExtraId)
+                        {
+                            case 1:
+                                dict["CenterCode"] = "Nodal Extra";
+                                dict["NodalSort"] = baseNodalSort;
+                                dict["CenterSort"] = 10000;
+                                dict["RouteSort"] = baseRouteSort;
+                                break;
+                            case 2:
+                                dict["CenterCode"] = "University Extra";
+                                dict["NodalSort"] = 10000;
+                                dict["CenterSort"] = 100000;
+                                dict["RouteSort"] = 10000;
+                                break;
+                            case 3:
+                                dict["CenterCode"] = "Office Extra";
+                                dict["NodalSort"] = 100000;
+                                dict["CenterSort"] = 1000000;
+                                dict["RouteSort"] = 100000;
+                                break;
+                            default:
+                                dict["CenterCode"] = "Extra";
+                                break;
+                        }
                     }
 
                     allRows.Add(dict);
@@ -2323,6 +3263,16 @@ namespace Tools.Controllers
                 ControllerContext = this.ControllerContext
             };
             return await boxController.ProcessBoxBreaking(ProjectId, LotNo ?? new List<int>(), skipReset, bypassDispatch, runBoth, batchNo);
+        }
+
+        [HttpPost("missing-data")]
+        public async Task<ActionResult> SaveMissingData([FromBody] NRDatasController.MissingDataSaveRequest request, [FromQuery] int? lotNo = null)
+        {
+            var legacy = new NRDatasController(_context, _loggerService, _apiSettings, _dispatchService)
+            {
+                ControllerContext = this.ControllerContext
+            };
+            return await legacy.SaveMissingData(request, lotNo);
         }
 
         #region Helper Models
@@ -2673,11 +3623,15 @@ namespace Tools.Controllers
         }
 
         // DELETE: api/NrData1/DeleteCatchNo/5/Catch123
-        [HttpDelete("DeleteCatchNo/{projectId}/{catchNo}")]
-        public async Task<IActionResult> DeleteCatchNo(int projectId, string catchNo)
+        [HttpDelete("DeleteCatchNo/{projectId}/{*catchNo}")]
+        [HttpDelete("DeleteCatchNo/{projectId}")]
+        public async Task<IActionResult> DeleteCatchNo(int projectId, string? catchNo, [FromQuery] string? queryCatchNo = null)
         {
             try
             {
+                if (string.IsNullOrWhiteSpace(catchNo))
+                    catchNo = queryCatchNo;
+
                 if (string.IsNullOrWhiteSpace(catchNo))
                     return BadRequest("Catch number cannot be empty");
 
