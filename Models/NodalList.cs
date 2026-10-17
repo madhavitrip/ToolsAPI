@@ -12,13 +12,13 @@ namespace Tools.Models
         public int CollegeCode { get; set; }
         public string? CollegeName { get; set; }
         public string? ExamCenterCode { get; set; }
-        [Required]
-        public string ExamCenterName { get; set; }
+        public string? ExamCenterName { get; set; }
         public string? Gender { get; set; }
         public string? NodalCode { get; set; }
-        [Required]
-        public string NodalName { get; set; }
+        public string? NodalName { get; set; }
         public string? OtherFields { get; set; }
         public bool Status { get; set; } = true;
+        public double CenterSort { get; set; }
+        public double NodalSort { get; set; }
     }
 }

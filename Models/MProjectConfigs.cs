@@ -29,6 +29,8 @@ namespace Tools.Models
         public int? BookletSerialNumber { get; set; }
         public bool? ResetBookletSerialOnCatchChange { get; set; }
         public List<int>? HeaderVerificationFields { get; set; } = new List<int>();
+        public bool UseCustomCatchSerial { get; set; } = false;
+        public string? CustomCatchSerials { get; set; }
 
     }
 }

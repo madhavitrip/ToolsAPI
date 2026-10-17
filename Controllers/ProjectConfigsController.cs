@@ -93,6 +93,8 @@ namespace Tools.Controllers
                 config.MssTypes,
                 config.MssAttached,
                 config.RoundOffBeforeEnhancement,
+                config.UseCustomCatchSerial,
+                config.CustomCatchSerials,
 
                 DuplicateRemoveFields = MapFields(config.DuplicateRemoveFields),
                 SortingBoxReport = MapFields(config.SortingBoxReport),
@@ -124,7 +126,6 @@ namespace Tools.Controllers
         //    return Ok(projectConfig);
         //}
 
-        // PUT: api/ProjectConfigs/5
         [HttpPut("{id}")]
         public async Task<IActionResult> PutProjectConfig(int id, ProjectConfig projectConfig)
         {
@@ -403,6 +404,39 @@ namespace Tools.Controllers
             return _context.ProjectConfigs.Any(e => e.Id == id);
         }
 
+        [HttpGet("Catches/{projectId}")]
+        public async Task<IActionResult> GetCatches(int projectId)
+        {
+            try
+            {
+                var catches = await _context.NRDatas
+                    .Where(x => x.ProjectId == projectId && x.Status == true && !string.IsNullOrEmpty(x.CatchNo))
+                    .Select(x => x.CatchNo!)
+                    .Distinct()
+                    .OrderBy(x => x)
+                    .ToListAsync();
+
+                if (catches.Any())
+                {
+                    return Ok(catches);
+                }
+
+                var catchListCatches = await _context.CatchList
+                    .Where(x => x.ProjectId == projectId && x.Status == true && !string.IsNullOrEmpty(x.CatchNo))
+                    .Select(x => x.CatchNo!)
+                    .Distinct()
+                    .OrderBy(x => x)
+                    .ToListAsync();
+
+                return Ok(catchListCatches);
+            }
+            catch (Exception ex)
+            {
+                await _loggerService.LogErrorAsync("Error fetching catches", ex.Message, nameof(ProjectConfigsController));
+                return Ok(new List<string>());
+            }
+        }
+
         [HttpGet("RunMigration")]
         public async Task<IActionResult> RunMigration()
         {
@@ -411,6 +445,18 @@ namespace Tools.Controllers
             } catch {}
             try {
                 await _context.Database.ExecuteSqlRawAsync("ALTER TABLE MProjectConfigs ADD HeaderVerificationFields longtext NULL;");
+            } catch {}
+            try {
+                await _context.Database.ExecuteSqlRawAsync("ALTER TABLE ProjectConfigs ADD CustomCatchSerials longtext NULL;");
+            } catch {}
+            try {
+                await _context.Database.ExecuteSqlRawAsync("ALTER TABLE ProjectConfigs ADD UseCustomCatchSerial tinyint(1) NOT NULL DEFAULT 0;");
+            } catch {}
+            try {
+                await _context.Database.ExecuteSqlRawAsync("ALTER TABLE MProjectConfigs ADD CustomCatchSerials longtext NULL;");
+            } catch {}
+            try {
+                await _context.Database.ExecuteSqlRawAsync("ALTER TABLE MProjectConfigs ADD UseCustomCatchSerial tinyint(1) NOT NULL DEFAULT 0;");
             } catch {}
             return Ok("Migration run!");
         }

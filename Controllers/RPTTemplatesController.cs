@@ -63,7 +63,7 @@ namespace Tools.Controllers
             {
                 t.TemplateId, t.GroupId, t.TypeId, t.ProjectId, t.UploadedByUserId,
                 t.ModuleIds, t.TemplateName, t.SubName, t.RPTFilePath, t.ParsedFieldsJson,
-                t.Version, t.CreatedDate, t.UpdatedDate, t.IsActive, t.IsDeleted,
+                t.Version, t.CreatedDate, t.UpdatedDate, t.IsActive, t.IsDeleted, t.InExcel,
                 HasMapping = mappedIds.Contains(t.TemplateId)
             }));
         }
@@ -198,7 +198,7 @@ namespace Tools.Controllers
             {
                 t.TemplateId, t.GroupId, t.TypeId, t.ProjectId, t.UploadedByUserId,
                 t.ModuleIds, t.TemplateName, t.SubName, t.RPTFilePath, t.ParsedFieldsJson,
-                t.Version, t.CreatedDate, t.UpdatedDate, t.IsActive, t.IsDeleted,
+                t.Version, t.CreatedDate, t.UpdatedDate, t.IsActive, t.IsDeleted, t.InExcel,
                 HasMapping = mappedIds.Contains(t.TemplateId),
                 MappingWarning = mappedIds.Contains(t.TemplateId)
                     ? null
@@ -214,7 +214,7 @@ namespace Tools.Controllers
             var excludeColumns = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
                 "id", "projectid", "envelopetype", "envelopebreakingresultid",
-                "createdat", "uploadedbatch", "uploadbatch", "nrdataid",
+                "createdat", "nrdataid",
                 "extraid", "envelopid", "envelopeid", "status", "lotno", "verifiedon", "verifiedby", "verificationstatus", "batch"
             };
 
@@ -369,8 +369,10 @@ namespace Tools.Controllers
             // Calculated fields for quantity sheet (sourced directly from SP result)
             result.Add(new Dictionary<string, string> { ["value"] = "c.TotalCenters", ["label"] = "TotalCenters" });
             result.Add(new Dictionary<string, string> { ["value"] = "c.TotalNodal", ["label"] = "TotalNodal" });
+            result.Add(new Dictionary<string, string> { ["value"] = "c.TotalInnerEnvelope", ["label"] = "TotalInnerEnvelope" });
+            result.Add(new Dictionary<string, string> { ["value"] = "c.TotalEnvelope", ["label"] = "TotalEnvelope" });
 
-            // Virtual computed fields � not real columns, resolved to SQL expressions at report generation
+            // Virtual computed fields not real columns, resolved to SQL expressions at report generation
             result.Add(new Dictionary<string, string>
             {
                 ["value"] = "calc:BOX_RANGE",
@@ -1045,7 +1047,8 @@ namespace Tools.Controllers
                         t.TemplateId,
                         t.TemplateName,
                         t.Version,
-                        t.SubName
+                        t.SubName,
+                        t.ModuleIds
                     })
                     .ToListAsync();
 
@@ -1069,7 +1072,8 @@ namespace Tools.Controllers
                         t.TemplateId,
                         t.TemplateName,
                         t.Version,
-                        t.SubName
+                        t.SubName,
+                        t.ModuleIds
                     })
                     .ToListAsync();
 
@@ -1085,7 +1089,8 @@ namespace Tools.Controllers
                         t.TemplateId,
                         t.TemplateName,
                         t.Version,
-                        t.SubName
+                        t.SubName,
+                        t.ModuleIds
                     })
                     .ToListAsync();
 
@@ -1113,7 +1118,8 @@ namespace Tools.Controllers
                         t.TemplateId,
                         t.TemplateName,
                         t.Version,
-                        t.SubName
+                        t.SubName,
+                        t.ModuleIds
                     })
                     .ToListAsync();
 
@@ -1129,7 +1135,8 @@ namespace Tools.Controllers
                         t.TemplateId,
                         t.TemplateName,
                         t.Version,
-                        t.SubName
+                        t.SubName,
+                        t.ModuleIds
                     })
                     .ToListAsync();
 
@@ -1365,7 +1372,7 @@ namespace Tools.Controllers
                     };
                     _context.MRPTTemplates.Add(newTemplate);
                     await _context.SaveChangesAsync();
-                    imported.Add(new { newTemplate.TemplateId, newTemplate.TemplateName, newTemplate.Version });
+                    imported.Add(new { newTemplate.TemplateId, newTemplate.TemplateName, newTemplate.SubName, newTemplate.Version, newTemplate.ModuleIds });
                 }
                 else
                 {
@@ -1419,7 +1426,7 @@ namespace Tools.Controllers
                         }
                     }
 
-                    imported.Add(new { newTemplate.TemplateId, newTemplate.TemplateName, newTemplate.Version });
+                    imported.Add(new { newTemplate.TemplateId, newTemplate.TemplateName, newTemplate.SubName, newTemplate.Version, newTemplate.ModuleIds });
                 }
             }
 
@@ -1565,7 +1572,7 @@ namespace Tools.Controllers
                             await _context.SaveChangesAsync();
                         }
 
-                        promoted.Add(new { newTemplate.TemplateId, newTemplate.TemplateName, newTemplate.Version });
+                        promoted.Add(new { newTemplate.TemplateId, newTemplate.TemplateName, newTemplate.SubName, newTemplate.Version, newTemplate.ModuleIds });
                     }
 
                     await transaction.CommitAsync();
@@ -1595,10 +1602,14 @@ namespace Tools.Controllers
             var mapping = await _context.RPTMappings
                 .FirstOrDefaultAsync(m => m.TemplateId == id);
 
+            var template = await _context.RPTTemplates
+                .FirstOrDefaultAsync(t => t.TemplateId == id);
+
             return Ok(new
             {
                 templateId = id,
-                mappingJson = mapping?.MappingJson ?? null
+                mappingJson = mapping?.MappingJson ?? null,
+                inExcel = template?.InExcel ?? false
             });
         }
 
@@ -1608,8 +1619,11 @@ namespace Tools.Controllers
         [HttpPost("{id}/mapping")]
         public async Task<ActionResult> SaveMapping(int id, [FromBody] SaveMappingRequest req)
         {
-            if (!await _context.RPTTemplates.AnyAsync(t => t.TemplateId == id))
+            var template = await _context.RPTTemplates.FirstOrDefaultAsync(t => t.TemplateId == id);
+            if (template == null)
                 return NotFound("Template not found.");
+
+            template.InExcel = req.InExcel;
 
             if (req == null)
                 return BadRequest("Request body is required.");
@@ -2342,7 +2356,7 @@ namespace Tools.Controllers
             {
                 t.TemplateId, t.GroupId, t.TypeId, t.ProjectId, t.UploadedByUserId,
                 t.ModuleIds, t.TemplateName, t.SubName, t.RPTFilePath, t.ParsedFieldsJson,
-                t.Version, t.CreatedDate, t.UpdatedDate, t.IsActive, t.IsDeleted,
+                t.Version, t.CreatedDate, t.UpdatedDate, t.IsActive, t.IsDeleted, t.InExcel,
                 HasMapping = mappedIds.Contains(t.TemplateId),
                 HasFileOnDisk = !string.IsNullOrWhiteSpace(t.RPTFilePath) && (
                     System.IO.File.Exists(Path.Combine(webRoot, t.RPTFilePath)) ||
@@ -2382,6 +2396,7 @@ namespace Tools.Controllers
     public class SaveMappingRequest
     {
         public string MappingJson { get; set; }
+        public bool InExcel { get; set; }
     }
 
     public class UpdateTemplateRequest

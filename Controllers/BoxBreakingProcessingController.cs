@@ -343,32 +343,7 @@ namespace Tools.Controllers
                     .Select(g => g.First())
                     .ToList();
 
-                // Step 2: Calculate Start, End, Serial (BEFORE sorting)
-                var enrichedList = new List<dynamic>();
-                string previousCatchNo = null;
-                int previousEnd = 0;
-
-                foreach (var row in uniqueRows)
-                {
-                    var rowDict = (IDictionary<string, object>)row;
-                    string catchNo = rowDict["CatchNo"]?.ToString();
-                    string normCatchNo = GetNormalizedCatchNo(catchNo);
-
-                    int start = normCatchNo != previousCatchNo ? 1 : previousEnd + 1;
-                    int end = start + (int)rowDict["TotalEnv"] - 1;
-                    string serial = $"{start} to {end}";
-
-                    rowDict["Start"] = start;
-                    rowDict["End"] = end;
-                    rowDict["Serial"] = serial;
-
-                    enrichedList.Add(row);
-
-                    previousCatchNo = normCatchNo;
-                    previousEnd = end;
-                }
-
-                // Step 3: Apply sorting
+                // Step 2: Apply sorting
                 IOrderedEnumerable<dynamic> ordered = null;
 
                 foreach (var fieldName in fieldNames)
@@ -398,12 +373,63 @@ namespace Tools.Controllers
                     };
 
                     if (ordered == null)
-                        ordered = enrichedList.OrderBy(keySelector);
+                        ordered = uniqueRows.OrderBy(keySelector);
                     else
                         ordered = ordered.ThenBy(keySelector);
                 }
 
-                var sortedList = ordered?.ToList() ?? enrichedList;
+                var sortedList = ordered?.ToList() ?? uniqueRows;
+
+                // Step 3: Calculate Start, End, Serial on sorted rows
+                // Use dictionary to track running end per catch so serial NEVER breaks while catch is the same,
+                // even when processing lots individually or when records are non-contiguous.
+                var catchEndCounters = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+                // Pre-populate with max End from other lots' active box results (if any exist for this project)
+                if (nrData.Any())
+                {
+                    var currentNrDataIds = nrData.Select(n => n.Id).ToList();
+                    var currentLotEnvelopeIds = await _context.EnvelopeBreakingResults
+                        .Where(e => e.ProjectId == ProjectId && currentNrDataIds.Contains(e.NrDataId))
+                        .Select(e => e.Id)
+                        .ToListAsync();
+
+                    var existingActiveEnds = await (from b in _context.BoxBreakingResults
+                                                    join e in _context.EnvelopeBreakingResults on b.EnvelopeBreakingResultId equals e.Id
+                                                    where b.ProjectId == ProjectId && b.Status && b.End > 0 && !currentLotEnvelopeIds.Contains(e.Id)
+                                                    group b by e.CatchNo into g
+                                                    select new { CatchNo = g.Key, MaxEnd = g.Max(x => x.End) })
+                                                    .ToListAsync();
+
+                    foreach (var item in existingActiveEnds)
+                    {
+                        string norm = GetNormalizedCatchNo(item.CatchNo);
+                        if (!catchEndCounters.ContainsKey(norm) || catchEndCounters[norm] < item.MaxEnd)
+                        {
+                            catchEndCounters[norm] = item.MaxEnd;
+                        }
+                    }
+                }
+
+                foreach (var row in sortedList)
+                {
+                    var rowDict = (IDictionary<string, object>)row;
+                    string catchNo = rowDict["CatchNo"]?.ToString();
+                    string normCatchNo = GetNormalizedCatchNo(catchNo);
+
+                    int previousEnd = catchEndCounters.TryGetValue(normCatchNo, out int lastEnd) ? lastEnd : 0;
+                    int totalEnv = rowDict.ContainsKey("TotalEnv") && rowDict["TotalEnv"] != null ? (int)rowDict["TotalEnv"] : 1;
+
+                    int start = previousEnd + 1;
+                    int end = start + totalEnv - 1;
+                    string serial = $"{start} to {end}";
+
+                    rowDict["Start"] = start;
+                    rowDict["End"] = end;
+                    rowDict["Serial"] = serial;
+
+                    catchEndCounters[normCatchNo] = end;
+                }
 
                 await _loggerService.LogEventAsync($"Enriched and sorted {sortedList.Count} rows in {sw.ElapsedMilliseconds}ms", "BoxBreakingProcessing", 0, ProjectId);
 
@@ -1052,7 +1078,7 @@ namespace Tools.Controllers
         };
 
                 if (resetOnSymbolChange) { headers.Add("Symbol"); headers.Add("CourseName"); }
-                if (projectconfig.BookletSerialNumber > 0) headers.Add("BookletSerial");
+                if ((projectconfig.BookletSerialNumber ?? 0) > 0 || projectconfig.UseCustomCatchSerial) headers.Add("BookletSerial");
                 if (projectconfig.OmrSerialNumber > 0) headers.Add("OmrSerial");
                 if (projectconfig.IsInnerBundlingDone) headers.Add("InnerBundlingSerial");
 
@@ -1131,7 +1157,7 @@ namespace Tools.Controllers
                             ws.Cells[row, col++].Value = nrRow?.CourseName;
                         }
 
-                        if (projectconfig.BookletSerialNumber > 0) ws.Cells[row, col++].Value = result.BookletSerial;
+                        if ((projectconfig.BookletSerialNumber ?? 0) > 0 || projectconfig.UseCustomCatchSerial) ws.Cells[row, col++].Value = result.BookletSerial;
                         if (projectconfig.OmrSerialNumber > 0) ws.Cells[row, col++].Value = result.OmrSerial;
                         if (projectconfig.IsInnerBundlingDone) ws.Cells[row, col++].Value = result.InnerBundlingSerial;
 

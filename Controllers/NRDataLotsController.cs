@@ -86,7 +86,7 @@ namespace Tools.Controllers
         }
 
         [HttpGet("GetMissingEnvLotCatches/{projectId}")]
-        public async Task<IActionResult> GetMissingEnvLotCatches(int projectId)
+        public async Task<IActionResult> GetMissingEnvLotCatches(int projectId, [FromQuery] int? lotNo = null)
         {
             if (projectId <= 0)
                 return BadRequest("ProjectId is required.");

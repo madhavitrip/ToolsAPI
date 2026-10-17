@@ -23,7 +23,8 @@ FileStorageHelper.Initialize(builder.Configuration);
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddDbContext<ERPToolsDbContext>(options =>
     options.UseMySql(builder.Configuration.GetConnectionString("ERPToolsDb"),
-        ServerVersion.AutoDetect(builder.Configuration.GetConnectionString("ERPToolsDb"))));
+        ServerVersion.AutoDetect(builder.Configuration.GetConnectionString("ERPToolsDb")),
+        mysqlOptions => mysqlOptions.CommandTimeout(180)));
 builder.Services.AddScoped<ILoggerService, LoggerService>();
 builder.Services.AddScoped<ApiAuditLoggingFilter>();
 builder.Services.AddScoped<IAuthorizationService, AuthorizationService>();
@@ -110,7 +111,7 @@ builder.Services.AddControllers(options =>
 })
 .AddJsonOptions(options =>
 {
-    options.JsonSerializerOptions.NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowReadingFromString | System.Text.Json.Serialization.JsonNumberHandling.WriteAsString;
+    options.JsonSerializerOptions.NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowReadingFromString;
 });
 builder.Services.Configure<FormOptions>(options =>
 {
