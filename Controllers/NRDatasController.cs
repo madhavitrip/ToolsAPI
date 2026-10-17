@@ -6082,12 +6082,12 @@ namespace Tools.Controllers
                         _context.CenterList.Update(c);
                     }
 
-                    var extra = await _context.ExtrasEnvelope.Where(e => e.ProjectId == projectId && e.CatchNo == catchNo).ToListAsync();
+                    /*var extra = await _context.ExtrasEnvelope.Where(e => e.ProjectId == projectId && e.CatchNo == catchNo).ToListAsync();
                     foreach (var ex in extra)
                     {
                         ex.Status = 0;
                         _context.ExtrasEnvelope.Update(ex);
-                    }
+                    }*/
 
                     var newEnvResults = await _context.NewEnvelopeBreakingResults
                         .Where(e => e.ProjectId == projectId && nr1Ids.Contains(e.NrDataId))

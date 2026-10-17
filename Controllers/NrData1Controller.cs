@@ -2545,6 +2545,41 @@ namespace Tools.Controllers
                     _context.CenterList.Update(c);
                 }
 
+                var newEnvBreakages = await _context.NewEnvelopeBreakages
+                    .Where(n => n.NrDataId == nr1.Id && n.Status)
+                    .ToListAsync();
+                foreach (var b in newEnvBreakages)
+                {
+                    b.Status = false;
+                    _context.NewEnvelopeBreakages.Update(b);
+                }
+
+                var newEnvBreakingResults = await _context.NewEnvelopeBreakingResults
+                    .Where(n => n.NrDataId == nr1.Id && n.Status)
+                    .ToListAsync();
+                foreach (var r in newEnvBreakingResults)
+                {
+                    r.Status = false;
+                    _context.NewEnvelopeBreakingResults.Update(r);
+                }
+
+                var envBreakingResultIds = await _context.EnvelopeBreakingResults
+                    .Where(e => e.NrDataId == nr1.Id)
+                    .Select(e => e.Id)
+                    .ToListAsync();
+
+                if (envBreakingResultIds.Any())
+                {
+                    var boxBreakingResults = await _context.BoxBreakingResults
+                        .Where(b => b.EnvelopeBreakingResultId != null && envBreakingResultIds.Contains((int)b.EnvelopeBreakingResultId) && b.Status)
+                        .ToListAsync();
+                    foreach (var b in boxBreakingResults)
+                    {
+                        b.Status = false;
+                        _context.BoxBreakingResults.Update(b);
+                    }
+                }
+
                 await _context.SaveChangesAsync();
                 await _loggerService.LogEventAsync($"Soft deleted NrData1 record {id} and referencing CenterList records", "NrData1", LogHelper.GetTriggeredBy(User), nr1.ProjectId);
                 return NoContent();
@@ -2591,6 +2626,41 @@ namespace Tools.Controllers
                     _context.CenterList.Update(c);
                 }
 
+                var newEnvBreakages = await _context.NewEnvelopeBreakages
+                    .Where(n => nr1Ids.Contains(n.NrDataId) && n.Status)
+                    .ToListAsync();
+                foreach (var b in newEnvBreakages)
+                {
+                    b.Status = false;
+                    _context.NewEnvelopeBreakages.Update(b);
+                }
+
+                var newEnvBreakingResults = await _context.NewEnvelopeBreakingResults
+                    .Where(n => nr1Ids.Contains(n.NrDataId) && n.Status)
+                    .ToListAsync();
+                foreach (var r in newEnvBreakingResults)
+                {
+                    r.Status = false;
+                    _context.NewEnvelopeBreakingResults.Update(r);
+                }
+
+                var envBreakingResultIds = await _context.EnvelopeBreakingResults
+                    .Where(e => nr1Ids.Contains(e.NrDataId))
+                    .Select(e => e.Id)
+                    .ToListAsync();
+
+                if (envBreakingResultIds.Any())
+                {
+                    var boxBreakingResults = await _context.BoxBreakingResults
+                        .Where(b => b.EnvelopeBreakingResultId != null && envBreakingResultIds.Contains((int)b.EnvelopeBreakingResultId) && b.Status)
+                        .ToListAsync();
+                    foreach (var b in boxBreakingResults)
+                    {
+                        b.Status = false;
+                        _context.BoxBreakingResults.Update(b);
+                    }
+                }
+
                 await _context.SaveChangesAsync();
                 await _loggerService.LogEventAsync($"Soft deleted all NrData1 and CenterList records for ProjectId {projectId}", "NrData1", LogHelper.GetTriggeredBy(User), projectId);
                 return Ok(new { message = "Project NrData1 and CenterList records soft deleted successfully.", projectId, count = nr1List.Count });
@@ -2634,6 +2704,41 @@ namespace Tools.Controllers
                 {
                     c.Status = false;
                     _context.CenterList.Update(c);
+                }
+
+                var newEnvBreakages = await _context.NewEnvelopeBreakages
+                    .Where(n => nr1Ids.Contains(n.NrDataId) && n.Status)
+                    .ToListAsync();
+                foreach (var b in newEnvBreakages)
+                {
+                    b.Status = false;
+                    _context.NewEnvelopeBreakages.Update(b);
+                }
+
+                var newEnvBreakingResults = await _context.NewEnvelopeBreakingResults
+                    .Where(n => nr1Ids.Contains(n.NrDataId) && n.Status)
+                    .ToListAsync();
+                foreach (var r in newEnvBreakingResults)
+                {
+                    r.Status = false;
+                    _context.NewEnvelopeBreakingResults.Update(r);
+                }
+
+                var envBreakingResultIds = await _context.EnvelopeBreakingResults
+                    .Where(e => nr1Ids.Contains(e.NrDataId))
+                    .Select(e => e.Id)
+                    .ToListAsync();
+
+                if (envBreakingResultIds.Any())
+                {
+                    var boxBreakingResults = await _context.BoxBreakingResults
+                        .Where(b => b.EnvelopeBreakingResultId != null && envBreakingResultIds.Contains((int)b.EnvelopeBreakingResultId) && b.Status)
+                        .ToListAsync();
+                    foreach (var b in boxBreakingResults)
+                    {
+                        b.Status = false;
+                        _context.BoxBreakingResults.Update(b);
+                    }
                 }
 
                 await _context.SaveChangesAsync();

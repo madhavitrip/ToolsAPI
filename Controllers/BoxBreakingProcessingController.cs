@@ -1424,6 +1424,28 @@ namespace Tools.Controllers
                 int runningPages = 0;
                 string prevMergeKey = null;
 
+                int envelopeSize = 0;
+                try
+                {
+                    if (!string.IsNullOrWhiteSpace(projectconfig?.Envelope))
+                    {
+                        var envelopeObj = JsonSerializer.Deserialize<Dictionary<string, string>>(projectconfig.Envelope);
+                        if (envelopeObj != null && envelopeObj.ContainsKey("Outer"))
+                        {
+                            string outerEnvValue = envelopeObj["Outer"];
+                            var outerParts = outerEnvValue.Split(',', StringSplitOptions.RemoveEmptyEntries);
+                            if (outerParts.Length > 0)
+                            {
+                                string singleValue = outerParts[0].Trim();
+                                string digits = new string(singleValue.Where(char.IsDigit).ToArray());
+                                if (int.TryParse(digits, out int parsedValue) && parsedValue > 0)
+                                    envelopeSize = parsedValue;
+                            }
+                        }
+                    }
+                }
+                catch { }
+
                 foreach (var item in sortedList)
                 {
                     var itemDict = (IDictionary<string, object>)item;
@@ -1443,10 +1465,128 @@ namespace Tools.Controllers
                         }
                     }
 
-                    if (runningPages + totalPages > capacity && runningPages > 0)
+                    bool overflow = (runningPages + totalPages > capacity);
+
+                    if (overflow)
                     {
-                        boxNo++;
-                        runningPages = 0;
+                        int effectiveEnvSize = envelopeSize > 0 ? envelopeSize : 1;
+                        int remainingQty = (int)itemDict["Quantity"];
+                        int originalStart = itemDict.ContainsKey("Start") ? (int)itemDict["Start"] : 1;
+                        int currentStart = originalStart;
+
+                        // Check if omr/booklet range needs splitting
+                        string itemOmr = itemDict.ContainsKey("OmrSerial") ? itemDict["OmrSerial"]?.ToString() ?? "" : "";
+                        string itemBooklet = itemDict.ContainsKey("BookletSerial") ? itemDict["BookletSerial"]?.ToString() ?? "" : "";
+                        long runningOmr = 0;
+                        long runningBooklet = 0;
+                        bool hasOmr = false;
+                        bool hasBooklet = false;
+
+                        if (!string.IsNullOrWhiteSpace(itemOmr) && itemOmr.Contains("-"))
+                        {
+                            var parts = itemOmr.Split('-');
+                            if (long.TryParse(parts[0], out long parsedOmr))
+                            {
+                                runningOmr = parsedOmr;
+                                hasOmr = true;
+                            }
+                        }
+
+                        if (!string.IsNullOrWhiteSpace(itemBooklet) && itemBooklet.Contains("-"))
+                        {
+                            var parts = itemBooklet.Split('-');
+                            if (long.TryParse(parts[0], out long parsedBk))
+                            {
+                                runningBooklet = parsedBk;
+                                hasBooklet = true;
+                            }
+                        }
+
+                        while (remainingQty > 0)
+                        {
+                            int remainingCapacity = capacity - runningPages;
+                            int maxFittingQty = (int)Math.Floor((double)remainingCapacity / pages);
+                            if (effectiveEnvSize > 1)
+                            {
+                                maxFittingQty = (maxFittingQty / effectiveEnvSize) * effectiveEnvSize;
+                            }
+
+                            int chunkQty = 0;
+                            if (maxFittingQty <= 0)
+                            {
+                                if (runningPages == 0)
+                                {
+                                    chunkQty = Math.Min(effectiveEnvSize, remainingQty);
+                                }
+                                else
+                                {
+                                    boxNo++;
+                                    runningPages = 0;
+                                    continue;
+                                }
+                            }
+                            else
+                            {
+                                chunkQty = Math.Min(maxFittingQty, remainingQty);
+                                if (effectiveEnvSize > 1)
+                                {
+                                    chunkQty = (chunkQty / effectiveEnvSize) * effectiveEnvSize;
+                                }
+
+                                if (chunkQty <= 0)
+                                {
+                                    boxNo++;
+                                    runningPages = 0;
+                                    continue;
+                                }
+                            }
+
+                            int chunkPages = chunkQty * pages;
+                            int envelopesInChunk = effectiveEnvSize > 0 ? (int)Math.Ceiling((double)chunkQty / effectiveEnvSize) : chunkQty;
+                            int start = currentStart;
+                            int end = start + envelopesInChunk - 1;
+                            currentStart = end + 1;
+                            string serial = $"{start} to {end}";
+
+                            string chunkOmr = itemOmr;
+                            string chunkBooklet = itemBooklet;
+
+                            if (hasOmr)
+                            {
+                                long omrStart = runningOmr;
+                                long omrEnd = omrStart + chunkQty - 1;
+                                chunkOmr = $"{omrStart}-{omrEnd}";
+                                runningOmr = omrEnd + 1;
+                            }
+
+                            if (hasBooklet)
+                            {
+                                long bkStart = runningBooklet;
+                                long bkEnd = bkStart + chunkQty - 1;
+                                chunkBooklet = $"{bkStart}-{bkEnd}";
+                                runningBooklet = bkEnd + 1;
+                            }
+
+                            dynamic splitItem = new System.Dynamic.ExpandoObject();
+                            var splitDict = (IDictionary<string, object>)splitItem;
+                            foreach (var kvp in itemDict) splitDict[kvp.Key] = kvp.Value;
+                            splitDict["BoxNo"] = boxNo.ToString();
+                            splitDict["TotalPages"] = chunkPages;
+                            splitDict["Quantity"] = chunkQty;
+                            splitDict["Start"] = start;
+                            splitDict["End"] = end;
+                            splitDict["Serial"] = serial;
+                            splitDict["OmrSerial"] = chunkOmr;
+                            splitDict["BookletSerial"] = chunkBooklet;
+
+                            finalWithBoxes.Add(splitItem);
+
+                            runningPages += chunkPages;
+                            remainingQty -= chunkQty;
+                        }
+
+                        prevMergeKey = mergeKey;
+                        continue;
                     }
 
                     runningPages += totalPages;
