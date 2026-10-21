@@ -1456,7 +1456,7 @@ namespace Tools.Controllers
                     }
                 }
 
-                // Deduplicate & Calculate Start, End, Serial
+                // Step 1: Remove duplicates - keep first occurrence of each duplicate key
                 var uniqueRows = breakingReportData
                     .GroupBy(x =>
                     {
@@ -1470,29 +1470,7 @@ namespace Tools.Controllers
                     .Select(g => g.First())
                     .ToList();
 
-                var enrichedList = new List<dynamic>();
-                string previousCatchNo = null;
-                int previousEnd = 0;
-
-                foreach (var row in uniqueRows)
-                {
-                    var rowDict = (IDictionary<string, object>)row;
-                    string catchNo = rowDict["CatchNo"]?.ToString();
-                    string normCatchNo = GetNormalizedCatchNo(catchNo);
-
-                    int start = normCatchNo != previousCatchNo ? 1 : previousEnd + 1;
-                    int end = start + (int)rowDict["TotalEnv"] - 1;
-                    string serial = $"{start} to {end}";
-
-                    rowDict["Start"] = start;
-                    rowDict["End"] = end;
-                    rowDict["Serial"] = serial;
-
-                    enrichedList.Add(row);
-                    previousCatchNo = normCatchNo;
-                    previousEnd = end;
-                }
-
+                // Step 2: Apply sorting
                 IOrderedEnumerable<dynamic> ordered = null;
                 foreach (var fieldName in fieldNames)
                 {
@@ -1518,11 +1496,64 @@ namespace Tools.Controllers
                         return val.ToString().Trim().ToLowerInvariant();
                     };
 
-                    if (ordered == null) ordered = enrichedList.OrderBy(keySelector);
+                    if (ordered == null) ordered = uniqueRows.OrderBy(keySelector);
                     else ordered = ordered.ThenBy(keySelector);
                 }
 
-                var sortedList = ordered?.ToList() ?? enrichedList;
+                var sortedList = ordered?.ToList() ?? uniqueRows;
+
+                // Step 3: Calculate Start, End, Serial on sorted rows
+                // Use dictionary to track running end per catch so serial NEVER breaks while catch is the same,
+                // even when processing lots individually or when records are non-contiguous.
+                var catchEndCounters = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+                // Pre-populate with max End from other lots' active box results (if any exist for this project)
+                if (nrData.Any())
+                {
+                    var currentNrDataIds = nrData.Select(n => n.Id).ToList();
+                    var currentLotEnvelopeIds = await _context.NewEnvelopeBreakingResults
+                        .Where(e => e.ProjectId == ProjectId && currentNrDataIds.Contains(e.NrDataId))
+                        .Select(e => e.Id)
+                        .ToListAsync();
+
+                    var existingActiveEnds = await (from b in _context.BoxBreakingResults
+                                                    join e in _context.NewEnvelopeBreakingResults on b.EnvelopeBreakingResultId equals e.Id
+                                                    join n in _context.NrData1 on e.NrDataId equals n.Id
+                                                    where b.ProjectId == ProjectId && b.Status && b.End > 0 && !currentLotEnvelopeIds.Contains(e.Id)
+                                                    group b by n.CatchNo into g
+                                                    select new { CatchNo = g.Key, MaxEnd = g.Max(x => x.End) })
+                                                    .ToListAsync();
+
+                    foreach (var item in existingActiveEnds)
+                    {
+                        if (string.IsNullOrWhiteSpace(item.CatchNo)) continue;
+                        string norm = GetNormalizedCatchNo(item.CatchNo);
+                        if (!catchEndCounters.ContainsKey(norm) || catchEndCounters[norm] < item.MaxEnd)
+                        {
+                            catchEndCounters[norm] = item.MaxEnd;
+                        }
+                    }
+                }
+
+                foreach (var row in sortedList)
+                {
+                    var rowDict = (IDictionary<string, object>)row;
+                    string catchNo = rowDict["CatchNo"]?.ToString();
+                    string normCatchNo = GetNormalizedCatchNo(catchNo);
+
+                    int previousEnd = catchEndCounters.TryGetValue(normCatchNo, out int lastEnd) ? lastEnd : 0;
+                    int totalEnv = rowDict.ContainsKey("TotalEnv") && rowDict["TotalEnv"] != null ? (int)rowDict["TotalEnv"] : 1;
+
+                    int start = previousEnd + 1;
+                    int end = start + totalEnv - 1;
+                    string serial = $"{start} to {end}";
+
+                    rowDict["Start"] = start;
+                    rowDict["End"] = end;
+                    rowDict["Serial"] = serial;
+
+                    catchEndCounters[normCatchNo] = end;
+                }
 
                 if (capacity <= 0) capacity = 2000;
 
@@ -1604,8 +1635,23 @@ namespace Tools.Controllers
                     {
                         int effectiveEnvSize = envelopeSize > 0 ? envelopeSize : 1;
                         int remainingQty = (int)itemDict["Quantity"];
-                        int originalStart = itemDict.ContainsKey("Start") ? (int)itemDict["Start"] : 1;
-                        int currentStart = originalStart;
+                        string normCatch = GetNormalizedCatchNo(itemDict["CatchNo"]?.ToString());
+                        var lastBoxForCatch = finalWithBoxes
+                            .Where(b =>
+                            {
+                                var dict = (IDictionary<string, object>)b;
+                                return GetNormalizedCatchNo(dict["CatchNo"]?.ToString()) == normCatch;
+                            })
+                            .OrderBy(b =>
+                            {
+                                var dict = (IDictionary<string, object>)b;
+                                return (int)dict["End"];
+                            })
+                            .LastOrDefault();
+
+                        int currentStart = lastBoxForCatch != null
+                            ? (((IDictionary<string, object>)lastBoxForCatch)["End"] as int? ?? 0) + 1
+                            : (itemDict.ContainsKey("Start") ? (int)itemDict["Start"] : 1);
 
                         // Check if omr/booklet range needs splitting
                         string itemOmr = itemDict.ContainsKey("OmrSerial") ? itemDict["OmrSerial"]?.ToString() ?? "" : "";
