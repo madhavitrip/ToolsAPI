@@ -1770,7 +1770,7 @@ namespace Tools.Controllers
                     .Where(p => p.ProjectId == ProjectId && p.Status == true && eligibleSteps.Contains(p.Steps) && p.Batch == (batchNo ?? 1));
 
                 if (lotNo.HasValue && lotNo.Value > 0)
-                    nrQuery = nrQuery.Where(p => p.LotNo == lotNo.Value);
+                    nrQuery = nrQuery.Where(p => p.LotNo == lotNo.Value || p.EnvLotNo == lotNo.Value);
                 if (!string.IsNullOrEmpty(catchNo))
                     nrQuery = nrQuery.Where(p => p.CatchNo == catchNo);
 
@@ -1783,7 +1783,7 @@ namespace Tools.Controllers
                     var fallbackQuery = _context.NrData1
                         .Where(p => p.ProjectId == ProjectId && p.Status == true && p.Batch == (batchNo ?? 1));
                     if (lotNo.HasValue && lotNo.Value > 0)
-                        fallbackQuery = fallbackQuery.Where(p => p.LotNo == lotNo.Value);
+                        fallbackQuery = fallbackQuery.Where(p => p.LotNo == lotNo.Value || p.EnvLotNo == lotNo.Value);
                     if (!string.IsNullOrEmpty(catchNo))
                         fallbackQuery = fallbackQuery.Where(p => p.CatchNo == catchNo);
                     nrDataList = await fallbackQuery.OrderBy(p => p.CatchNo).ToListAsync();
@@ -1960,6 +1960,9 @@ namespace Tools.Controllers
                         mssDict["Env"] = "";
                         mssDict["NrDataId"] = nrDataId;
                         mssDict["CenterListId"] = 0;
+                        mssDict["ExamDate"] = examDate;
+                        mssDict["ExamTime"] = examTime;
+                        mssDict["CourseName"] = courseName;
                         mssDict["PackingDenomination"] = null;
                         rows.Add(mssRow);
                     }
@@ -2186,8 +2189,10 @@ namespace Tools.Controllers
                     if (mssMode == "start" && isFirstRunForCatch && insertedMssCatches.Add(cNo))
                     {
                         var firstRow = (IDictionary<string, object>)rows.First();
-                        int nrId = (int)(firstRow["NrDataId"] ?? 0);
+                        int nrId = Convert.ToInt32(firstRow["NrDataId"] ?? 0);
                         if (nrId == 0) nrId = nrDataList.FirstOrDefault(n => n.CatchNo == cNo)?.Id ?? 0;
+                        if (nrId == 0 && !string.IsNullOrEmpty(cNo))
+                            nrId = await _context.NrData1.Where(n => n.ProjectId == ProjectId && n.Status && n.CatchNo == cNo).Select(n => n.Id).FirstOrDefaultAsync();
                         finalResultList.AddRange(CreateMssRows(
                             cNo,
                             firstRow["ExamDate"]?.ToString() ?? "",
@@ -2202,8 +2207,10 @@ namespace Tools.Controllers
                     if (mssMode == "end" && isLastRunForCatch && insertedMssCatches.Add(cNo))
                     {
                         var lastRow = (IDictionary<string, object>)rows.Last();
-                        int nrId = (int)(lastRow["NrDataId"] ?? 0);
+                        int nrId = Convert.ToInt32(lastRow["NrDataId"] ?? 0);
                         if (nrId == 0) nrId = nrDataList.FirstOrDefault(n => n.CatchNo == cNo)?.Id ?? 0;
+                        if (nrId == 0 && !string.IsNullOrEmpty(cNo))
+                            nrId = await _context.NrData1.Where(n => n.ProjectId == ProjectId && n.Status && n.CatchNo == cNo).Select(n => n.Id).FirstOrDefaultAsync();
                         finalResultList.AddRange(CreateMssRows(
                             cNo,
                             lastRow["ExamDate"]?.ToString() ?? "",
@@ -2257,10 +2264,14 @@ namespace Tools.Controllers
 
                     if (isMssRow)
                     {
-                        int mssNrId = (int)(dict["NrDataId"] ?? 0);
+                        int mssNrId = Convert.ToInt32(dict["NrDataId"] ?? 0);
                         if (mssNrId == 0)
                         {
                             mssNrId = nrDataList.FirstOrDefault(n => n.CatchNo == cNo)?.Id ?? 0;
+                        }
+                        if (mssNrId == 0 && !string.IsNullOrEmpty(cNo))
+                        {
+                            mssNrId = await _context.NrData1.Where(n => n.ProjectId == ProjectId && n.Status && n.CatchNo == cNo).Select(n => n.Id).FirstOrDefaultAsync();
                         }
 
                         newEnvelopeResults.Add(new NewEnvelopeBreakingResult
@@ -2282,9 +2293,9 @@ namespace Tools.Controllers
                         continue;
                     }
 
-                    int centerListId = (int)(dict["CenterListId"] ?? 0);
-                    int nrDataId = (int)(dict["NrDataId"] ?? 0);
-                    int envQuantity = (int)(dict["EnvQuantity"] ?? 0);
+                    int centerListId = Convert.ToInt32(dict["CenterListId"] ?? 0);
+                    int nrDataId = Convert.ToInt32(dict["NrDataId"] ?? 0);
+                    int envQuantity = Convert.ToInt32(dict["EnvQuantity"] ?? 0);
 
                     string bookletSerial = "";
                     string omrSerial = "";
@@ -2307,8 +2318,8 @@ namespace Tools.Controllers
                         NrDataId = nrDataId,
                         CenterListId = centerListId,
                         EnvQuantity = envQuantity.ToString(),
-                        CenterEnv = (int)dict["CenterEnv"],
-                        TotalEnv = (int)dict["TotalEnv"],
+                        CenterEnv = Convert.ToInt32(dict["CenterEnv"] ?? 0),
+                        TotalEnv = Convert.ToInt32(dict["TotalEnv"] ?? 0),
                         Env = dict["Env"]?.ToString(),
                         SerialNumber = serial++,
                         BookletSerial = bookletSerial,
@@ -2321,9 +2332,22 @@ namespace Tools.Controllers
                     prevCatchForSerial = cNo;
                 }
 
-                // Deactivate previous active records for these catches
+                // Deactivate previous active records for these catches.
+                // Also deactivate any result rows whose NrDataId is no longer active in NrData1
+                // (stale rows from previously active catches that were later soft-deleted).
+                var allActiveNrIdsForProject = await _context.NrData1
+                    .Where(n => n.ProjectId == ProjectId && n.Status)
+                    .Select(n => n.Id)
+                    .ToListAsync();
+
+                var processedCenterIds = centers.Select(c => c.Id).ToList();
+
                 var existingNewBreakingIds = await _context.NewEnvelopeBreakingResults
-                    .Where(r => r.ProjectId == ProjectId && nrDataIds.Contains(r.NrDataId) && r.Status)
+                    .Where(r => r.ProjectId == ProjectId && r.Status &&
+                        (nrDataIds.Contains(r.NrDataId) ||
+                         processedCenterIds.Contains(r.CenterListId) ||
+                         r.NrDataId == 0 || // any orphaned rows with no NR link
+                         !allActiveNrIdsForProject.Contains(r.NrDataId))) // stale rows from deactivated NrData1
                     .Select(r => r.Id)
                     .ToListAsync();
 
@@ -2351,11 +2375,35 @@ namespace Tools.Controllers
 
                 try
                 {
-                    await GetEnvelopeBreakingReport(ProjectId, lotNo);
+                    var reportResponse = await GetEnvelopeBreakingReport(ProjectId, lotNo);
+                    var isSuccess = true;
+                    int statusCode = 500;
+                    string exactError = "Failed to generate envelope breaking report.";
+
+                    if (reportResponse is ObjectResult objResult && objResult.StatusCode >= 400)
+                    {
+                        isSuccess = false;
+                        statusCode = objResult.StatusCode ?? 500;
+                        exactError = System.Text.Json.JsonSerializer.Serialize(objResult.Value);
+                    }
+                    else if (reportResponse is StatusCodeResult statusResult && statusResult.StatusCode >= 400)
+                    {
+                        isSuccess = false;
+                        statusCode = statusResult.StatusCode;
+                    }
+
+                    if (!isSuccess)
+                    {
+                        await _loggerService.LogErrorAsync("Error during Excel report generation", exactError, nameof(EnvelopeBreakageProcessingController));
+                        return StatusCode(statusCode, new { message = "Failed to generate envelope breaking report.", exactError = exactError });
+                    }
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"[ProcessEnvelopeBreakingNew] Report error: {ex.Message}");
+                    var innerEx = ex.InnerException?.Message ?? "No inner exception";
+                    var fullError = $"{ex.Message} | Inner: {innerEx}";
+                    await _loggerService.LogErrorAsync("Error during Excel report generation", fullError, nameof(EnvelopeBreakageProcessingController));
+                    return StatusCode(500, new { message = "Failed to generate envelope breaking report.", exactError = fullError, stackTrace = ex.StackTrace });
                 }
 
                 return Ok(new
@@ -2383,18 +2431,24 @@ namespace Tools.Controllers
                 if (projectconfig == null)
                     return NotFound("Project config not found");
 
-                var nrDataDict = await _context.NrData1
-                    .Where(p => p.ProjectId == ProjectId && p.Status == true)
-                    .ToDictionaryAsync(p => p.Id);
+                var nrQuery = _context.NrData1.Where(p => p.ProjectId == ProjectId && p.Status);
+                if (lotNo.HasValue && lotNo.Value > 0)
+                {
+                    nrQuery = nrQuery.Where(p => p.LotNo == lotNo.Value || p.EnvLotNo == lotNo.Value);
+                }
+
+                var nrDataDict = await nrQuery.ToDictionaryAsync(p => p.Id);
+                var activeNrIds = nrDataDict.Keys.ToHashSet();
 
                 var centerDict = await _context.CenterList
-                    .Where(p => p.ProjectId == ProjectId && p.Status == true)
+                    .Where(p => p.ProjectId == ProjectId && p.Status && activeNrIds.Contains(p.NRDataId))
                     .ToDictionaryAsync(p => p.Id);
+                var activeCenterIds = centerDict.Keys.ToHashSet();
 
-                var nrDataByCatch = await _context.NrData1
-                    .Where(p => p.ProjectId == ProjectId && p.Status == true)
-                    .GroupBy(p => p.CatchNo)
-                    .ToDictionaryAsync(g => g.Key ?? "", g => g.First());
+                var nrDataByCatch = nrDataDict.Values
+                    .Where(p => !string.IsNullOrEmpty(p.CatchNo))
+                    .GroupBy(p => p.CatchNo!)
+                    .ToDictionary(g => g.Key, g => g.First());
 
                 var sortFieldIds = projectconfig.EnvelopeMakingCriteria ?? new List<int>();
                 var fields = await _context.Fields
@@ -2406,13 +2460,137 @@ namespace Tools.Controllers
                     .Select(f => f.Name)
                     .ToList();
 
+                // Clean up any lingering orphaned rows in NewEnvelopeBreakingResults directly in DB
+                try
+                {
+                    var orphanedIds = await _context.NewEnvelopeBreakingResults
+                        .Where(r => r.ProjectId == ProjectId && r.Status && !activeNrIds.Contains(r.NrDataId))
+                        .Select(r => r.Id)
+                        .ToListAsync();
+
+                    if (orphanedIds.Any())
+                    {
+                        await _context.NewEnvelopeBreakingResults
+                            .Where(r => orphanedIds.Contains(r.Id))
+                            .ExecuteUpdateAsync(s => s.SetProperty(r => r.Status, false));
+                    }
+                }
+                catch { }
+
                 var results = await _context.NewEnvelopeBreakingResults
-                    .Where(r => r.ProjectId == ProjectId && r.Status)
+                    .Where(r => r.ProjectId == ProjectId && r.Status && activeNrIds.Contains(r.NrDataId))
                     .OrderBy(r => r.Id)
                     .ToListAsync();
 
                 if (!results.Any())
                     return NotFound("No envelope breaking results found");
+
+                // Deduplicate orphaned MSS rows accumulated from prior processing runs.
+                // MSS rows: CenterListId == 0 && SerialNumber == 0.
+                // For each NrDataId, find the Id of the last non-MSS row saved for that NrDataId
+                // (= the most recent processing batch). Then only keep MSS rows whose Id is AFTER
+                // the last non-MSS row for that NrDataId, i.e. they were saved in the same batch.
+                // For MSS rows with NrDataId == 0 (orphaned, no NR link), discard them entirely
+                // if there are any valid MSS rows for the same project.
+                var nonMssResults = results.Where(r => !(r.CenterListId == 0 && r.SerialNumber == 0)).ToList();
+                var mssResults    = results.Where(r =>   r.CenterListId == 0 && r.SerialNumber == 0).ToList();
+
+                if (mssResults.Any())
+                {
+                    // Build: NrDataId -> max Id of non-MSS rows for that NrDataId
+                    var maxNonMssIdByNrData = nonMssResults
+                        .GroupBy(r => r.NrDataId)
+                        .ToDictionary(g => g.Key, g => g.Max(r => r.Id));
+
+                    // For each NrDataId that has MSS rows, keep only the rows saved AFTER the last
+                    // non-MSS row for that NrDataId (i.e. the most recent processing batch's MSS rows).
+                    // Group MSS rows by NrDataId, then within each group keep only those with Id
+                    // > maxNonMssId for that NrDataId.
+                    var dedupedMssResults = new List<NewEnvelopeBreakingResult>();
+                    foreach (var grp in mssResults.GroupBy(r => r.NrDataId))
+                    {
+                        int nrId = grp.Key;
+                        var sorted = grp.OrderBy(r => r.Id).ToList();
+
+                        if (nrId != 0 && maxNonMssIdByNrData.TryGetValue(nrId, out int maxNonMssId))
+                        {
+                            // Keep MSS rows saved after the last non-MSS row for this NrDataId
+                            var latestBatch = sorted.Where(r => r.Id > maxNonMssId).ToList();
+                            // If nothing passes the threshold, keep the last EnvQuantity-distinct set
+                            // (fallback: just take the tail equal to count of distinct EnvQuantity values)
+                            if (!latestBatch.Any())
+                            {
+                                int distinctTypes = sorted.Select(r => r.EnvQuantity).Distinct().Count();
+                                latestBatch = sorted.Skip(Math.Max(0, sorted.Count - distinctTypes)).ToList();
+                            }
+                            dedupedMssResults.AddRange(latestBatch);
+                        }
+                        else if (nrId == 0)
+                        {
+                            // Orphaned MSS rows (NrDataId == 0) - discard; they can't be properly placed
+                        }
+                        else
+                        {
+                            // NrDataId is valid but has no non-MSS rows (catch was MSS-only?)
+                            // Keep the last distinct-EnvQuantity set
+                            int distinctTypes = sorted.Select(r => r.EnvQuantity).Distinct().Count();
+                            dedupedMssResults.AddRange(sorted.Skip(Math.Max(0, sorted.Count - distinctTypes)));
+                        }
+                    }
+
+                    // Rebuild results with deduped MSS rows, preserving Id order
+                    var keepIds = nonMssResults.Select(r => r.Id)
+                        .Concat(dedupedMssResults.Select(r => r.Id))
+                        .ToHashSet();
+                    results = results.Where(r => keepIds.Contains(r.Id)).OrderBy(r => r.Id).ToList();
+                }
+
+                // Pre-pass: Resolve any missing NrDataId on results.
+                // For non-MSS rows: resolve via CenterList.NRDataId.
+                // For MSS rows (CenterListId == 0, SerialNumber == 0): only look at neighbors that
+                // share the same CatchNo bucket — adjacency across catch boundaries is unreliable.
+                // Build a quick CenterListId → NRDataId map first.
+                var centerNrMap = centerDict.Values
+                    .Where(c => c.NRDataId != 0)
+                    .ToDictionary(c => c.Id, c => c.NRDataId);
+
+                for (int i = 0; i < results.Count; i++)
+                {
+                    var res = results[i];
+                    if (res.NrDataId == 0 && res.CenterListId != 0 && centerNrMap.TryGetValue(res.CenterListId, out var resolvedNrId))
+                    {
+                        res.NrDataId = resolvedNrId;
+                    }
+                    else if (res.NrDataId == 0 && res.CenterListId == 0 && res.SerialNumber == 0) // MSS row with no NrDataId
+                    {
+                        // Look backward for the nearest non-MSS row's NrDataId
+                        int adjacentNrId = 0;
+                        for (int b = i - 1; b >= 0; b--)
+                        {
+                            if (results[b].NrDataId != 0 && results[b].SerialNumber != 0)
+                            {
+                                adjacentNrId = results[b].NrDataId;
+                                break;
+                            }
+                        }
+                        // If not found backward, look forward for nearest non-MSS row
+                        if (adjacentNrId == 0)
+                        {
+                            for (int f = i + 1; f < results.Count; f++)
+                            {
+                                if (results[f].NrDataId != 0 && results[f].SerialNumber != 0)
+                                {
+                                    adjacentNrId = results[f].NrDataId;
+                                    break;
+                                }
+                            }
+                        }
+                        if (adjacentNrId != 0)
+                        {
+                            res.NrDataId = adjacentNrId;
+                        }
+                    }
+                }
 
                 var fullData = new List<dynamic>();
 
@@ -2437,12 +2615,98 @@ namespace Tools.Controllers
                         center = foundCenter;
                     }
 
+                    // Fallback: If nr is null but center has NRDataId
+                    if (nr == null && center != null && center.NRDataId != 0)
+                    {
+                        nrDataDict.TryGetValue(center.NRDataId, out nr);
+                    }
+
+                    string catchNo = nr?.CatchNo ?? "";
+
+                    // Fallback: extract CatchNo from CenterData JSON if still empty
+                    if (string.IsNullOrWhiteSpace(catchNo) && center != null && !string.IsNullOrWhiteSpace(center.CenterData))
+                    {
+                        try
+                        {
+                            var cd = JsonSerializer.Deserialize<Dictionary<string, string>>(center.CenterData);
+                            if (cd != null)
+                            {
+                                var match = cd.FirstOrDefault(k => k.Key.Equals("CatchNo", StringComparison.OrdinalIgnoreCase));
+                                if (!string.IsNullOrWhiteSpace(match.Value))
+                                    catchNo = match.Value.Trim();
+                            }
+                        }
+                        catch { }
+                    }
+
+                    // Fallback: extract CatchNo from NRDatas JSON if still empty
+                    if (string.IsNullOrWhiteSpace(catchNo) && nr != null && !string.IsNullOrWhiteSpace(nr.NRDatas))
+                    {
+                        try
+                        {
+                            var nd = JsonSerializer.Deserialize<Dictionary<string, string>>(nr.NRDatas);
+                            if (nd != null)
+                            {
+                                var match = nd.FirstOrDefault(k => k.Key.Equals("CatchNo", StringComparison.OrdinalIgnoreCase));
+                                if (!string.IsNullOrWhiteSpace(match.Value))
+                                    catchNo = match.Value.Trim();
+                            }
+                        }
+                        catch { }
+                    }
+
+                    // If catchNo resolved but nr was null, look up nr by catchNo
+                    if (nr == null && !string.IsNullOrWhiteSpace(catchNo) && nrDataByCatch.TryGetValue(catchNo, out var catchNr))
+                    {
+                        nr = catchNr;
+                    }
+
+                    // Last resort for MSS rows: if catchNo is still empty, scan the DB-ordered results
+                    // list (before sorting) for the closest non-MSS neighbor, use its NrDataId to get CatchNo.
+                    if (isMssRow && string.IsNullOrWhiteSpace(catchNo))
+                    {
+                        int idx = results.IndexOf(result);
+                        // Look backward for nearest non-MSS row
+                        for (int b = idx - 1; b >= 0; b--)
+                        {
+                            if (results[b].SerialNumber != 0 && results[b].NrDataId != 0 &&
+                                nrDataDict.TryGetValue(results[b].NrDataId, out var nearbyNr) &&
+                                !string.IsNullOrEmpty(nearbyNr.CatchNo))
+                            {
+                                catchNo = nearbyNr.CatchNo!;
+                                nr ??= nearbyNr;
+                                break;
+                            }
+                        }
+                        // Look forward if still empty
+                        if (string.IsNullOrWhiteSpace(catchNo))
+                        {
+                            for (int f = idx + 1; f < results.Count; f++)
+                            {
+                                if (results[f].SerialNumber != 0 && results[f].NrDataId != 0 &&
+                                    nrDataDict.TryGetValue(results[f].NrDataId, out var nearbyNr) &&
+                                    !string.IsNullOrEmpty(nearbyNr.CatchNo))
+                                {
+                                    catchNo = nearbyNr.CatchNo!;
+                                    nr ??= nearbyNr;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
                     if (lotNo.HasValue && lotNo.Value > 0)
                     {
                         if (nr == null || (nr.LotNo != lotNo.Value && nr.EnvLotNo != lotNo.Value))
                             continue;
                     }
 
+                    // If nr is still null at this point, this result row is orphaned
+                    // (its NrData1 was deactivated). Skip it — don't emit blank rows.
+                    if (nr == null)
+                        continue;
+
+                    // NR fields (now works for MSS too)
                     if (nr != null)
                     {
                         rowDict["SubjectName"] = nr.SubjectName ?? "";
@@ -2452,7 +2716,8 @@ namespace Tools.Controllers
                         rowDict["NRQuantity"] = center?.NRQuantity ?? 0;
                     }
 
-                    if (nr != null && !string.IsNullOrEmpty(nr.NRDatas))
+                    // JSON dynamic fields from NRDatas
+                    if (nr != null && !string.IsNullOrWhiteSpace(nr.NRDatas))
                     {
                         try
                         {
@@ -2468,13 +2733,34 @@ namespace Tools.Controllers
                         catch { }
                     }
 
+                    // JSON dynamic fields from CenterList.CenterData
+                    if (center != null && !string.IsNullOrWhiteSpace(center.CenterData))
+                    {
+                        try
+                        {
+                            var extraCenterFields = JsonSerializer.Deserialize<Dictionary<string, string>>(center.CenterData);
+                            if (extraCenterFields != null)
+                            {
+                                foreach (var kvp in extraCenterFields)
+                                {
+                                    if (!rowDict.ContainsKey(kvp.Key))
+                                        rowDict[kvp.Key] = kvp.Value;
+                                }
+                            }
+                        }
+                        catch { }
+                    }
+
+                    int qty = center != null ? (center.Quantity > 0 ? center.Quantity : center.NRQuantity) : 0;
+
+                    // Envelope fields
                     rowDict["SerialNo"] = isMssRow ? (object)"" : result.SerialNumber;
-                    rowDict["CatchNo"] = nr?.CatchNo ?? "";
+                    rowDict["CatchNo"] = catchNo;
                     rowDict["CenterCode"] = isMssRow ? "" : (center?.CenterCode ?? "");
                     rowDict["CenterSort"] = center?.CenterSort ?? 0.0;
                     rowDict["ExamTime"] = nr?.ExamTime ?? "";
                     rowDict["ExamDate"] = nr?.ExamDate ?? "";
-                    rowDict["Quantity"] = center?.Quantity ?? 0;
+                    rowDict["Quantity"] = isMssRow ? 0 : qty;
                     rowDict["NodalCode"] = center?.NodalCode ?? "";
                     rowDict["NodalSort"] = center?.NodalSort ?? 0.0;
                     rowDict["Route"] = center?.Route ?? "";
@@ -2494,8 +2780,159 @@ namespace Tools.Controllers
                     fullData.Add(row);
                 }
 
-                // Generate Excel using EPPlus and record in ExcelReport
+                // Separate MSS
+                var nonMssData = fullData.Where(x =>
+                {
+                    var d = (IDictionary<string, object>)x;
+                    return d.ContainsKey("isMss") && !(bool)d["isMss"];
+                }).ToList();
+
+                var mssRowsByCatch = fullData
+                    .Where(x =>
+                    {
+                        var d = (IDictionary<string, object>)x;
+                        return d.ContainsKey("isMss") && (bool)d["isMss"];
+                    })
+                    .GroupBy(x => ((IDictionary<string, object>)x)["CatchNo"]?.ToString() ?? "")
+                    .ToDictionary(g => g.Key, g => g.ToList());
+
+                // Sorting
+                IOrderedEnumerable<dynamic>? ordered = null;
+
+                foreach (var fieldName in fieldNames)
+                {
+                    Func<dynamic, object> keySelector = record =>
+                    {
+                        var dict = (IDictionary<string, object>)record;
+
+                        if (!dict.ContainsKey(fieldName) || dict[fieldName] == null)
+                            return "";
+
+                        var val = dict[fieldName];
+
+                        switch (fieldName)
+                        {
+                            case "RouteSort":
+                            case "DistrictSort":
+                            case "CenterSort":
+                                return int.TryParse(val.ToString(), out int i) ? (object)i : 0;
+
+                            case "NodalSort":
+                                return double.TryParse(val.ToString(), out double d) ? (object)d : 0.0;
+
+                            case "ExamDate":
+                                return DateTime.TryParseExact(val.ToString(), "dd-MM-yyyy",
+                                    CultureInfo.InvariantCulture,
+                                    DateTimeStyles.None, out DateTime dt)
+                                    ? (object)dt : DateTime.MinValue;
+
+                            default:
+                                if (fieldName.Contains("sort", StringComparison.OrdinalIgnoreCase))
+                                    return double.TryParse(val.ToString(), out double d2) ? (object)d2 : 0.0;
+                                return val.ToString()?.Trim() ?? "";
+                        }
+                    };
+
+                    ordered = ordered == null
+                        ? nonMssData.OrderBy(keySelector)
+                        : ordered.ThenBy(keySelector);
+                }
+
+                var sortedNonMss = ordered?.ToList() ?? nonMssData;
+
+                // Reinsert MSS — rewritten to be safe regardless of how sorting
+                // scatters identical CatchNo values, and to guarantee each
+                // catch's MSS rows are inserted EXACTLY ONCE.
+                string mssMode = projectconfig.MssAttached?.ToLower() ?? "end";
+                var finalSortedList = new List<dynamic>();
+                var insertedMssCatches = new HashSet<string>();
+
+                // Group sortedNonMss into contiguous runs by CatchNo, preserving order.
+                var runs = new List<(string CatchNo, List<dynamic> Rows)>();
+                string? currentCatch = null;
+                List<dynamic>? currentRun = null;
+
+                foreach (var item in sortedNonMss)
+                {
+                    var dict = (IDictionary<string, object>)item;
+                    string catchNo = dict["CatchNo"]?.ToString() ?? "";
+
+                    if (currentRun == null || catchNo != currentCatch)
+                    {
+                        currentRun = new List<dynamic>();
+                        runs.Add((catchNo, currentRun));
+                        currentCatch = catchNo;
+                    }
+
+                    currentRun.Add(item);
+                }
+
+                // Walk the runs and insert MSS rows at most once per catch.
+                for (int r = 0; r < runs.Count; r++)
+                {
+                    var (catchNo, rows) = runs[r];
+
+                    bool isFirstRunForCatch = !runs.Take(r).Any(x => x.CatchNo == catchNo);
+                    bool isLastRunForCatch = !runs.Skip(r + 1).Any(x => x.CatchNo == catchNo);
+
+                    if (mssMode == "start" && isFirstRunForCatch &&
+                        mssRowsByCatch.TryGetValue(catchNo, out var mssStart) &&
+                        insertedMssCatches.Add(catchNo))
+                    {
+                        finalSortedList.AddRange(mssStart);
+                    }
+
+                    finalSortedList.AddRange(rows);
+
+                    if (mssMode == "end" && isLastRunForCatch &&
+                        mssRowsByCatch.TryGetValue(catchNo, out var mssEnd) &&
+                        insertedMssCatches.Add(catchNo))
+                    {
+                        finalSortedList.AddRange(mssEnd);
+                    }
+                }
+
+                // Safety net: if any catch's MSS rows were never inserted
+                // (e.g. catch present only in MSS data, not in nonMssData), append them.
+                foreach (var kvp in mssRowsByCatch)
+                {
+                    if (insertedMssCatches.Add(kvp.Key))
+                    {
+                        finalSortedList.AddRange(kvp.Value);
+                    }
+                }
+
+                // Columns
+                var allKeys = finalSortedList
+                    .SelectMany(x => ((IDictionary<string, object>)x).Keys)
+                    .Where(k => k != "isMss")
+                    .Distinct()
+                    .ToList();
+
+                if (!finalSortedList.Any() || !allKeys.Any())
+                    return BadRequest("No data available to generate Excel.");
+
+                // --- Guard rails before writing to Excel ---
+                const int ExcelMaxRows = 1048576;
+                const int ExcelMaxCols = 16384;
+
+                if (finalSortedList.Count + 1 > ExcelMaxRows) // +1 for header row
+                    return BadRequest(new
+                    {
+                        error = $"Row count {finalSortedList.Count} exceeds Excel's row limit ({ExcelMaxRows}).",
+                        hint = "Check MSS reinsertion logic or duplicate source data."
+                    });
+
+                if (allKeys.Count > ExcelMaxCols)
+                    return BadRequest(new
+                    {
+                        error = $"Column count {allKeys.Count} exceeds Excel's column limit ({ExcelMaxCols}).",
+                        hint = "Check NRDatas JSON fields for inconsistent/unexpected keys."
+                    });
+
+                // Excel
                 var reportPath = FileStorageHelper.GetProjectFolder(ProjectId);
+
                 var distinctLots = (lotNo.HasValue && lotNo.Value > 0)
                     ? new List<int> { lotNo.Value }
                     : nrDataDict.Values.Where(r => r.LotNo > 0 || r.EnvLotNo > 0).Select(r => r.LotNo > 0 ? r.LotNo : r.EnvLotNo).Distinct().OrderBy(l => l).ToList();
@@ -2508,7 +2945,6 @@ namespace Tools.Controllers
                 using (var package = new ExcelPackage())
                 {
                     var ws = package.Workbook.Worksheets.Add("Envelope Report");
-                    var allKeys = fullData.SelectMany(x => ((IDictionary<string, object>)x).Keys).Where(k => k != "isMss").Distinct().ToList();
 
                     for (int i = 0; i < allKeys.Count; i++)
                     {
@@ -2517,19 +2953,25 @@ namespace Tools.Controllers
                     }
 
                     int rowIdx = 2;
-                    foreach (var item in fullData)
+
+                    foreach (var item in finalSortedList)
                     {
                         var dict = (IDictionary<string, object>)item;
+
                         for (int col = 0; col < allKeys.Count; col++)
                         {
                             var key = allKeys[col];
-                            ws.Cells[rowIdx, col + 1].Value = dict.ContainsKey(key) ? dict[key]?.ToString() : "";
+                            ws.Cells[rowIdx, col + 1].Value =
+                                dict.ContainsKey(key) ? dict[key] : "";
                         }
+
                         rowIdx++;
                     }
 
                     if (ws.Dimension != null)
                         ws.Cells[ws.Dimension.Address].AutoFitColumns();
+
+                    ws.View.FreezePanes(2, 1);
 
                     package.SaveAs(new FileInfo(filePath));
                 }
@@ -2550,7 +2992,7 @@ namespace Tools.Controllers
                     message = "Report generated successfully",
                     filePath,
                     fileName,
-                    recordsCount = fullData.Count
+                    recordsCount = finalSortedList.Count
                 });
             }
             catch (Exception ex)
