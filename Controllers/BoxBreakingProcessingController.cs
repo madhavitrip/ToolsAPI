@@ -1326,6 +1326,26 @@ namespace Tools.Controllers
                 var duplicatesFields = projectconfig.DuplicateRemoveFields ?? new List<int>();
                 var sortingId = projectconfig.SortingBoxReport ?? new List<int>();
 
+                // ✅ Load BoxBreakingCriteria (same as legacy ProcessBoxBreaking)
+                var boxIds = projectconfig.BoxBreakingCriteria ?? new List<int>();
+                var allBoxIds = new HashSet<int>(boxIds);
+                if (projectconfig.BoxBreakingCriteriaForNodalExtra != null) allBoxIds.UnionWith(projectconfig.BoxBreakingCriteriaForNodalExtra);
+                if (projectconfig.BoxBreakingCriteriaForUniExtra != null) allBoxIds.UnionWith(projectconfig.BoxBreakingCriteriaForUniExtra);
+                if (projectconfig.BoxBreakingCriteriaForOffcExtra != null) allBoxIds.UnionWith(projectconfig.BoxBreakingCriteriaForOffcExtra);
+
+                // ✅ Fetch field records for all box breaking criteria IDs
+                var boxFields = await _context.Fields
+                    .Where(f => allBoxIds.Contains(f.FieldId))
+                    .ToListAsync();
+
+                // ✅ Validate that all configured BoxBreakingCriteria field IDs exist in the Fields table
+                var resolvedBoxFieldIds = boxFields.Select(f => f.FieldId).ToHashSet();
+                var missingFieldIds = allBoxIds.Where(id => !resolvedBoxFieldIds.Contains(id)).ToList();
+                if (missingFieldIds.Any())
+                {
+                    return BadRequest(new { error = $"BoxBreakingCriteria field IDs not found in Fields table: {string.Join(", ", missingFieldIds)}" });
+                }
+
                 var fieldsFromDb = await _context.Fields
                     .Where(f => sortingId.Contains(f.FieldId))
                     .ToListAsync();
@@ -1423,6 +1443,18 @@ namespace Tools.Controllers
 
                 if (!breakingReportData.Any())
                     return NotFound("No data found in envelope breaking results");
+
+                // ✅ Validate that all BoxBreakingCriteria field names exist in the row data (CenterList/NrData1)
+                var boxFieldNames = boxFields.Select(f => f.Name).ToList();
+                if (boxFieldNames.Any())
+                {
+                    var sampleRow = (IDictionary<string, object>)breakingReportData.First();
+                    var missingBoxFields = boxFieldNames.Where(fn => !sampleRow.ContainsKey(fn)).ToList();
+                    if (missingBoxFields.Any())
+                    {
+                        return BadRequest(new { error = $"BoxBreakingCriteria fields not found in data (not in CenterList or NrData1): {string.Join(", ", missingBoxFields)}" });
+                    }
+                }
 
                 // Deduplicate & Calculate Start, End, Serial
                 var uniqueRows = breakingReportData
@@ -1528,8 +1560,34 @@ namespace Tools.Controllers
                     if (pages <= 0) pages = 1;
                     int totalPages = ((int)itemDict["Quantity"]) * pages;
 
-                    var keyParts = dupNames.Select(fieldName => itemDict.ContainsKey(fieldName) ? itemDict[fieldName]?.ToString()?.Trim() ?? "" : "");
-                    string mergeKey = string.Join("_", keyParts);
+                    // ✅ Use BoxBreakingCriteria for mergeKey (same as legacy ProcessBoxBreaking)
+                    int? extraId = itemDict.ContainsKey("ExtraId") ? itemDict["ExtraId"] as int? : null;
+                    var currentBoxIds = boxIds; // fallback to regular
+                    if (extraId == 1 && projectconfig.BoxBreakingCriteriaForNodalExtra != null && projectconfig.BoxBreakingCriteriaForNodalExtra.Any())
+                        currentBoxIds = projectconfig.BoxBreakingCriteriaForNodalExtra;
+                    else if (extraId == 2 && projectconfig.BoxBreakingCriteriaForUniExtra != null && projectconfig.BoxBreakingCriteriaForUniExtra.Any())
+                        currentBoxIds = projectconfig.BoxBreakingCriteriaForUniExtra;
+                    else if (extraId == 3 && projectconfig.BoxBreakingCriteriaForOffcExtra != null && projectconfig.BoxBreakingCriteriaForOffcExtra.Any())
+                        currentBoxIds = projectconfig.BoxBreakingCriteriaForOffcExtra;
+
+                    string mergeKey = "";
+                    if (currentBoxIds.Any())
+                    {
+                        mergeKey = string.Join("_", currentBoxIds.Select(fieldId =>
+                        {
+                            var fieldName = boxFields.FirstOrDefault(f => f.FieldId == fieldId)?.Name;
+                            if (fieldName != null && itemDict.ContainsKey(fieldName))
+                            {
+                                string val = itemDict[fieldName]?.ToString() ?? "";
+                                if (fieldName.Equals("CatchNo", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    return GetNormalizedCatchNo(val);
+                                }
+                                return val;
+                            }
+                            return "";
+                        }));
+                    }
 
                     if (prevMergeKey != null && mergeKey != prevMergeKey)
                     {

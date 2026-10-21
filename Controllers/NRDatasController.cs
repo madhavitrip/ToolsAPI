@@ -6566,27 +6566,14 @@ namespace Tools.Controllers
 
             var projectStats = records
                 .GroupBy(x => x.ProjectId)
-                .Select(g => new 
-                { 
-                    ProjectId = g.Key, 
-                    Count = g.Select(x => x.CatchNo).Distinct().Count() 
+                .Select(g => new
+                {
+                    projectId = g.Key,
+                    correctionCount = g.Where(x => x.HasRemark).Select(x => x.CatchNo).Distinct().Count(),
+                    reviewCount = g.Where(x => x.IsReview).Select(x => x.CatchNo).Distinct().Count()
                 })
-                .ToListAsync();
-
-            // Merge results in memory
-            var allProjectIds = correctionStats.Select(c => c.ProjectId)
-                .Union(reviewStats.Select(r => r.ProjectId))
-                .Distinct()
+                .Where(x => x.correctionCount > 0 || x.reviewCount > 0)
                 .ToList();
-
-            var projectStats = allProjectIds.Select(pid => new
-            {
-                projectId = pid,
-                correctionCount = correctionStats.FirstOrDefault(c => c.ProjectId == pid)?.Count ?? 0,
-                reviewCount = reviewStats.FirstOrDefault(r => r.ProjectId == pid)?.Count ?? 0
-            })
-            .Where(x => x.correctionCount > 0 || x.reviewCount > 0)
-            .ToList();
 
             return Ok(projectStats);
         }
