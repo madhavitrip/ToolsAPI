@@ -1359,7 +1359,7 @@ namespace Tools.Controllers
                 // Map of all catches for this project
                 var nrDataIds = data.Select(d => d.Id).ToList();
                 var nrDataMap = await _context.NrData1
-                    .Where(d => d.ProjectId == ProjectId)
+                    .Where(d => d.ProjectId == ProjectId && d.Status)
                     .ToDictionaryAsync(d => d.Id);
 
                 // Fetch active regular CenterList records (ExtraId == 0) for these catches
@@ -1991,12 +1991,60 @@ namespace Tools.Controllers
                         : data.Where(r => r.EnvLotNo > 0).Select(r => r.EnvLotNo).Distinct().OrderBy(l => l).ToList();
                     var lotStr = distinctLots.Any() ? string.Join("_", distinctLots) : "All";
 
+                    var enhancedRowsQuery = from nr in _context.NrData1
+                                            join c in _context.CenterList on nr.Id equals c.NRDataId
+                                            where nr.ProjectId == ProjectId && nr.Status && c.Status && c.ExtraId == 0
+                                            select new
+                                            {
+                                                c.Id,
+                                                nr.CatchNo,
+                                                c.CenterCode,
+                                                nr.ExamDate,
+                                                nr.ExamTime,
+                                                nr.SubjectName,
+                                                nr.CourseName,
+                                                c.NodalCode,
+                                                c.NRQuantity,
+                                                c.Quantity,
+                                                c.Route,
+                                                nr.Pages,
+                                                c.CenterSort,
+                                                c.NodalSort,
+                                                c.RouteSort,
+                                                nr.LotNo,
+                                                nr.EnvLotNo,
+                                                nr.Batch,
+                                                nr.Day,
+                                                c.District,
+                                                c.DistrictSort,
+                                                Status = c.Status ? "Active" : "Inactive",
+                                                nr.Steps,
+                                                nr.VerificationStatus,
+                                                nr.Remarksss
+                                            };
+
+                    if (batch.HasValue && batch.Value > 0)
+                    {
+                        enhancedRowsQuery = enhancedRowsQuery.Where(r => r.Batch == batch.Value);
+                    }
+
+                    if (lotNo.HasValue && lotNo.Value > 0)
+                    {
+                        enhancedRowsQuery = enhancedRowsQuery.Where(r => r.LotNo == lotNo.Value || r.EnvLotNo == lotNo.Value);
+                    }
+
+                    var reportRows = await enhancedRowsQuery.ToListAsync();
                     var fileName = ReportVersionHelper.GetNextVersionFileName(reportPath, $"EnhancementReport_NrData1_{lotStr}.xlsx");
                     filePath = Path.Combine(reportPath, fileName);
 
-                    var baseProperties = typeof(NrData1).GetProperties(BindingFlags.Public | BindingFlags.Instance)
-                        .Where(p => p.Name != "NRDatas" && p.Name != "ProjectId")
-                        .ToList();
+                    var headers = new List<string>
+                    {
+                        "Id", "CatchNo", "CenterCode", "Quantity", "NRQuantity",
+                        "CourseName", "SubjectName", "ExamDate", "ExamTime", "Day",
+                        "NodalCode", "Pages", "Route", "RouteSort", "CenterSort",
+                        "NodalSort", "District", "DistrictSort", "LotNo", "EnvLotNo",
+                        "Batch", "Steps", "VerificationStatus", "Remarksss", "Status"
+                    };
 
                     ExcelPackage.License.SetNonCommercialPersonal("Tools");
                     using (var package = new ExcelPackage())
@@ -2004,21 +2052,42 @@ namespace Tools.Controllers
                         var ws = package.Workbook.Worksheets.Add("Enhancement Report");
 
                         int col = 1;
-                        foreach (var prop in baseProperties)
+                        foreach (var h in headers)
                         {
-                            ws.Cells[1, col].Value = prop.Name;
+                            ws.Cells[1, col].Value = h;
                             ws.Cells[1, col].Style.Font.Bold = true;
                             col++;
                         }
 
                         int row = 2;
-                        foreach (var item in data)
+                        foreach (var item in reportRows)
                         {
                             col = 1;
-                            foreach (var prop in baseProperties)
-                            {
-                                ws.Cells[row, col++].Value = prop.GetValue(item)?.ToString();
-                            }
+                            ws.Cells[row, col++].Value = item.Id;
+                            ws.Cells[row, col++].Value = item.CatchNo ?? "";
+                            ws.Cells[row, col++].Value = item.CenterCode ?? "";
+                            ws.Cells[row, col++].Value = item.Quantity;
+                            ws.Cells[row, col++].Value = item.NRQuantity;
+                            ws.Cells[row, col++].Value = item.CourseName ?? "";
+                            ws.Cells[row, col++].Value = item.SubjectName ?? "";
+                            ws.Cells[row, col++].Value = item.ExamDate ?? "";
+                            ws.Cells[row, col++].Value = item.ExamTime ?? "";
+                            ws.Cells[row, col++].Value = item.Day ?? "";
+                            ws.Cells[row, col++].Value = item.NodalCode ?? "";
+                            ws.Cells[row, col++].Value = item.Pages;
+                            ws.Cells[row, col++].Value = item.Route ?? "";
+                            ws.Cells[row, col++].Value = item.RouteSort;
+                            ws.Cells[row, col++].Value = item.CenterSort;
+                            ws.Cells[row, col++].Value = item.NodalSort;
+                            ws.Cells[row, col++].Value = item.District ?? "";
+                            ws.Cells[row, col++].Value = item.DistrictSort;
+                            ws.Cells[row, col++].Value = item.LotNo;
+                            ws.Cells[row, col++].Value = item.EnvLotNo;
+                            ws.Cells[row, col++].Value = item.Batch;
+                            ws.Cells[row, col++].Value = item.Steps;
+                            ws.Cells[row, col++].Value = item.VerificationStatus;
+                            ws.Cells[row, col++].Value = item.Remarksss ?? "";
+                            ws.Cells[row, col++].Value = item.Status;
                             row++;
                         }
 

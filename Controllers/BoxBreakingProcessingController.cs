@@ -1054,7 +1054,10 @@ namespace Tools.Controllers
                     foreach (var eb in newEnvBreakings)
                     {
                         centerListMap.TryGetValue(eb.CenterListId, out var c);
-                        nr1Map.TryGetValue(eb.NrDataId, out var n);
+                        if (!nr1Map.TryGetValue(eb.NrDataId, out var n) && c != null && c.NRDataId > 0)
+                        {
+                            nr1Map.TryGetValue(c.NRDataId, out n);
+                        }
 
                         string catchNo = n?.CatchNo ?? "";
                         if (nrCatchNos.Any() && !nrCatchNos.Contains(catchNo))

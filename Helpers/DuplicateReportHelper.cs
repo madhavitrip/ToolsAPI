@@ -216,6 +216,185 @@ namespace ToolsAPI.Helpers
             package.SaveAs(new FileInfo(filePath));
         }
 
+        public static void GenerateNewModelDuplicateReportPackage(
+            string filePath,
+            List<CenterList> reportCenters,
+            List<CenterList> cleanCenters,
+            Dictionary<int, NrData1> nrDataMap,
+            HashSet<int>? deletedCenterIds = null,
+            HashSet<int>? newCenterIds = null,
+            string reportSheetName = "Merge Report")
+        {
+            var dir = Path.GetDirectoryName(filePath);
+            if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+            {
+                Directory.CreateDirectory(dir);
+            }
+
+            var extraHeaders = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var c in reportCenters.Concat(cleanCenters))
+            {
+                if (!string.IsNullOrWhiteSpace(c.CenterData))
+                {
+                    try
+                    {
+                        var dict = JsonSerializer.Deserialize<Dictionary<string, string>>(c.CenterData);
+                        if (dict != null)
+                        {
+                            foreach (var key in dict.Keys)
+                            {
+                                if (!key.Equals("Quantity", StringComparison.OrdinalIgnoreCase) &&
+                                    !key.Equals("NRQuantity", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    extraHeaders.Add(key);
+                                }
+                            }
+                        }
+                    }
+                    catch { }
+                }
+            }
+
+            var extraHeaderList = extraHeaders.OrderBy(x => x).ToList();
+            var baseHeaders = new List<string>
+            {
+                "CatchNo", "SubjectName", "CourseName", "NodalCode", "CenterCode",
+                "Route", "Quantity", "NRQuantity", "Status"
+            };
+
+            ExcelPackage.License.SetNonCommercialPersonal("Tools");
+            using var package = new ExcelPackage();
+
+            // 1. Report Sheet
+            var ws = package.Workbook.Worksheets.Add(reportSheetName);
+            int col = 1;
+            foreach (var h in baseHeaders)
+            {
+                ws.Cells[1, col].Value = h;
+                ws.Cells[1, col].Style.Font.Bold = true;
+                col++;
+            }
+            foreach (var key in extraHeaderList)
+            {
+                ws.Cells[1, col].Value = key;
+                ws.Cells[1, col].Style.Font.Bold = true;
+                col++;
+            }
+
+            int rowIdx = 2;
+            foreach (var item in reportCenters)
+            {
+                nrDataMap.TryGetValue(item.NRDataId, out var catchInfo);
+
+                col = 1;
+                ws.Cells[rowIdx, col++].Value = catchInfo?.CatchNo ?? "";
+                ws.Cells[rowIdx, col++].Value = catchInfo?.SubjectName ?? "";
+                ws.Cells[rowIdx, col++].Value = catchInfo?.CourseName ?? "";
+                ws.Cells[rowIdx, col++].Value = item.NodalCode ?? "";
+                ws.Cells[rowIdx, col++].Value = item.CenterCode ?? "";
+                ws.Cells[rowIdx, col++].Value = item.Route ?? "";
+                ws.Cells[rowIdx, col++].Value = item.Quantity;
+                ws.Cells[rowIdx, col++].Value = item.NRQuantity;
+                ws.Cells[rowIdx, col++].Value = item.Status ? "Active" : "Inactive";
+
+                Dictionary<string, string>? cDict = null;
+                if (!string.IsNullOrWhiteSpace(item.CenterData))
+                {
+                    try { cDict = JsonSerializer.Deserialize<Dictionary<string, string>>(item.CenterData); } catch { }
+                }
+
+                foreach (var key in extraHeaderList)
+                {
+                    string val = "";
+                    if (cDict != null && cDict.TryGetValue(key, out var dynVal))
+                    {
+                        val = dynVal ?? "";
+                    }
+                    ws.Cells[rowIdx, col++].Value = val;
+                }
+
+                if (deletedCenterIds != null && deletedCenterIds.Contains(item.Id))
+                {
+                    using var range = ws.Cells[rowIdx, 1, rowIdx, col - 1];
+                    range.Style.Fill.PatternType = ExcelFillStyle.Solid;
+                    range.Style.Fill.BackgroundColor.SetColor(Color.LightCoral);
+                }
+                else if (newCenterIds != null && newCenterIds.Contains(item.Id))
+                {
+                    using var range = ws.Cells[rowIdx, 1, rowIdx, col - 1];
+                    range.Style.Fill.PatternType = ExcelFillStyle.Solid;
+                    range.Style.Fill.BackgroundColor.SetColor(Color.LightGreen);
+                }
+
+                rowIdx++;
+            }
+
+            if (ws.Dimension != null)
+            {
+                ws.Cells[ws.Dimension.Address].AutoFitColumns();
+                ws.View.FreezePanes(2, 1);
+            }
+
+            // 2. Clean Sheet
+            var wsClean = package.Workbook.Worksheets.Add("Clean Data");
+            col = 1;
+            foreach (var h in baseHeaders)
+            {
+                wsClean.Cells[1, col].Value = h;
+                wsClean.Cells[1, col].Style.Font.Bold = true;
+                col++;
+            }
+            foreach (var key in extraHeaderList)
+            {
+                wsClean.Cells[1, col].Value = key;
+                wsClean.Cells[1, col].Style.Font.Bold = true;
+                col++;
+            }
+
+            int cleanRow = 2;
+            foreach (var item in cleanCenters)
+            {
+                nrDataMap.TryGetValue(item.NRDataId, out var catchInfo);
+
+                col = 1;
+                wsClean.Cells[cleanRow, col++].Value = catchInfo?.CatchNo ?? "";
+                wsClean.Cells[cleanRow, col++].Value = catchInfo?.SubjectName ?? "";
+                wsClean.Cells[cleanRow, col++].Value = catchInfo?.CourseName ?? "";
+                wsClean.Cells[cleanRow, col++].Value = item.NodalCode ?? "";
+                wsClean.Cells[cleanRow, col++].Value = item.CenterCode ?? "";
+                wsClean.Cells[cleanRow, col++].Value = item.Route ?? "";
+                wsClean.Cells[cleanRow, col++].Value = item.Quantity;
+                wsClean.Cells[cleanRow, col++].Value = item.NRQuantity;
+                wsClean.Cells[cleanRow, col++].Value = "Active";
+
+                Dictionary<string, string>? cDict = null;
+                if (!string.IsNullOrWhiteSpace(item.CenterData))
+                {
+                    try { cDict = JsonSerializer.Deserialize<Dictionary<string, string>>(item.CenterData); } catch { }
+                }
+
+                foreach (var key in extraHeaderList)
+                {
+                    string val = "";
+                    if (cDict != null && cDict.TryGetValue(key, out var dynVal))
+                    {
+                        val = dynVal ?? "";
+                    }
+                    wsClean.Cells[cleanRow, col++].Value = val;
+                }
+
+                cleanRow++;
+            }
+
+            if (wsClean.Dimension != null)
+            {
+                wsClean.Cells[wsClean.Dimension.Address].AutoFitColumns();
+                wsClean.View.FreezePanes(2, 1);
+            }
+
+            package.SaveAs(new FileInfo(filePath));
+        }
+
         public static async Task<string> RegenerateReportFileAsync(
             ERPToolsDbContext context,
             int projectId,
@@ -229,6 +408,56 @@ namespace ToolsAPI.Helpers
                 Directory.CreateDirectory(dir);
             }
 
+            var isNewModel = await context.NrData1.AnyAsync(p => p.ProjectId == projectId && p.Status);
+            if (isNewModel)
+            {
+                var nrDataMap = await context.NrData1
+                    .Where(d => d.ProjectId == projectId && d.Status)
+                    .ToDictionaryAsync(d => d.Id);
+
+                var cleanCentersQuery = context.CenterList
+                    .Where(c => c.ProjectId == projectId && c.Status && c.ExtraId == 0);
+
+                if (lotNo.HasValue && lotNo.Value > 0)
+                {
+                    var matchingCatchIds = nrDataMap.Values
+                        .Where(nr => nr.LotNo == lotNo.Value || nr.EnvLotNo == lotNo.Value)
+                        .Select(nr => nr.Id)
+                        .ToHashSet();
+                    cleanCentersQuery = cleanCentersQuery.Where(c => matchingCatchIds.Contains(c.NRDataId));
+                }
+
+                var cleanCenters = await cleanCentersQuery.ToListAsync();
+
+                var allCentersQuery = context.CenterList
+                    .Where(c => c.ProjectId == projectId && c.ExtraId == 0);
+                if (lotNo.HasValue && lotNo.Value > 0)
+                {
+                    var matchingCatchIds = nrDataMap.Values
+                        .Where(nr => nr.LotNo == lotNo.Value || nr.EnvLotNo == lotNo.Value)
+                        .Select(nr => nr.Id)
+                        .ToHashSet();
+                    allCentersQuery = allCentersQuery.Where(c => matchingCatchIds.Contains(c.NRDataId));
+                }
+                var allCenters = await allCentersQuery.ToListAsync();
+
+                var deletedCenters = allCenters.Where(c => !c.Status).ToList();
+                var reportCenters = deletedCenters.Any() ? allCenters : cleanCenters;
+
+                GenerateNewModelDuplicateReportPackage(
+                    fullPath,
+                    reportCenters,
+                    cleanCenters,
+                    nrDataMap,
+                    deletedCenters.Select(c => c.Id).ToHashSet(),
+                    null,
+                    "Merge Report"
+                );
+
+                return fullPath;
+            }
+
+            // Legacy fallback for old projects
             var cleanRowsQuery = context.NRDatas
                 .Where(x => x.ProjectId == projectId && x.Status == true);
             if (lotNo.HasValue && lotNo.Value > 0)
@@ -272,12 +501,12 @@ namespace ToolsAPI.Helpers
             try
             {
                 using var package = new ExcelPackage(new FileInfo(filePath));
-                var cleanWs = package.Workbook.Worksheets["Clean NRData"];
+                var cleanWs = package.Workbook.Worksheets["Clean Data"] ?? package.Workbook.Worksheets["Clean NRData"];
                 if (cleanWs == null || cleanWs.Dimension == null)
                     return true;
 
-                // Clean NRData must have at least all base properties (31 columns)
-                if (cleanWs.Dimension.End.Column < BaseProperties.Count)
+                // If at least 1 data row exists, do not trigger regeneration
+                if (cleanWs.Dimension.End.Row < 2)
                     return true;
 
                 return false;

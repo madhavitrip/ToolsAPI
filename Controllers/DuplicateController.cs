@@ -673,7 +673,7 @@ WHERE ProjectId = {0};", ProjectId);
                 {
                     var query = from nr in _context.NrData1
                                 join c in _context.CenterList on nr.Id equals c.NRDataId
-                                where nr.ProjectId == ProjectId && nr.Status && c.Status
+                                where nr.ProjectId == ProjectId && nr.Status && c.Status && c.ExtraId == 0
                                 select new NRData
                                 {
                                     Id = c.Id,
@@ -706,9 +706,14 @@ WHERE ProjectId = {0};", ProjectId);
                                     Remarksss = nr.Remarksss
                                 };
 
+                    if (uploadId.HasValue && uploadId.Value > 0)
+                    {
+                        query = query.Where(r => r.Batch == uploadId.Value);
+                    }
+
                     if (lotNo.HasValue && lotNo.Value > 0)
                     {
-                        query = query.Where(r => r.LotNo == lotNo.Value);
+                        query = query.Where(r => r.LotNo == lotNo.Value || r.EnvLotNo == lotNo.Value);
                     }
                     reportRows = await query.ToListAsync();
                 }
@@ -716,8 +721,10 @@ WHERE ProjectId = {0};", ProjectId);
                 {
                     if (uploadId.HasValue)
                     {
-                        var all = await _context.NRDatas.Where(p => p.ProjectId == ProjectId).ToListAsync();
-                        reportRows = all.Where(x => x.UploadList != null && x.UploadList.Contains(uploadId.Value)).ToList();
+                        var all = await _context.NRDatas
+                            .Where(p => p.ProjectId == ProjectId && p.Status == true)
+                            .ToListAsync();
+                        reportRows = all.Where(x => x.Status == true && x.UploadList != null && x.UploadList.Contains(uploadId.Value)).ToList();
                     }
                     else
                     {
@@ -748,24 +755,56 @@ WHERE ProjectId = {0};", ProjectId);
                 if (System.IO.File.Exists(filePath))
                     System.IO.File.Delete(filePath);
 
-                var cleanRowsQuery = _context.NRDatas
-                    .Where(x => x.ProjectId == ProjectId && x.Status == true);
-
-                if (lotNo.HasValue && lotNo.Value > 0)
+                if (isNewModel)
                 {
-                    cleanRowsQuery = cleanRowsQuery.Where(x => x.LotNo == lotNo.Value);
+                    var nrDataMap = await _context.NrData1
+                        .Where(d => d.ProjectId == ProjectId && d.Status)
+                        .ToDictionaryAsync(d => d.Id);
+
+                    var cleanCentersQuery = _context.CenterList
+                        .Where(c => c.ProjectId == ProjectId && c.Status && c.ExtraId == 0);
+
+                    if (lotNo.HasValue && lotNo.Value > 0)
+                    {
+                        var matchingCatchIds = nrDataMap.Values
+                            .Where(nr => nr.LotNo == lotNo.Value || nr.EnvLotNo == lotNo.Value)
+                            .Select(nr => nr.Id)
+                            .ToHashSet();
+                        cleanCentersQuery = cleanCentersQuery.Where(c => matchingCatchIds.Contains(c.NRDataId));
+                    }
+                    var cleanCenters = await cleanCentersQuery.ToListAsync();
+
+                    ToolsAPI.Helpers.DuplicateReportHelper.GenerateNewModelDuplicateReportPackage(
+                        filePath,
+                        cleanCenters,
+                        cleanCenters,
+                        nrDataMap,
+                        null,
+                        null,
+                        "Duplicate Report"
+                    );
                 }
+                else
+                {
+                    var cleanRowsQuery = _context.NRDatas
+                        .Where(x => x.ProjectId == ProjectId && x.Status == true);
 
-                var cleanRows = await cleanRowsQuery.ToListAsync();
+                    if (lotNo.HasValue && lotNo.Value > 0)
+                    {
+                        cleanRowsQuery = cleanRowsQuery.Where(x => x.LotNo == lotNo.Value);
+                    }
 
-                ToolsAPI.Helpers.DuplicateReportHelper.GenerateDuplicateReportPackage(
-                    filePath,
-                    reportRows,
-                    cleanRows,
-                    null,
-                    null,
-                    "Duplicate Report"
-                );
+                    var cleanRows = await cleanRowsQuery.ToListAsync();
+
+                    ToolsAPI.Helpers.DuplicateReportHelper.GenerateDuplicateReportPackage(
+                        filePath,
+                        reportRows,
+                        cleanRows,
+                        null,
+                        null,
+                        "Duplicate Report"
+                    );
+                }
 
                 await ToolsAPI.Helpers.ExcelReportHelper.RecordExcelReportAsync(
                     _context,

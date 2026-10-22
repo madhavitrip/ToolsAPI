@@ -617,7 +617,6 @@ namespace Tools.Controllers
                             var fInfo = new FileInfo(file);
                             int v = 0;
                             if (match.Groups[1].Success && int.TryParse(match.Groups[1].Value, out int v1)) v = v1;
-                            else if (match.Groups[3].Success && int.TryParse(match.Groups[3].Value, out int v3)) v = v3;
 
                             if (v > maxVersion || (v == maxVersion && fInfo.LastWriteTime > latestTime) || latestFile == null)
                             {

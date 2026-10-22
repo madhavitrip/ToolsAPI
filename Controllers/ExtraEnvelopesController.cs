@@ -182,8 +182,8 @@ namespace Tools.Controllers
                 List<NRData> nrDataList;
                 if (uploadId.HasValue)
                 {
-                    var all = await _context.NRDatas.Where(p => p.ProjectId == ProjectId).ToListAsync();
-                    var memQuery = all.Where(x => x.UploadList != null && x.UploadList.Contains(uploadId.Value) && x.Batch == (batchNo ?? 1));
+                    var all = await _context.NRDatas.Where(p => p.ProjectId == ProjectId && p.Status == true).ToListAsync();
+                    var memQuery = all.Where(x => x.Status == true && x.UploadList != null && x.UploadList.Contains(uploadId.Value) && x.Batch == (batchNo ?? 1));
                     if (lotNo.HasValue && lotNo.Value > 0)
                     {
                         memQuery = memQuery.Where(x => x.LotNo == lotNo.Value);
