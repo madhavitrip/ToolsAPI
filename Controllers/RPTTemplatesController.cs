@@ -439,6 +439,7 @@ namespace Tools.Controllers
         // body: { templateName, moduleIds, applyToAllVersions }
         [Authorize]
         [HttpPut("{id}")]
+        [RequirePermission(ModuleCodes.MasterRpt, PermissionAction.Edit)]
         public async Task<ActionResult> UpdateTemplate(int id, [FromBody] UpdateTemplateRequest req)
         {
             if (req == null)
@@ -514,6 +515,7 @@ namespace Tools.Controllers
         // multipart/form-data: file (.rpt), typeId, templateName, optional groupId, optional projectId
         [Authorize]
         [HttpPost("upload")]
+        [RequirePermission(ModuleCodes.MasterRpt, PermissionAction.Create)]
         public async Task<ActionResult> Upload([FromForm] int typeId, [FromForm] string templateName, [FromForm] string? subName, IFormFile file,
             [FromForm] int? groupId, [FromForm] int? projectId, [FromForm] List<int>? moduleIds, [FromForm] bool forceUpload = false)
         {
@@ -857,6 +859,7 @@ namespace Tools.Controllers
         // scope=standard → marks deleted only for the standard scope (GroupId null, ProjectId null)
         [Authorize]
         [HttpDelete("{id}/soft-delete")]
+        [RequirePermission(ModuleCodes.MasterRpt, PermissionAction.Delete)]
         public async Task<ActionResult> SoftDelete(int id, [FromQuery] string? scope = null)
         {
             var template = await _context.RPTTemplates.FindAsync(id);
@@ -948,6 +951,7 @@ namespace Tools.Controllers
         // Marks a specific version as active for its scope (standard/group/project)
         [Authorize]
         [HttpPost("{id}/activate")]
+        [RequirePermission(ModuleCodes.MasterRpt, PermissionAction.Edit)]
         public async Task<ActionResult> ActivateTemplate(int id)
         {
             var template = await _context.RPTTemplates.FindAsync(id);
@@ -1605,6 +1609,7 @@ namespace Tools.Controllers
         // body: { mappingJson: "..." }
         [Authorize]
         [HttpPost("{id}/mapping")]
+        [RequirePermission(ModuleCodes.MasterRpt, PermissionAction.Edit)]
         public async Task<ActionResult> SaveMapping(int id, [FromBody] SaveMappingRequest req)
         {
             var template = await _context.RPTTemplates.FirstOrDefaultAsync(t => t.TemplateId == id);

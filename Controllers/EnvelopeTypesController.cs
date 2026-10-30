@@ -8,6 +8,7 @@ using Microsoft.EntityFrameworkCore;
 using ERPToolsAPI.Data;
 using Tools.Models;
 using Tools.Services;
+using Tools.Middleware;
 using Microsoft.CodeAnalysis;
 
 namespace Tools.Controllers
@@ -49,6 +50,7 @@ namespace Tools.Controllers
         // PUT: api/EnvelopeTypes/5
         // To protect from overposting attacks, see https://go.microsoft.com/fwlink/?linkid=2123754
         [HttpPut("{id}")]
+        [RequirePermission(ModuleCodes.MasterEnvelope, PermissionAction.Edit)]
         public async Task<IActionResult> PutEnvelopeType(int id, EnvelopeType envelopeType)
         {
             if (id != envelopeType.EnvelopeId)
@@ -85,6 +87,7 @@ namespace Tools.Controllers
         // POST: api/EnvelopeTypes
         // To protect from overposting attacks, see https://go.microsoft.com/fwlink/?linkid=2123754
         [HttpPost]
+        [RequirePermission(ModuleCodes.MasterEnvelope, PermissionAction.Create)]
         public async Task<ActionResult<EnvelopeType>> PostEnvelopeType(EnvelopeType envelopeType)
         {
             try
@@ -103,6 +106,7 @@ namespace Tools.Controllers
 
         // DELETE: api/EnvelopeTypes/5
         [HttpDelete("{id}")]
+        [RequirePermission(ModuleCodes.MasterEnvelope, PermissionAction.Delete)]
         public async Task<IActionResult> DeleteEnvelopeType(int id)
         {
             try

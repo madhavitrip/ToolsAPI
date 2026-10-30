@@ -56,9 +56,22 @@ namespace ERPToolsAPI.Data
 
         public DbSet<TemporaryNrDatas> TemporaryNrDatas { get; set; }
         public DbSet<ExcelReport> ExcelReports { get; set; }
+
+        // Roles & Permissions (2 Clean Tables)
+        public DbSet<Tools.Models.ToolsRole> ToolsRoles { get; set; }
+        public DbSet<Tools.Models.UserPermission> UserPermissions { get; set; }
+
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);
+
+            modelBuilder.Entity<Tools.Models.ToolsRole>()
+                .HasIndex(r => r.RoleName)
+                .IsUnique();
+
+            modelBuilder.Entity<Tools.Models.UserPermission>()
+                .HasIndex(u => u.UserId)
+                .IsUnique();
 
             modelBuilder.Entity<MRPTTemplate>()
                 .ToTable("mrpttemplates");

@@ -161,6 +161,14 @@ namespace Tools.Migrations
                     MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
 
                     b.Property<string>("CatchNo")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("CenterCode")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("CenterName")
                         .HasColumnType("longtext");
 
                     b.Property<int>("CollegeCode")
@@ -198,6 +206,9 @@ namespace Tools.Migrations
 
                     b.Property<string>("Semester")
                         .HasColumnType("longtext");
+
+                    b.Property<bool>("Status")
+                        .HasColumnType("tinyint(1)");
 
                     b.Property<string>("SubjectName")
                         .HasColumnType("longtext");
@@ -292,8 +303,11 @@ namespace Tools.Migrations
                     b.Property<int>("ProjectId")
                         .HasColumnType("int");
 
-                    b.Property<int>("Status")
+                    b.Property<int?>("Rule")
                         .HasColumnType("int");
+
+                    b.Property<bool>("Status")
+                        .HasColumnType("tinyint(1)");
 
                     b.Property<string>("UniqueField")
                         .IsRequired()
@@ -326,13 +340,15 @@ namespace Tools.Migrations
                     b.Property<int>("ProjectId")
                         .HasColumnType("int");
 
+                    b.Property<bool>("Status")
+                        .HasColumnType("tinyint(1)");
+
                     b.Property<int>("TotalEnvelope")
                         .HasColumnType("int");
 
                     b.HasKey("EnvelopeId");
 
-                    b.HasIndex("NrDataId", "ProjectId")
-                        .IsUnique();
+                    b.HasIndex("NrDataId", "ProjectId", "Status");
 
                     b.ToTable("EnvelopeBreakages");
                 });
@@ -513,6 +529,43 @@ namespace Tools.Migrations
                     b.ToTable("EventLogs");
                 });
 
+            modelBuilder.Entity("Tools.Models.ExcelReport", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("FilePath")
+                        .HasColumnType("longtext");
+
+                    b.Property<DateTime>("GeneratedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int?>("GeneratedByUserId")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("Lot")
+                        .HasColumnType("int");
+
+                    b.Property<int>("ModuleId")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("ProjectId")
+                        .HasColumnType("int");
+
+                    b.Property<bool>("Status")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<int>("Version")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("ExcelReports");
+                });
+
             modelBuilder.Entity("Tools.Models.ExtraEnvelopes", b =>
                 {
                     b.Property<int>("Id")
@@ -584,6 +637,9 @@ namespace Tools.Migrations
 
                     MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
 
+                    b.Property<bool>("AttachExtraForEachCatchForAllNodal")
+                        .HasColumnType("tinyint(1)");
+
                     b.Property<string>("EnvelopeType")
                         .IsRequired()
                         .HasColumnType("longtext");
@@ -647,6 +703,9 @@ namespace Tools.Migrations
 
                     MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
 
+                    b.Property<bool>("AttachExtraForEachCatchForAllNodal")
+                        .HasColumnType("tinyint(1)");
+
                     b.Property<string>("EnvelopeType")
                         .IsRequired()
                         .HasColumnType("longtext");
@@ -699,6 +758,9 @@ namespace Tools.Migrations
 
                     b.Property<int>("BoxNumber")
                         .HasColumnType("int");
+
+                    b.Property<string>("CustomCatchSerials")
+                        .HasColumnType("longtext");
 
                     b.Property<string>("DuplicateCriteria")
                         .IsRequired()
@@ -753,6 +815,9 @@ namespace Tools.Migrations
 
                     b.Property<int>("TypeId")
                         .HasColumnType("int");
+
+                    b.Property<bool>("UseCustomCatchSerial")
+                        .HasColumnType("tinyint(1)");
 
                     b.HasKey("Id");
 
@@ -980,14 +1045,17 @@ namespace Tools.Migrations
 
                     MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
 
+                    b.Property<double>("CenterSort")
+                        .HasColumnType("double");
+
                     b.Property<int>("CollegeCode")
                         .HasColumnType("int");
 
                     b.Property<string>("CollegeName")
                         .HasColumnType("longtext");
 
-                    b.Property<int>("ExamCenterCode")
-                        .HasColumnType("int");
+                    b.Property<string>("ExamCenterCode")
+                        .HasColumnType("longtext");
 
                     b.Property<string>("ExamCenterName")
                         .HasColumnType("longtext");
@@ -995,11 +1063,14 @@ namespace Tools.Migrations
                     b.Property<string>("Gender")
                         .HasColumnType("longtext");
 
-                    b.Property<int>("NodalCode")
-                        .HasColumnType("int");
+                    b.Property<string>("NodalCode")
+                        .HasColumnType("longtext");
 
                     b.Property<string>("NodalName")
                         .HasColumnType("longtext");
+
+                    b.Property<double>("NodalSort")
+                        .HasColumnType("double");
 
                     b.Property<string>("OtherFields")
                         .HasColumnType("longtext");
@@ -1007,9 +1078,211 @@ namespace Tools.Migrations
                     b.Property<int>("ProjectId")
                         .HasColumnType("int");
 
+                    b.Property<bool>("Status")
+                        .HasColumnType("tinyint(1)");
+
                     b.HasKey("Id");
 
                     b.ToTable("NodalList");
+                });
+
+            modelBuilder.Entity("Tools.Models.Permissions.PermissionAuditLog", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("Action")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("varchar(50)");
+
+                    b.Property<string>("ModuleCode")
+                        .HasMaxLength(50)
+                        .HasColumnType("varchar(50)");
+
+                    b.Property<string>("NewValueJson")
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("OldValueJson")
+                        .HasColumnType("longtext");
+
+                    b.Property<int>("TargetId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("TargetType")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("varchar(30)");
+
+                    b.Property<DateTime>("Timestamp")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("TriggeredBy")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("PermissionAuditLogs");
+                });
+
+            modelBuilder.Entity("Tools.Models.Permissions.RolePermission", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<bool>("CanCreate")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<bool>("CanDelete")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<bool>("CanEdit")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<bool>("CanExecute")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<bool>("CanExport")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<bool>("CanView")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<string>("ModuleCode")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("varchar(50)");
+
+                    b.Property<int>("RoleId")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("UpdatedBy")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("RoleId", "ModuleCode")
+                        .IsUnique();
+
+                    b.ToTable("RolePermissions");
+                });
+
+            modelBuilder.Entity("Tools.Models.Permissions.ToolsRole", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(255)
+                        .HasColumnType("varchar(255)");
+
+                    b.Property<bool>("IsSystemRole")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<string>("RoleName")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("varchar(50)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("RoleName")
+                        .IsUnique();
+
+                    b.ToTable("ToolsRoles");
+                });
+
+            modelBuilder.Entity("Tools.Models.Permissions.UserPermissionOverride", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<bool?>("CanCreate")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<bool?>("CanDelete")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<bool?>("CanEdit")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<bool?>("CanExecute")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<bool?>("CanExport")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<bool?>("CanView")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<string>("ModuleCode")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("varchar(50)");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("UpdatedBy")
+                        .HasColumnType("int");
+
+                    b.Property<int>("UserId")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("UserId", "ModuleCode")
+                        .IsUnique();
+
+                    b.ToTable("UserPermissionOverrides");
+                });
+
+            modelBuilder.Entity("Tools.Models.Permissions.UserToolsRole", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<DateTime>("AssignedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("AssignedBy")
+                        .HasColumnType("int");
+
+                    b.Property<int>("RoleId")
+                        .HasColumnType("int");
+
+                    b.Property<int>("UserId")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("RoleId");
+
+                    b.HasIndex("UserId")
+                        .IsUnique();
+
+                    b.ToTable("UserToolsRoles");
                 });
 
             modelBuilder.Entity("Tools.Models.ProcessSteps", b =>
@@ -1091,6 +1364,9 @@ namespace Tools.Migrations
                     b.Property<int>("BoxNumber")
                         .HasColumnType("int");
 
+                    b.Property<string>("CustomCatchSerials")
+                        .HasColumnType("longtext");
+
                     b.Property<string>("DuplicateCriteria")
                         .IsRequired()
                         .HasColumnType("longtext");
@@ -1152,6 +1428,9 @@ namespace Tools.Migrations
                     b.Property<string>("SortingBoxReport")
                         .IsRequired()
                         .HasColumnType("longtext");
+
+                    b.Property<bool>("UseCustomCatchSerial")
+                        .HasColumnType("tinyint(1)");
 
                     b.HasKey("Id");
 
@@ -1223,6 +1502,9 @@ namespace Tools.Migrations
 
                     b.Property<int?>("GroupId")
                         .HasColumnType("int");
+
+                    b.Property<bool>("InExcel")
+                        .HasColumnType("tinyint(1)");
 
                     b.Property<bool?>("IsActive")
                         .HasColumnType("tinyint(1)");
@@ -1518,6 +1800,28 @@ namespace Tools.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("MasterAuthAuditLogs");
+                });
+
+            modelBuilder.Entity("Tools.Models.Permissions.RolePermission", b =>
+                {
+                    b.HasOne("Tools.Models.Permissions.ToolsRole", "Role")
+                        .WithMany()
+                        .HasForeignKey("RoleId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Role");
+                });
+
+            modelBuilder.Entity("Tools.Models.Permissions.UserToolsRole", b =>
+                {
+                    b.HasOne("Tools.Models.Permissions.ToolsRole", "Role")
+                        .WithMany()
+                        .HasForeignKey("RoleId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Role");
                 });
 
             modelBuilder.Entity("ToolsAPI.Models.EnvelopeLotReport", b =>

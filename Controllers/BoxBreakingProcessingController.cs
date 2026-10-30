@@ -29,6 +29,7 @@ namespace Tools.Controllers
         }
 
         [HttpPost("ProcessBoxBreaking")]
+        [RequirePermission(ModuleCodes.ProcessingPipeline, PermissionAction.Execute)]
         public async Task<IActionResult> ProcessBoxBreaking(int ProjectId, [FromQuery]List<int> LotNo, [FromQuery] bool skipReset = false, [FromQuery] bool bypassDispatch = false, [FromQuery] bool runBoth = false, [FromQuery] int? batchNo = null)
         {
             var sw = System.Diagnostics.Stopwatch.StartNew();

@@ -9,6 +9,7 @@ using ERPToolsAPI.Data;
 using Tools.Models;
 using Microsoft.CodeAnalysis;
 using Tools.Services;
+using Tools.Middleware;
 using static Tools.Controllers.ExtraEnvelopesController;
 
 namespace Tools.Controllers
@@ -63,6 +64,7 @@ namespace Tools.Controllers
         // PUT: api/Modules/5
         // To protect from overposting attacks, see https://go.microsoft.com/fwlink/?linkid=2123754
         [HttpPut("{id}")]
+        [RequirePermission(ModuleCodes.MasterModules, PermissionAction.Edit)]
         public async Task<IActionResult> PutModule(int id, Module @module)
         {
             if (id != @module.Id)
@@ -101,6 +103,7 @@ namespace Tools.Controllers
         // POST: api/Modules
         // To protect from overposting attacks, see https://go.microsoft.com/fwlink/?linkid=2123754
         [HttpPost]
+        [RequirePermission(ModuleCodes.MasterModules, PermissionAction.Create)]
         public async Task<ActionResult<Module>> PostModule(Module @module)
         {
             try
@@ -120,6 +123,7 @@ namespace Tools.Controllers
 
         // DELETE: api/Modules/5
         [HttpDelete("{id}")]
+        [RequirePermission(ModuleCodes.MasterModules, PermissionAction.Delete)]
         public async Task<IActionResult> DeleteModule(int id)
         {
             try

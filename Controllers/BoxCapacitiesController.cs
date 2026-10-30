@@ -8,6 +8,7 @@ using Microsoft.EntityFrameworkCore;
 using ERPToolsAPI.Data;
 using Tools.Models;
 using Tools.Services;
+using Tools.Middleware;
 
 namespace Tools.Controllers
 {
@@ -47,6 +48,7 @@ namespace Tools.Controllers
         // PUT: api/BoxCapacities/5
         // To protect from overposting attacks, see https://go.microsoft.com/fwlink/?linkid=2123754
         [HttpPut("{id}")]
+        [RequirePermission(ModuleCodes.MasterBoxCapacity, PermissionAction.Edit)]
         public async Task<IActionResult> PutBoxCapacity(int id, BoxCapacity boxCapacity)
         {
             if (id != boxCapacity.BoxCapacityId)
@@ -82,6 +84,7 @@ namespace Tools.Controllers
         // POST: api/BoxCapacities
         // To protect from overposting attacks, see https://go.microsoft.com/fwlink/?linkid=2123754
         [HttpPost]
+        [RequirePermission(ModuleCodes.MasterBoxCapacity, PermissionAction.Create)]
         public async Task<ActionResult<BoxCapacity>> PostBoxCapacity(BoxCapacity boxCapacity)
         {
             try
@@ -101,6 +104,7 @@ namespace Tools.Controllers
 
         // DELETE: api/BoxCapacities/5
         [HttpDelete("{id}")]
+        [RequirePermission(ModuleCodes.MasterBoxCapacity, PermissionAction.Delete)]
         public async Task<IActionResult> DeleteBoxCapacity(int id)
         {
             try

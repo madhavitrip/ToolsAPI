@@ -281,6 +281,7 @@ namespace Tools.Controllers
         // PUT: api/EnvelopeBreakages/5
         // To protect from overposting attacks, see https://go.microsoft.com/fwlink/?linkid=2123754
         [HttpPut("{id}")]
+        [RequirePermission(ModuleCodes.ProcessingPipeline, PermissionAction.Edit)]
         public async Task<IActionResult> PutEnvelopeBreakage(int id, EnvelopeBreakage envelopeBreakage)
         {
             if (id != envelopeBreakage.EnvelopeId)
@@ -316,6 +317,7 @@ namespace Tools.Controllers
         // POST: api/EnvelopeBreakages
         // To protect from overposting attacks, see https://go.microsoft.com/fwlink/?linkid=2123754
         [HttpPost("EnvelopeConfiguration")]
+        [RequirePermission(ModuleCodes.ProcessingPipeline, PermissionAction.Edit)]
         public async Task<IActionResult> EnvelopeConfiguration(int ProjectId, [FromQuery] bool bypassDispatch = false)
         {
             try
@@ -1483,6 +1485,7 @@ namespace Tools.Controllers
 
         // DELETE: api/EnvelopeBreakages/5
         [HttpDelete("{id}")]
+        [RequirePermission(ModuleCodes.ProcessingPipeline, PermissionAction.Delete)]
         public async Task<IActionResult> DeleteEnvelopeBreakage(int id)
         {
             try

@@ -25,10 +25,12 @@ builder.Services.AddDbContext<ERPToolsDbContext>(options =>
     options.UseMySql(builder.Configuration.GetConnectionString("ERPToolsDb"),
         ServerVersion.AutoDetect(builder.Configuration.GetConnectionString("ERPToolsDb")),
         mysqlOptions => mysqlOptions.CommandTimeout(180)));
+builder.Services.AddMemoryCache();
 builder.Services.AddScoped<ILoggerService, LoggerService>();
 builder.Services.AddScoped<ApiAuditLoggingFilter>();
 builder.Services.AddScoped<IAuthorizationService, AuthorizationService>();
 builder.Services.AddScoped<IMasterAuthService, MasterAuthService>();
+builder.Services.AddScoped<IPermissionService, PermissionService>();
 
 // Register API settings from configuration
 builder.Services.Configure<ApiSettings>(builder.Configuration.GetSection("ApiSettings"));
@@ -136,6 +138,21 @@ builder.Services.AddCors(options =>
 });
 
 var app = builder.Build();
+
+// Auto-initialize Roles & Permissions tables (2 Clean Tables)
+using (var scope = app.Services.CreateScope())
+{
+    try
+    {
+        var permissionService = scope.ServiceProvider.GetRequiredService<IPermissionService>();
+        await permissionService.EnsureDatabaseInitializedAsync();
+    }
+    catch (Exception ex)
+    {
+        var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+        logger.LogError(ex, "Failed to initialize Roles & Permissions tables on startup.");
+    }
+}
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())

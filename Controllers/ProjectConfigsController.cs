@@ -8,6 +8,7 @@ using Microsoft.EntityFrameworkCore;
 using ERPToolsAPI.Data;
 using Tools.Models;
 using Tools.Services;
+using Tools.Middleware;
 
 namespace Tools.Controllers
 {
@@ -127,6 +128,7 @@ namespace Tools.Controllers
         //}
 
         [HttpPut("{id}")]
+        [RequirePermission(ModuleCodes.ProjectConfig, PermissionAction.Edit)]
         public async Task<IActionResult> PutProjectConfig(int id, ProjectConfig projectConfig)
         {
             if (id != projectConfig.Id)
@@ -194,6 +196,7 @@ namespace Tools.Controllers
             return NoContent();
         }
         [HttpPost]
+        [RequirePermission(ModuleCodes.ProjectConfig, PermissionAction.Create)]
         public async Task<ActionResult<ProjectConfig>> PostProjectConfig(ProjectConfig projectConfig)
         {
             try
@@ -340,6 +343,7 @@ namespace Tools.Controllers
         }
         // DELETE: api/ProjectConfigs/5
         [HttpDelete("{id}")]
+        [RequirePermission(ModuleCodes.ProjectConfig, PermissionAction.Delete)]
         public async Task<IActionResult> DeleteProjectConfig(int id)
         {
             try
