@@ -23,6 +23,7 @@ namespace Tools.Controllers
 
         // POST: api/MProjectConfigs
         [HttpPost]
+        [RequirePermission(ModuleCodes.MasterConfig, PermissionAction.Edit)]
         [RequireMasterAuth(Module = "MProjectConfigs", Operation = "SAVE MASTER")]
         public async Task<ActionResult<MProjectConfigs>> PostMProjectConfig(MProjectConfigs projectConfig)
         {

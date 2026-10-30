@@ -8,6 +8,7 @@ using Microsoft.EntityFrameworkCore;
 using ERPToolsAPI.Data;
 using Tools.Models;
 using Tools.Services;
+using Tools.Middleware;
 using Microsoft.CodeAnalysis;
 using static Tools.Controllers.ExtraEnvelopesController;
 
@@ -51,6 +52,7 @@ namespace Tools.Controllers
         // PUT: api/Fields/5
         // To protect from overposting attacks, see https://go.microsoft.com/fwlink/?linkid=2123754
         [HttpPut("{id}")]
+        [RequirePermission(ModuleCodes.MasterFields, PermissionAction.Edit)]
         public async Task<IActionResult> PutField(int id, Field @field)
         {
             if (id != @field.FieldId)
@@ -88,6 +90,7 @@ namespace Tools.Controllers
         // POST: api/Fields
         // To protect from overposting attacks, see https://go.microsoft.com/fwlink/?linkid=2123754
         [HttpPost]
+        [RequirePermission(ModuleCodes.MasterFields, PermissionAction.Create)]
         public async Task<ActionResult<Field>> PostField(Field field)
         {
             try
@@ -122,6 +125,7 @@ namespace Tools.Controllers
 
         // DELETE: api/Fields/5
         [HttpDelete("{id}")]
+        [RequirePermission(ModuleCodes.MasterFields, PermissionAction.Delete)]
         public async Task<IActionResult> DeleteField(int id)
         {
             try

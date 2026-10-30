@@ -1,10 +1,11 @@
-﻿using ERPToolsAPI.Data;
+using ERPToolsAPI.Data;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System.Text.Json;
 using Tools.Models;
 using Tools.Services;
+using Tools.Middleware;
 
 namespace Tools.Controllers
 {
@@ -25,6 +26,7 @@ namespace Tools.Controllers
         }
 
         [HttpPost]
+        [RequirePermission(ModuleCodes.ChangedNr, PermissionAction.Create)]
         public async Task<IActionResult> PostChangedNRData([FromBody] JsonElement inputData)
         {
             if (!ModelState.IsValid)

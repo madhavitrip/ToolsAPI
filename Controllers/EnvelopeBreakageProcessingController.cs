@@ -37,6 +37,7 @@ namespace Tools.Controllers
 
 
         [HttpPost("ProcessEnvelopeBreaking")]
+        [RequirePermission(ModuleCodes.ProcessingPipeline, PermissionAction.Execute)]
         public async Task<IActionResult> ProcessEnvelopeBreaking(int ProjectId, int triggeredBy = 0, [FromQuery] bool skipReset = false, [FromQuery] int? lotNo = null, [FromQuery] string? catchNo = null, [FromQuery] bool bypassDispatch = false, [FromQuery] int? batchNo = null)
         {
             try

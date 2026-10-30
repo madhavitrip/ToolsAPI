@@ -4,6 +4,8 @@ using System.Data;
 using ClosedXML.Excel;
 using ERPToolsAPI.Data;
 using Tools.Services;
+using Tools.Models;
+using Tools.Middleware;
 
 namespace Tools.Controllers
 {
@@ -139,6 +141,7 @@ namespace Tools.Controllers
 
 
         [HttpPost("upload-and-process")]
+        [RequirePermission(ModuleCodes.HtovTool, PermissionAction.Execute)]
         public async Task<IActionResult> UploadAndProcessExcel([FromForm] IFormFile file, [FromForm] string fixedHeaders, [FromForm] int ProjectId)
         {
             if (file == null || file.Length == 0)

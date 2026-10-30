@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using System.Text.Json;
 using System.Reflection;
 using Tools.Models;
+using Tools.Middleware;
 using ERPToolsAPI.Data;
 
 namespace Tools.Controllers
@@ -165,6 +166,7 @@ namespace Tools.Controllers
         }
 
         [HttpPut("{id}")]
+        [RequirePermission(ModuleCodes.NodalCatch, PermissionAction.Edit)]
         public async Task<IActionResult> UpdateNodalList(int id, [FromBody] NodalList updatedRecord)
         {
             if (id != updatedRecord.Id) return BadRequest("ID mismatch");
@@ -194,6 +196,7 @@ namespace Tools.Controllers
         }
 
         [HttpDelete("{id}")]
+        [RequirePermission(ModuleCodes.NodalCatch, PermissionAction.Delete)]
         public async Task<IActionResult> DeleteNodalList(int id)
         {
             try
@@ -219,6 +222,7 @@ namespace Tools.Controllers
         [HttpDelete("project/{projectId}")]
         [HttpDelete("deleteAll/{projectId}")]
         [HttpPost("delete-all/{projectId}")]
+        [RequirePermission(ModuleCodes.NodalCatch, PermissionAction.Delete)]
         public async Task<IActionResult> DeleteNodalListByProject(int projectId)
         {
             try
@@ -236,6 +240,7 @@ namespace Tools.Controllers
         }
 
         [HttpPost("batch-delete")]
+        [RequirePermission(ModuleCodes.NodalCatch, PermissionAction.Delete)]
         public async Task<IActionResult> BatchDeleteNodalList([FromBody] List<int> ids)
         {
             if (ids == null || !ids.Any()) return BadRequest("No IDs provided");
@@ -281,6 +286,7 @@ namespace Tools.Controllers
         }
 
         [HttpPost("resolve-college-center")]
+        [RequirePermission(ModuleCodes.NodalCatch, PermissionAction.Execute)]
         public async Task<IActionResult> ResolveCollegeCenter([FromBody] ResolveCollegeCenterDto req)
         {
             try
@@ -418,6 +424,7 @@ namespace Tools.Controllers
         }
 
         [HttpPost("resolve-center-nodal")]
+        [RequirePermission(ModuleCodes.NodalCatch, PermissionAction.Execute)]
         public async Task<IActionResult> ResolveCenterNodal([FromBody] ResolveCenterNodalDto req)
         {
             try
@@ -475,6 +482,7 @@ namespace Tools.Controllers
 
 
         [HttpPost]
+        [RequirePermission(ModuleCodes.NodalCatch, PermissionAction.Create)]
         public async Task<IActionResult> CreateNodalList([FromBody] NodalList newRecord)
         {
             if (newRecord == null) return BadRequest("Invalid data");
@@ -493,6 +501,7 @@ namespace Tools.Controllers
         }
 
         [HttpPost("Upload")]
+        [RequirePermission(ModuleCodes.NodalCatch, PermissionAction.Create)]
         public async Task<IActionResult> UploadNodalList([FromBody] JsonElement inputData)
         {
             if (!ModelState.IsValid)

@@ -171,6 +171,13 @@ namespace Tools.Services
                 }
             }
 
+            // Fallback: read X-Role-Id header directly
+            if (request != null && request.Headers.TryGetValue("X-Role-Id", out var roleIdHeader))
+            {
+                if (int.TryParse(roleIdHeader.ToString(), out var headerRoleId) && headerRoleId > 0)
+                    return headerRoleId;
+            }
+
             System.Diagnostics.Debug.WriteLine("[JWT] No roleId found - returning 0");
             return 0;
         }
