@@ -435,7 +435,7 @@ namespace Tools.Controllers
         //}
 
         [HttpGet("GetByProjectId/{projectId}")]
-        public async Task<IActionResult> GetUniqueLotsByProject(int projectId)
+        public async Task<IActionResult> GetUniqueLotsByProject(int projectId, [FromQuery] bool includeDispatched = false)
         {
             if (projectId <= 0)
                 return BadRequest("ProjectId is required.");
@@ -463,7 +463,44 @@ namespace Tools.Controllers
                     {
                         return Ok(new List<object>());
                     }
-                    return Ok(lots);
+
+                    var lotNos = lots.Select(l => l.lotNo).ToList();
+                    var dispatchInfoDict = await _dispatchService.GetDispatchDatesAsync(projectId, lotNos);
+
+                    // Sync ProjectLotRanges status=0 for lots whose dispatch is done
+                    await _dispatchService.SyncAndValidateLotDispatchStatusesAsync(projectId, lotNos);
+                    await _dispatchService.SyncDispatchedLotRangesForProjectAsync(projectId);
+
+                    var lotRanges = await _context.ProjectLotRanges
+                        .AsNoTracking()
+                        .Where(x => x.ProjectId == projectId)
+                        .ToListAsync();
+                    var lotStatusMap = lotRanges.ToDictionary(r => r.LotNo, r => r.Status ? 1 : 0);
+
+                    var lotsWithDispatch = lots.Select(lot =>
+                    {
+                        bool isDisp = (dispatchInfoDict.ContainsKey(lot.lotNo) && dispatchInfoDict[lot.lotNo].IsDispatched) || (lotStatusMap.ContainsKey(lot.lotNo) && lotStatusMap[lot.lotNo] == 0);
+                        bool isExceed = (dispatchInfoDict.ContainsKey(lot.lotNo) && dispatchInfoDict[lot.lotNo].IsDispatchExceeded) || (lotStatusMap.ContainsKey(lot.lotNo) && lotStatusMap[lot.lotNo] == 0);
+                        int lotStat = (isDisp || isExceed || (lotStatusMap.ContainsKey(lot.lotNo) && lotStatusMap[lot.lotNo] == 0)) ? 0 : (lotStatusMap.ContainsKey(lot.lotNo) ? lotStatusMap[lot.lotNo] : 1);
+                        return new
+                        {
+                            lot.lotNo,
+                            lot.catchCount,
+                            lot.minStep,
+                            lot.hasPages,
+                            isDispatched = isDisp,
+                            isDispatchExceeded = isExceed,
+                            dispatchDate = dispatchInfoDict.ContainsKey(lot.lotNo) ? dispatchInfoDict[lot.lotNo].DispatchDate : null,
+                            status = lotStat
+                        };
+                    }).ToList();
+
+                    if (!includeDispatched)
+                    {
+                        lotsWithDispatch = lotsWithDispatch.Where(lot => lot.status == 1).ToList();
+                    }
+
+                    return Ok(lotsWithDispatch);
                 }
                 else
                 {
@@ -485,7 +522,44 @@ namespace Tools.Controllers
                     {
                         return Ok(new List<object>());
                     }
-                    return Ok(lots);
+
+                    var lotNos = lots.Select(l => l.lotNo).ToList();
+                    var dispatchInfoDict = await _dispatchService.GetDispatchDatesAsync(projectId, lotNos);
+
+                    // Sync ProjectLotRanges status=0 for lots whose dispatch is done
+                    await _dispatchService.SyncAndValidateLotDispatchStatusesAsync(projectId, lotNos);
+                    await _dispatchService.SyncDispatchedLotRangesForProjectAsync(projectId);
+
+                    var lotRanges = await _context.ProjectLotRanges
+                        .AsNoTracking()
+                        .Where(x => x.ProjectId == projectId)
+                        .ToListAsync();
+                    var lotStatusMap = lotRanges.ToDictionary(r => r.LotNo, r => r.Status ? 1 : 0);
+
+                    var lotsWithDispatch = lots.Select(lot =>
+                    {
+                        bool isDisp = (dispatchInfoDict.ContainsKey(lot.lotNo) && dispatchInfoDict[lot.lotNo].IsDispatched) || (lotStatusMap.ContainsKey(lot.lotNo) && lotStatusMap[lot.lotNo] == 0);
+                        bool isExceed = (dispatchInfoDict.ContainsKey(lot.lotNo) && dispatchInfoDict[lot.lotNo].IsDispatchExceeded) || (lotStatusMap.ContainsKey(lot.lotNo) && lotStatusMap[lot.lotNo] == 0);
+                        int lotStat = (isDisp || isExceed || (lotStatusMap.ContainsKey(lot.lotNo) && lotStatusMap[lot.lotNo] == 0)) ? 0 : (lotStatusMap.ContainsKey(lot.lotNo) ? lotStatusMap[lot.lotNo] : 1);
+                        return new
+                        {
+                            lot.lotNo,
+                            lot.catchCount,
+                            lot.minStep,
+                            lot.hasPages,
+                            isDispatched = isDisp,
+                            isDispatchExceeded = isExceed,
+                            dispatchDate = dispatchInfoDict.ContainsKey(lot.lotNo) ? dispatchInfoDict[lot.lotNo].DispatchDate : null,
+                            status = lotStat
+                        };
+                    }).ToList();
+
+                    if (!includeDispatched)
+                    {
+                        lotsWithDispatch = lotsWithDispatch.Where(lot => lot.status == 1).ToList();
+                    }
+
+                    return Ok(lotsWithDispatch);
                 }
 
             }
@@ -505,7 +579,7 @@ namespace Tools.Controllers
         }
 
         [HttpGet("GetLotsWithDispatchInfo/{projectId}")]
-        public async Task<IActionResult> GetLotsWithDispatchInfo(int projectId)
+        public async Task<IActionResult> GetLotsWithDispatchInfo(int projectId, [FromQuery] bool includeDispatched = false)
         {
             if (projectId <= 0)
                 return BadRequest("ProjectId is required.");
@@ -523,7 +597,8 @@ namespace Tools.Controllers
                         {
                             lotNo = g.Key,
                             catchCount = g.Select(x => x.CatchNo).Distinct().Count(),
-                            minStep = g.Min(x => x.Steps)
+                            minStep = g.Min(x => x.Steps),
+                            hasPages = g.All(x => x.Pages > 0)
                         })
                         .OrderBy(x => x.lotNo)
                         .ToListAsync()
@@ -534,7 +609,8 @@ namespace Tools.Controllers
                         {
                             lotNo = g.Key,
                             catchCount = g.Select(x => x.CatchNo).Distinct().Count(),
-                            minStep = g.Min(x => x.Steps)
+                            minStep = g.Min(x => x.Steps),
+                            hasPages = g.All(x => x.Pages > 0)
                         })
                         .OrderBy(x => x.lotNo)
                         .ToListAsync();
@@ -548,15 +624,39 @@ namespace Tools.Controllers
                 var lotNos = lots.Select(l => l.lotNo).ToList();
                 var dispatchInfoDict = await _dispatchService.GetDispatchDatesAsync(projectId, lotNos);
 
+                // Sync ProjectLotRanges status=0 for lots whose dispatch is done
+                await _dispatchService.SyncAndValidateLotDispatchStatusesAsync(projectId, lotNos);
+                await _dispatchService.SyncDispatchedLotRangesForProjectAsync(projectId);
+
+                var lotRanges = await _context.ProjectLotRanges
+                    .AsNoTracking()
+                    .Where(x => x.ProjectId == projectId)
+                    .ToListAsync();
+                var lotStatusMap = lotRanges.ToDictionary(r => r.LotNo, r => r.Status ? 1 : 0);
+
                 // Merge dispatch info with lot data
-                var lotsWithDispatch = lots.Select(lot => new
+                var lotsWithDispatch = lots.Select(lot =>
                 {
-                    lot.lotNo,
-                    lot.catchCount,
-                    lot.minStep,
-                    isDispatched = dispatchInfoDict.ContainsKey(lot.lotNo) && dispatchInfoDict[lot.lotNo].IsDispatched,
-                    dispatchDate = dispatchInfoDict.ContainsKey(lot.lotNo) ? dispatchInfoDict[lot.lotNo].DispatchDate : null
+                    bool isDisp = (dispatchInfoDict.ContainsKey(lot.lotNo) && dispatchInfoDict[lot.lotNo].IsDispatched) || (lotStatusMap.ContainsKey(lot.lotNo) && lotStatusMap[lot.lotNo] == 0);
+                    bool isExceed = (dispatchInfoDict.ContainsKey(lot.lotNo) && dispatchInfoDict[lot.lotNo].IsDispatchExceeded) || (lotStatusMap.ContainsKey(lot.lotNo) && lotStatusMap[lot.lotNo] == 0);
+                    int lotStat = (isDisp || isExceed || (lotStatusMap.ContainsKey(lot.lotNo) && lotStatusMap[lot.lotNo] == 0)) ? 0 : (lotStatusMap.ContainsKey(lot.lotNo) ? lotStatusMap[lot.lotNo] : 1);
+                    return new
+                    {
+                        lot.lotNo,
+                        lot.catchCount,
+                        lot.minStep,
+                        lot.hasPages,
+                        isDispatched = isDisp,
+                        isDispatchExceeded = isExceed,
+                        dispatchDate = dispatchInfoDict.ContainsKey(lot.lotNo) ? dispatchInfoDict[lot.lotNo].DispatchDate : null,
+                        status = lotStat
+                    };
                 }).ToList();
+
+                if (!includeDispatched)
+                {
+                    lotsWithDispatch = lotsWithDispatch.Where(lot => lot.status == 1).ToList();
+                }
 
                 return Ok(lotsWithDispatch);
             }
@@ -707,6 +807,30 @@ namespace Tools.Controllers
                     }
                 }
 
+                // 🔹 Block modifications if any affected lot is dispatched (status = 0)
+                var allLotsToCheck = affectedLotNos.Concat(request.Updates.Select(u => u.LotNo)).Where(l => l > 0).Distinct().ToList();
+                if (selectedLotNo.HasValue && selectedLotNo.Value > 0) allLotsToCheck.Add(selectedLotNo.Value);
+
+                if (allLotsToCheck.Any())
+                {
+                    var dispatchMap = await _dispatchService.SyncAndValidateLotDispatchStatusesAsync(request.ProjectId, allLotsToCheck);
+                    var dispatchedLots = dispatchMap.Where(kv => kv.Value).Select(kv => kv.Key).ToList();
+
+                    var inactiveLotRanges = await _context.ProjectLotRanges
+                        .Where(r => r.ProjectId == request.ProjectId && allLotsToCheck.Contains(r.LotNo) && !r.Status)
+                        .Select(r => r.LotNo)
+                        .ToListAsync();
+
+                    var blockedLots = dispatchedLots.Union(inactiveLotRanges).Distinct().ToList();
+                    if (blockedLots.Any())
+                    {
+                        return BadRequest(new
+                        {
+                            message = $"Lot(s) {string.Join(", ", blockedLots)} have already been dispatched (status=0) and cannot be modified."
+                        });
+                    }
+                }
+
                 // 🔹 Apply lot updates
                 var updatesByCatch = request.Updates
                     .Where(u => !string.IsNullOrWhiteSpace(u.CatchNo))
@@ -814,6 +938,30 @@ namespace Tools.Controllers
                         affectedLotNos.Add(oldLotNo);
                         affectedLotNos.Add(update.LotNo);
                     }
+                }
+            }
+
+            // 🔹 Block modifications if any affected lot is dispatched (status = 0)
+            var allLotsToCheckOld = affectedLotNos.Concat(request.Updates.Select(u => u.LotNo)).Where(l => l > 0).Distinct().ToList();
+            if (selectedLotNo.HasValue && selectedLotNo.Value > 0) allLotsToCheckOld.Add(selectedLotNo.Value);
+
+            if (allLotsToCheckOld.Any())
+            {
+                var dispatchMap = await _dispatchService.SyncAndValidateLotDispatchStatusesAsync(request.ProjectId, allLotsToCheckOld);
+                var dispatchedLots = dispatchMap.Where(kv => kv.Value).Select(kv => kv.Key).ToList();
+
+                var inactiveLotRanges = await _context.ProjectLotRanges
+                    .Where(r => r.ProjectId == request.ProjectId && allLotsToCheckOld.Contains(r.LotNo) && !r.Status)
+                    .Select(r => r.LotNo)
+                    .ToListAsync();
+
+                var blockedLots = dispatchedLots.Union(inactiveLotRanges).Distinct().ToList();
+                if (blockedLots.Any())
+                {
+                    return BadRequest(new
+                    {
+                        message = $"Lot(s) {string.Join(", ", blockedLots)} have already been dispatched (status=0) and cannot be modified."
+                    });
                 }
             }
 

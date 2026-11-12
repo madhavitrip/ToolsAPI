@@ -44,30 +44,32 @@ namespace Tools.Controllers
                 if (!skipReset) await ResetReportStatus(ProjectId);
                 await _loggerService.LogEventAsync($"Starting box breaking for ProjectId {ProjectId}, Lots: {string.Join(",", LotNo)}", "BoxBreakingProcessing", Tools.Services.LogHelper.GetTriggeredBy(User), ProjectId);
 
-                // ✅ STEP 1: Validate dispatch status for all lots (mandatory backend validation unless bypassed)
-                // Allow a global bypass via environment variable `BYPASS_DISPATCH_CHECK=true`
-                // Temporarily ignore dispatch date checks (force bypass for now)
-                var globalBypassBox = (System.Environment.GetEnvironmentVariable("BYPASS_DISPATCH_CHECK") ?? "").ToLowerInvariant() == "true";
-                var dispatchBypassEffectiveBox = true;
-
-                if (!dispatchBypassEffectiveBox)
+                // ✅ STEP 1: Validate dispatch status for all lots and update ProjectLotRanges status=0 if dispatched
+                if (LotNo != null && LotNo.Any())
                 {
-                    var dispatchInfoDict = await _dispatchService.GetDispatchDatesAsync(ProjectId, LotNo);
-                    var dispatchedLots = dispatchInfoDict.Where(d => d.Value.IsDispatched).ToList();
+                    var dispatchDoneMap = await _dispatchService.SyncAndValidateLotDispatchStatusesAsync(ProjectId, LotNo);
+                    var dispatchedLots = dispatchDoneMap.Where(kv => kv.Value).Select(kv => kv.Key).ToList();
 
                     if (dispatchedLots.Any())
                     {
-                        var dispatchedLotNumbers = string.Join(", ", dispatchedLots.Select(d => d.Key));
+                        var dispatchedLotNumbers = string.Join(", ", dispatchedLots);
                         return BadRequest(new
                         {
-                            error = $"Lot(s) {dispatchedLotNumbers} already dispatched. Processing not allowed.",
-                            dispatchedLots = dispatchedLots.Select(d => new
-                            {
-                                lotNo = d.Key,
-                                dispatchDate = d.Value.DispatchDate
-                            })
+                            error = $"Lot(s) {dispatchedLotNumbers} already exceeded dispatch date / dispatched and is read-only. Box Breaking not allowed.",
+                            dispatchedLots = dispatchedLots
                         });
                     }
+                }
+                else
+                {
+                    // Running for all lots: sync dispatch statuses and fetch only active lots (status=1 in ProjectLotRanges)
+                    await _dispatchService.SyncDispatchedLotRangesForProjectAsync(ProjectId);
+                    var activeLots = await _context.ProjectLotRanges
+                        .AsNoTracking()
+                        .Where(r => r.ProjectId == ProjectId && r.Status)
+                        .Select(r => r.LotNo)
+                        .ToListAsync();
+                    LotNo = activeLots;
                 }
 
                 await _loggerService.LogEventAsync($"Dispatch validation passed in {sw.ElapsedMilliseconds}ms", "BoxBreakingProcessing", 0, ProjectId);
@@ -1274,6 +1276,34 @@ namespace Tools.Controllers
             {
                 if (!skipReset) await ResetReportStatus(ProjectId);
                 await _loggerService.LogEventAsync($"Starting box breaking for NrData1 ProjectId {ProjectId}, Lots: {string.Join(",", LotNo)}", "BoxBreakingProcessing", Tools.Services.LogHelper.GetTriggeredBy(User), ProjectId);
+
+                // ✅ STEP 1: Validate dispatch status for all lots and update ProjectLotRanges status=0 if dispatched
+                if (LotNo != null && LotNo.Any())
+                {
+                    var dispatchDoneMap = await _dispatchService.SyncAndValidateLotDispatchStatusesAsync(ProjectId, LotNo);
+                    var dispatchedLots = dispatchDoneMap.Where(kv => kv.Value).Select(kv => kv.Key).ToList();
+
+                    if (dispatchedLots.Any())
+                    {
+                        var dispatchedLotNumbers = string.Join(", ", dispatchedLots);
+                        return BadRequest(new
+                        {
+                            error = $"Lot(s) {dispatchedLotNumbers} already exceeded dispatch date / dispatched and is read-only. Box Breaking not allowed.",
+                            dispatchedLots = dispatchedLots
+                        });
+                    }
+                }
+                else
+                {
+                    // Running for all lots: sync dispatch statuses and fetch only active lots (status=1 in ProjectLotRanges)
+                    await _dispatchService.SyncDispatchedLotRangesForProjectAsync(ProjectId);
+                    var activeLots = await _context.ProjectLotRanges
+                        .AsNoTracking()
+                        .Where(r => r.ProjectId == ProjectId && r.Status)
+                        .Select(r => r.LotNo)
+                        .ToListAsync();
+                    LotNo = activeLots;
+                }
 
                 // Read active NewEnvelopeBreakingResults from DB
                 var envelopeResults = await _context.NewEnvelopeBreakingResults

@@ -384,7 +384,7 @@ namespace Tools.Controllers
         // To protect from overposting attacks, see https://go.microsoft.com/fwlink/?linkid=2123754
         [HttpPost("EnvelopeConfiguration")]
         [RequirePermission(ModuleCodes.ProcessingPipeline, PermissionAction.Edit)]
-        public async Task<IActionResult> EnvelopeConfiguration(int ProjectId, [FromQuery] bool bypassDispatch = false)
+        public async Task<IActionResult> EnvelopeConfiguration(int ProjectId)
         {
             try
             {
@@ -395,7 +395,7 @@ namespace Tools.Controllers
                     {
                         ControllerContext = this.ControllerContext
                     };
-                    return await nrData1Controller.EnvelopeConfiguration(ProjectId, bypassDispatch);
+                    return await nrData1Controller.EnvelopeConfiguration(ProjectId);
                 }
 
                 var projectConfig = await _context.ProjectConfigs

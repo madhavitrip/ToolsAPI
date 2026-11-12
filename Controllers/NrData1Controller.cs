@@ -363,6 +363,17 @@ namespace Tools.Controllers
                     return NotFound($"Record with ID {id} not found.");
                 }
 
+                var targetProjectId = nr1?.ProjectId ?? 0;
+                var targetLotNo = nr1?.LotNo ?? 0;
+                if (targetProjectId > 0 && targetLotNo > 0)
+                {
+                    var isDispatched = await _dispatchService.IsLotDispatchedAsync(targetProjectId, targetLotNo);
+                    if (isDispatched)
+                    {
+                        return BadRequest(new { message = $"Lot {targetLotNo} has exceeded its dispatch date and is read-only. Modifications are not allowed." });
+                    }
+                }
+
                 // Check for soft delete
                 bool isDelete = false;
                 if (inputData.TryGetProperty("Status", out var statusProp) || inputData.TryGetProperty("status", out statusProp))
@@ -648,6 +659,14 @@ namespace Tools.Controllers
             if (lotNo.HasValue)
             {
                 nr1Rows = nr1Rows.Where(n => n.LotNo == lotNo.Value).ToList();
+            }
+
+            foreach (var r in nr1Rows)
+            {
+                if (await _dispatchService.IsLotDispatchedAsync(ProjectId, r.LotNo))
+                {
+                    return BadRequest($"Lot {r.LotNo} has exceeded its dispatch date and is read-only. Merging catches from a dispatched lot is not allowed.");
+                }
             }
 
             if (nr1Rows.Count < 2)
@@ -2127,7 +2146,7 @@ namespace Tools.Controllers
                 try
                 {
                     Console.WriteLine("[NrData1Controller] Envelope breaking is called");
-                    await EnvelopeConfiguration(ProjectId, bypassDispatch: true);
+                    await EnvelopeConfiguration(ProjectId);
                 }
                 catch (Exception ex)
                 {
@@ -2150,7 +2169,7 @@ namespace Tools.Controllers
         }
 
         [HttpPost("EnvelopeConfiguration")]
-        public async Task<IActionResult> EnvelopeConfiguration([FromQuery] int ProjectId, [FromQuery] bool bypassDispatch = false)
+        public async Task<IActionResult> EnvelopeConfiguration([FromQuery] int ProjectId)
         {
             try
             {
@@ -3551,6 +3570,11 @@ namespace Tools.Controllers
                     return NotFound();
                 }
 
+                if (await _dispatchService.IsLotDispatchedAsync(nr1.ProjectId, nr1.LotNo))
+                {
+                    return BadRequest($"Lot {nr1.LotNo} has exceeded its dispatch date and is read-only. Deletion is not allowed.");
+                }
+
                 nr1.Status = false;
                 _context.NrData1.Update(nr1);
 
@@ -3616,6 +3640,29 @@ namespace Tools.Controllers
         {
             try
             {
+                if (lotNo.HasValue)
+                {
+                    if (await _dispatchService.IsLotDispatchedAsync(projectId, lotNo.Value))
+                    {
+                        return BadRequest($"Lot {lotNo.Value} has exceeded its dispatch date and is read-only. Deletion is not allowed.");
+                    }
+                }
+                else
+                {
+                    var lots = await _context.NrData1
+                        .Where(d => d.ProjectId == projectId && d.Status)
+                        .Select(d => d.LotNo)
+                        .Distinct()
+                        .ToListAsync();
+                    foreach (var lot in lots)
+                    {
+                        if (await _dispatchService.IsLotDispatchedAsync(projectId, lot))
+                        {
+                            return BadRequest($"Lot {lot} has exceeded its dispatch date and is read-only. Deleting project data containing dispatched lots is not allowed.");
+                        }
+                    }
+                }
+
                 var query = _context.NrData1.Where(d => d.ProjectId == projectId);
                 if (lotNo.HasValue)
                 {
@@ -3710,6 +3757,14 @@ namespace Tools.Controllers
 
                 if (!nr1List.Any())
                     return NotFound($"Catch number {catchNo} not found for project {projectId}");
+
+                foreach (var item in nr1List)
+                {
+                    if (await _dispatchService.IsLotDispatchedAsync(projectId, item.LotNo))
+                    {
+                        return BadRequest($"Lot {item.LotNo} has exceeded its dispatch date and is read-only. Deleting catch '{catchNo}' is not allowed.");
+                    }
+                }
 
                 var nr1Ids = nr1List.Select(n => n.Id).ToList();
 

@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Mvc;
 using Tools.Models;
 using System.Globalization;
 using Microsoft.EntityFrameworkCore;
+using Tools.Services;
 
 namespace Tools.Controllers
 {
@@ -12,10 +13,68 @@ namespace Tools.Controllers
     public class ProjectLotRangeController : ControllerBase
     {
         private readonly ERPToolsDbContext _context;
+        private readonly IDispatchService _dispatchService;
 
-        public ProjectLotRangeController(ERPToolsDbContext context)
+        public ProjectLotRangeController(ERPToolsDbContext context, IDispatchService dispatchService)
         {
             _context = context;
+            _dispatchService = dispatchService;
+        }
+
+        [HttpGet("{projectId}")]
+        [HttpGet("by-project/{projectId}")]
+        public async Task<IActionResult> GetProjectLotRanges(int projectId)
+        {
+            if (projectId <= 0)
+                return BadRequest("ProjectId is required.");
+
+            try
+            {
+                // Automatically sync any dispatched lots so status=0 in ProjectLotRanges
+                await _dispatchService.SyncDispatchedLotRangesForProjectAsync(projectId);
+
+                var ranges = await _context.ProjectLotRanges
+                    .Where(x => x.ProjectId == projectId)
+                    .OrderBy(x => x.LotNo)
+                    .Select(x => new
+                    {
+                        x.LotRangeId,
+                        x.ProjectId,
+                        startDate = x.StartDate,
+                        endDate = x.EndDate,
+                        x.LotNo,
+                        status = x.Status ? 1 : 0
+                    })
+                    .ToListAsync();
+
+                return Ok(ranges);
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { message = "Failed to fetch project lot ranges", error = ex.Message });
+            }
+        }
+
+        [HttpPost("sync-dispatch/{projectId}")]
+        public async Task<IActionResult> SyncDispatch(int projectId)
+        {
+            if (projectId <= 0)
+                return BadRequest("ProjectId is required.");
+
+            try
+            {
+                var updatedLots = await _dispatchService.SyncDispatchedLotRangesForProjectAsync(projectId);
+                return Ok(new
+                {
+                    message = "Dispatch status synced with ProjectLotRanges successfully.",
+                    updatedLotsCount = updatedLots.Count,
+                    updatedLots = updatedLots
+                });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { message = "Failed to sync dispatch status", error = ex.Message });
+            }
         }
 
         [HttpPost]
@@ -38,6 +97,16 @@ namespace Tools.Controllers
 
                 if (model.LotNo <= 0)
                     return BadRequest(new { message = "LotNo must be greater than 0." });
+
+                // Check if this lot's dispatch date is exceeded or dispatch is done
+                var isDispatched = await _dispatchService.SyncAndValidateLotDispatchStatusAsync(model.ProjectId, model.LotNo);
+                if (isDispatched)
+                {
+                    return BadRequest(new
+                    {
+                        message = $"Lot {model.LotNo} has already been dispatched and is read-only. Modification is not allowed."
+                    });
+                }
 
                 // Parse dates from string format "DD-MM-YYYY"
                 if (!DateTime.TryParseExact(model.StartDate.Trim(), "dd-MM-yyyy", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime startDate))
@@ -68,9 +137,21 @@ namespace Tools.Controllers
 
                 if (existingLotRange != null)
                 {
+                    if (!existingLotRange.Status)
+                    {
+                        return BadRequest(new
+                        {
+                            message = $"Lot {model.LotNo} has been marked as inactive/dispatched and cannot be modified."
+                        });
+                    }
+
                     // Update existing record
                     existingLotRange.StartDate = startDateString;
                     existingLotRange.EndDate = endDateString;
+                    if (model.Status.HasValue)
+                    {
+                        existingLotRange.Status = model.Status.Value;
+                    }
                     
                     _context.ProjectLotRanges.Update(existingLotRange);
                     await _context.SaveChangesAsync();
@@ -86,7 +167,8 @@ namespace Tools.Controllers
                             existingLotRange.ProjectId,
                             startDate = existingLotRange.StartDate,
                             endDate = existingLotRange.EndDate,
-                            existingLotRange.LotNo
+                            existingLotRange.LotNo,
+                            status = existingLotRange.Status
                         }
                     });
                 }
@@ -98,7 +180,8 @@ namespace Tools.Controllers
                         ProjectId = model.ProjectId,
                         StartDate = startDateString,
                         EndDate = endDateString,
-                        LotNo = model.LotNo
+                        LotNo = model.LotNo,
+                        Status = model.Status ?? true
                     };
 
                     _context.ProjectLotRanges.Add(projectLotRange);
@@ -115,7 +198,8 @@ namespace Tools.Controllers
                             projectLotRange.ProjectId,
                             startDate = projectLotRange.StartDate,
                             endDate = projectLotRange.EndDate,
-                            projectLotRange.LotNo
+                            projectLotRange.LotNo,
+                            status = projectLotRange.Status
                         }
                     });
                 }
@@ -153,5 +237,6 @@ namespace Tools.Controllers
         public string StartDate { get; set; }  // String format "DD-MM-YYYY"
         public string EndDate { get; set; }    // String format "DD-MM-YYYY"
         public int LotNo { get; set; }
+        public bool? Status { get; set; }
     }
 }

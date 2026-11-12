@@ -10,5 +10,6 @@ namespace Tools.Models
         public string RptParserService { get; set; }
         public string RptServiceUrl { get; set; }
         public string DispatchApiUrl { get; set; }
+        public string? ErpCatchDetailsSyncUrl { get; set; }
     }
 }

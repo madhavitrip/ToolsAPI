@@ -96,6 +96,9 @@ namespace Tools.Controllers
                 config.RoundOffBeforeEnhancement,
                 config.UseCustomCatchSerial,
                 config.CustomCatchSerials,
+                config.BoxBreakingCriteriaForUniExtra,
+                config.BoxBreakingCriteriaForOffcExtra,
+                config.BoxBreakingCriteriaForNodalExtra,
 
                 DuplicateRemoveFields = MapFields(config.DuplicateRemoveFields),
                 SortingBoxReport = MapFields(config.SortingBoxReport),
@@ -136,42 +139,8 @@ namespace Tools.Controllers
                 return BadRequest();
             }
 
-            // Authorization check based on role
-            int userRoleId = LogHelper.GetUserRoleId(User, Request);
             int userId = LogHelper.GetTriggeredBy(User);
             int projectId = projectConfig.ProjectId;
-
-            // RoleId 1, 2, 3 (Developer, Admin, Head) have global access
-            if (userRoleId == 1 || userRoleId == 2 || userRoleId == 3)
-            {
-                // Full access - proceed
-            }
-            // RoleId 4 (Manager) can only edit assigned projects
-            else if (userRoleId == 4)
-            {
-                // Get the project to check if manager is assigned
-                var project = await _context.Projects.FirstOrDefaultAsync(p => p.ProjectId == projectId);
-                if (project == null || !project.UserAssigned.Contains(userId))
-                {
-                    await _loggerService.LogEventAsync(
-                        $"AUTHORIZATION DENIED: Manager (RoleId 4, UserId {userId}) attempted to edit ProjectConfig for ProjectId {projectId}",
-                        "ProjectConfig",
-                        userId,
-                        projectId
-                    );
-                    return StatusCode(403, new { message = "You are not authorized to edit configuration for this project." });
-                }
-            }
-            else
-            {
-                await _loggerService.LogEventAsync(
-                    $"AUTHORIZATION DENIED: User with RoleId {userRoleId} attempted to edit ProjectConfig",
-                    "ProjectConfig",
-                    userId,
-                    projectId
-                );
-                return StatusCode(403, new { message = "You are not authorized to edit project configurations." });
-            }
 
             _context.Entry(projectConfig).State = EntityState.Modified;
 
@@ -358,42 +327,8 @@ namespace Tools.Controllers
                     return NotFound();
                 }
 
-                // Authorization check based on role
-                int userRoleId = LogHelper.GetUserRoleId(User, Request);
                 int userId = LogHelper.GetTriggeredBy(User);
                 int projectId = projectConfig.ProjectId;
-
-                // RoleId 1, 2, 3 (Developer, Admin, Head) have global access
-                if (userRoleId == 1 || userRoleId == 2 || userRoleId == 3)
-                {
-                    // Full access - proceed
-                }
-                // RoleId 4 (Manager) can only delete for assigned projects
-                else if (userRoleId == 4)
-                {
-                    // Get the project to check if manager is assigned
-                    var project = await _context.Projects.FirstOrDefaultAsync(p => p.ProjectId == projectId);
-                    if (project == null || !project.UserAssigned.Contains(userId))
-                    {
-                        await _loggerService.LogEventAsync(
-                            $"AUTHORIZATION DENIED: Manager (RoleId 4, UserId {userId}) attempted to delete ProjectConfig for ProjectId {projectId}",
-                            "ProjectConfig",
-                            userId,
-                            projectId
-                        );
-                        return StatusCode(403, new { message = "You are not authorized to delete configuration for this project." });
-                    }
-                }
-                else
-                {
-                    await _loggerService.LogEventAsync(
-                        $"AUTHORIZATION DENIED: User with RoleId {userRoleId} attempted to delete ProjectConfig",
-                        "ProjectConfig",
-                        userId,
-                        projectId
-                    );
-                    return StatusCode(403, new { message = "You are not authorized to delete project configurations." });
-                }
 
                 _context.ProjectConfigs.Remove(projectConfig);
                 await _context.SaveChangesAsync();
@@ -530,7 +465,8 @@ namespace Tools.Controllers
             // Module 2 = Enhancement / Envelope Setup (Step 1)
             if (oldConfig.Enhancement != newConfig.Enhancement ||
                 oldConfig.RoundOffBeforeEnhancement != newConfig.RoundOffBeforeEnhancement ||
-                oldConfig.Envelope != newConfig.Envelope)
+                oldConfig.Envelope != newConfig.Envelope ||
+                !AreIntListsEqual(oldConfig.HeaderVerificationFields, newConfig.HeaderVerificationFields))
             {
                 resetStep = Math.Max(resetStep, 1); // STEP_DUP_PARTIAL
             }
@@ -548,7 +484,9 @@ namespace Tools.Controllers
                 oldConfig.OmrSerialNumber != newConfig.OmrSerialNumber ||
                 oldConfig.BookletSerialNumber != newConfig.BookletSerialNumber ||
                 oldConfig.ResetOmrSerialOnCatchChange != newConfig.ResetOmrSerialOnCatchChange ||
-                oldConfig.ResetBookletSerialOnCatchChange != newConfig.ResetBookletSerialOnCatchChange)
+                oldConfig.ResetBookletSerialOnCatchChange != newConfig.ResetBookletSerialOnCatchChange ||
+                oldConfig.UseCustomCatchSerial != newConfig.UseCustomCatchSerial ||
+                oldConfig.CustomCatchSerials != newConfig.CustomCatchSerials)
             {
                 resetStep = Math.Max(resetStep, 4); // STEP_ENHANCEMENT
             }
@@ -583,7 +521,10 @@ namespace Tools.Controllers
                 !AreIntListsEqual(oldConfig.BoxBreakingCriteria, newConfig.BoxBreakingCriteria) ||
                 !AreIntListsEqual(oldConfig.SortingBoxReport, newConfig.SortingBoxReport) ||
                 oldConfig.IsInnerBundlingDone != newConfig.IsInnerBundlingDone ||
-                !AreIntListsEqual(oldConfig.InnerBundlingCriteria, newConfig.InnerBundlingCriteria))
+                !AreIntListsEqual(oldConfig.InnerBundlingCriteria, newConfig.InnerBundlingCriteria) ||
+                !AreIntListsEqual(oldConfig.BoxBreakingCriteriaForNodalExtra, newConfig.BoxBreakingCriteriaForNodalExtra) ||
+                !AreIntListsEqual(oldConfig.BoxBreakingCriteriaForUniExtra, newConfig.BoxBreakingCriteriaForUniExtra) ||
+                !AreIntListsEqual(oldConfig.BoxBreakingCriteriaForOffcExtra, newConfig.BoxBreakingCriteriaForOffcExtra))
             {
                 resetStep = Math.Max(resetStep, 5); // STEP_AWAITING_ENV
             }

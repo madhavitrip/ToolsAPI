@@ -107,6 +107,7 @@ builder.Services.AddHttpClient("RptService")
     });
 
 builder.Services.AddHttpClient<IDispatchService, DispatchService>();
+builder.Services.AddHttpClient<IErpSyncService, ErpSyncService>();
 builder.Services.AddControllers(options =>
 {
     options.Filters.Add<ApiAuditLoggingFilter>();

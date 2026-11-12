@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 
@@ -22,5 +22,7 @@ namespace Tools.Models
 
         [Required]
         public int LotNo { get; set; }
+
+        public bool Status { get; set; } = true;
     }
 }

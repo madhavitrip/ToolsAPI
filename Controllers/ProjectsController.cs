@@ -366,24 +366,6 @@ namespace Tools.Controllers
                 return BadRequest();
             }
 
-            // Authorization check: Managers (RoleId 4) can only edit their assigned projects
-            int userRoleId = LogHelper.GetUserRoleId(User, Request);
-            if (userRoleId == 4)
-            {
-                int userId = LogHelper.GetTriggeredBy(User);
-                // Check if the manager is assigned to this project
-                if (!project.UserAssigned.Contains(userId))
-                {
-                    await _loggerService.LogEventAsync(
-                        $"AUTHORIZATION DENIED: Manager (RoleId 4, UserId {userId}) attempted to edit Project ID {id} they are not assigned to",
-                        "Projects",
-                        userId,
-                        project.ProjectId
-                    );
-                    return StatusCode(403, new { message = "You are not authorized to edit this project. You can only edit projects assigned to you." });
-                }
-            }
-
             _context.Entry(project).State = EntityState.Modified;
 
             try

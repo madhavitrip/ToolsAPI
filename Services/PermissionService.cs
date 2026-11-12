@@ -90,14 +90,7 @@ namespace Tools.Services
         {
             if (userId <= 0) return false;
 
-            // 1. Project-level boundary check
-            if (projectId > 0)
-            {
-                var projectAuthorized = await CheckProjectAssignmentAsync(userId, projectId, request);
-                if (!projectAuthorized) return false;
-            }
-
-            // 2. Compute effective permissions (cached)
+            // Compute effective permissions (cached)
             var perms = await GetUserPermissionsAsync(userId, request);
 
             // Fail-safe: Always allow Lead Developer (Role 1) to access and manage the Roles & Permissions module

@@ -69,21 +69,20 @@ namespace Tools.Middleware
                 return;
             }
 
-            // Extract projectId if available in arguments or query
+            // Extract projectId if available in arguments, query, or route
             int projectId = 0;
-            if (context.ActionArguments.TryGetValue("projectId", out var pIdObj) && pIdObj is int pId)
+            var matchedArg = context.ActionArguments.FirstOrDefault(kvp => string.Equals(kvp.Key, "projectId", StringComparison.OrdinalIgnoreCase));
+            if (matchedArg.Value is int pId)
             {
                 projectId = pId;
-            }
-            else if (context.ActionArguments.TryGetValue("id", out var idObj) && idObj is int id && 
-                     (string.Equals(ModuleCode, ModuleCodes.MasterProject, StringComparison.OrdinalIgnoreCase) ||
-                      string.Equals(ModuleCode, ModuleCodes.ProjectConfig, StringComparison.OrdinalIgnoreCase)))
-            {
-                projectId = id;
             }
             else if (httpContext.Request.Query.TryGetValue("projectId", out var qpId) && int.TryParse(qpId, out int qpIdVal))
             {
                 projectId = qpIdVal;
+            }
+            else if (context.RouteData.Values.TryGetValue("projectId", out var rpId) && int.TryParse(rpId?.ToString(), out int rpIdVal))
+            {
+                projectId = rpIdVal;
             }
             else
             {
@@ -91,8 +90,8 @@ namespace Tools.Middleware
                 foreach (var arg in context.ActionArguments.Values)
                 {
                     if (arg == null) continue;
-                    var prop = arg.GetType().GetProperty("ProjectId");
-                    if (prop != null && prop.PropertyType == typeof(int))
+                    var prop = arg.GetType().GetProperty("ProjectId", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.IgnoreCase);
+                    if (prop != null && (prop.PropertyType == typeof(int) || prop.PropertyType == typeof(int?)))
                     {
                         var val = (int?)prop.GetValue(arg);
                         if (val.HasValue && val.Value > 0)

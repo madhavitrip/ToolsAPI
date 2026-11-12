@@ -885,6 +885,14 @@ namespace Tools.Controllers
                 return NotFound("Selected catch numbers were not found for this project.");
             }
 
+            foreach (var r in selectedRows)
+            {
+                if (await _dispatchService.IsLotDispatchedAsync(ProjectId, r.LotNo))
+                {
+                    return BadRequest($"Lot {r.LotNo} has exceeded its dispatch date and is read-only. Merging catches from a dispatched lot is not allowed.");
+                }
+            }
+
             var selectedCatchNos = selectedRows
                 .Select(item => NormalizeText(item.CatchNo))
                 .Where(value => !string.IsNullOrWhiteSpace(value))
@@ -1401,6 +1409,11 @@ namespace Tools.Controllers
                     return BadRequest("The selected record does not belong to the selected lot.");
                 }
 
+                if (await _dispatchService.IsLotDispatchedAsync(existingRecord.ProjectId, existingRecord.LotNo))
+                {
+                    return BadRequest(new { message = $"Lot {existingRecord.LotNo} has exceeded its dispatch date and is read-only. Modifications are not allowed." });
+                }
+
                 // =====================
                 // OLD VALUES
                 // =====================
@@ -1552,6 +1565,10 @@ namespace Tools.Controllers
                 var boxFieldIds = new List<int>();
 
                 boxFieldIds.AddRange(config.BoxBreakingCriteria ?? new List<int>());
+                boxFieldIds.AddRange(config.BoxBreakingCriteriaForNodalExtra ?? new List<int>());
+                boxFieldIds.AddRange(config.BoxBreakingCriteriaForUniExtra ?? new List<int>());
+                boxFieldIds.AddRange(config.BoxBreakingCriteriaForOffcExtra ?? new List<int>());
+                boxFieldIds.AddRange(config.HeaderVerificationFields ?? new List<int>());
                 boxFieldIds.AddRange(config.SortingBoxReport ?? new List<int>());
                 boxFieldIds.AddRange(config.InnerBundlingCriteria ?? new List<int>());
                 boxFieldIds.AddRange(config.DuplicateRemoveFields ?? new List<int>());
@@ -1949,6 +1966,14 @@ namespace Tools.Controllers
                     return NotFound($"No active NRData records found for catch {catchNo}");
                 }
 
+                foreach (var r in records)
+                {
+                    if (await _dispatchService.IsLotDispatchedAsync(r.ProjectId, r.LotNo))
+                    {
+                        return BadRequest(new { message = $"Lot {r.LotNo} has exceeded its dispatch date and is read-only. Modifications are not allowed." });
+                    }
+                }
+
                 var firstRecord = records.First();
                 var existingRecord = firstRecord;
                 projectId = firstRecord.ProjectId;
@@ -2095,6 +2120,10 @@ namespace Tools.Controllers
 
                 var boxFieldIds = new List<int>();
                 boxFieldIds.AddRange(config.BoxBreakingCriteria ?? new List<int>());
+                boxFieldIds.AddRange(config.BoxBreakingCriteriaForNodalExtra ?? new List<int>());
+                boxFieldIds.AddRange(config.BoxBreakingCriteriaForUniExtra ?? new List<int>());
+                boxFieldIds.AddRange(config.BoxBreakingCriteriaForOffcExtra ?? new List<int>());
+                boxFieldIds.AddRange(config.HeaderVerificationFields ?? new List<int>());
                 boxFieldIds.AddRange(config.SortingBoxReport ?? new List<int>());
                 boxFieldIds.AddRange(config.InnerBundlingCriteria ?? new List<int>());
                 boxFieldIds.AddRange(config.DuplicateRemoveFields ?? new List<int>());
@@ -2213,6 +2242,14 @@ namespace Tools.Controllers
 
             if (!nr1Records.Any())
                 return NotFound($"No active NrData1 records found for catch {catchNo}");
+
+            foreach (var r in nr1Records)
+            {
+                if (await _dispatchService.IsLotDispatchedAsync(r.ProjectId, r.LotNo))
+                {
+                    return BadRequest(new { message = $"Lot {r.LotNo} has exceeded its dispatch date and is read-only. Modifications are not allowed." });
+                }
+            }
 
             var firstRecord = nr1Records.First();
             if (projectId == 0) projectId = firstRecord.ProjectId;
@@ -2405,6 +2442,10 @@ namespace Tools.Controllers
             if (config != null)
             {
                 boxFieldIds.AddRange(config.BoxBreakingCriteria ?? new List<int>());
+                boxFieldIds.AddRange(config.BoxBreakingCriteriaForNodalExtra ?? new List<int>());
+                boxFieldIds.AddRange(config.BoxBreakingCriteriaForUniExtra ?? new List<int>());
+                boxFieldIds.AddRange(config.BoxBreakingCriteriaForOffcExtra ?? new List<int>());
+                boxFieldIds.AddRange(config.HeaderVerificationFields ?? new List<int>());
                 boxFieldIds.AddRange(config.SortingBoxReport ?? new List<int>());
                 boxFieldIds.AddRange(config.InnerBundlingCriteria ?? new List<int>());
                 boxFieldIds.AddRange(config.DuplicateRemoveFields ?? new List<int>());
@@ -3140,6 +3181,12 @@ namespace Tools.Controllers
                 fieldIds.AddRange(projectConfig.DuplicateCriteria ?? new List<int>());
                 fieldIds.AddRange(projectConfig.EnvelopeMakingCriteria ?? new List<int>());
                 fieldIds.AddRange(projectConfig.BoxBreakingCriteria ?? new List<int>());
+                fieldIds.AddRange(projectConfig.BoxBreakingCriteriaForNodalExtra ?? new List<int>());
+                fieldIds.AddRange(projectConfig.BoxBreakingCriteriaForUniExtra ?? new List<int>());
+                fieldIds.AddRange(projectConfig.BoxBreakingCriteriaForOffcExtra ?? new List<int>());
+                fieldIds.AddRange(projectConfig.HeaderVerificationFields ?? new List<int>());
+                fieldIds.AddRange(projectConfig.SortingBoxReport ?? new List<int>());
+                fieldIds.AddRange(projectConfig.DuplicateRemoveFields ?? new List<int>());
                 fieldIds.AddRange(projectConfig.InnerBundlingCriteria ?? new List<int>());
             }
 
@@ -4888,6 +4935,15 @@ namespace Tools.Controllers
 
                     if (projectRowsNr1.Any())
                     {
+                        var affectedLotsNr1 = projectRowsNr1.Select(x => x.LotNo).Distinct().ToList();
+                        foreach (var l in affectedLotsNr1)
+                        {
+                            if (await _dispatchService.IsLotDispatchedAsync(request.ProjectId, l))
+                            {
+                                return BadRequest($"Cannot save missing data. Lot {l} has already been dispatched and cannot be modified.");
+                            }
+                        }
+
                         var nr1ById = projectRowsNr1.ToDictionary(x => x.Id);
                         var nr1ByCatch = projectRowsNr1
                             .GroupBy(x => x.CatchNo!, StringComparer.OrdinalIgnoreCase)
@@ -5083,6 +5139,15 @@ namespace Tools.Controllers
 
                     if (projectRows.Any())
                     {
+                        var affectedLots = projectRows.Select(x => x.LotNo).Distinct().ToList();
+                        foreach (var l in affectedLots)
+                        {
+                            if (await _dispatchService.IsLotDispatchedAsync(request.ProjectId, l))
+                            {
+                                return BadRequest($"Cannot save missing data. Lot {l} has already been dispatched and cannot be modified.");
+                            }
+                        }
+
                         var rowById = projectRows.ToDictionary(x => x.Id);
                         var rowByCatch = projectRows
                             .GroupBy(x => x.CatchNo!, StringComparer.OrdinalIgnoreCase)
@@ -5835,6 +5900,17 @@ namespace Tools.Controllers
                         var center = await _context.CenterList.FindAsync(id);
                         if (center != null)
                         {
+                            var parentNr = await _context.NrData1.FindAsync(center.NRDataId);
+                            int centerLot = parentNr?.LotNo ?? 0;
+                            if (centerLot == 0)
+                            {
+                                var parentLegacy = await _context.NRDatas.FindAsync(center.NRDataId);
+                                centerLot = parentLegacy?.LotNo ?? 0;
+                            }
+                            if (centerLot > 0 && await _dispatchService.IsLotDispatchedAsync(center.ProjectId, centerLot))
+                            {
+                                return BadRequest($"Lot {centerLot} has exceeded its dispatch date and is read-only. Deletion is not allowed.");
+                            }
                             center.Status = false;
                             _context.CenterList.Update(center);
                             await _context.SaveChangesAsync();
@@ -5842,6 +5918,11 @@ namespace Tools.Controllers
                             return NoContent();
                         }
                         return NotFound();
+                    }
+
+                    if (await _dispatchService.IsLotDispatchedAsync(nr1Data.ProjectId, nr1Data.LotNo))
+                    {
+                        return BadRequest($"Lot {nr1Data.LotNo} has exceeded its dispatch date and is read-only. Deletion is not allowed.");
                     }
 
                     var pId = nr1Data.ProjectId;
@@ -5860,6 +5941,11 @@ namespace Tools.Controllers
                     await _context.SaveChangesAsync();
                     await _loggerService.LogEventAsync($"Soft deleted NrData1 of {id} and referencing CenterList", "NrData1", LogHelper.GetTriggeredBy(User), pId);
                     return NoContent();
+                }
+
+                if (await _dispatchService.IsLotDispatchedAsync(nRData.ProjectId, nRData.LotNo))
+                {
+                    return BadRequest($"Lot {nRData.LotNo} has exceeded its dispatch date and is read-only. Deletion is not allowed.");
                 }
 
                 var projectId = nRData.ProjectId;
@@ -5927,6 +6013,28 @@ namespace Tools.Controllers
             try
             {
                 var isNewModel = await _context.NrData1.AnyAsync(p => p.ProjectId == ProjectId);
+
+                if (lotNo.HasValue)
+                {
+                    if (await _dispatchService.IsLotDispatchedAsync(ProjectId, lotNo.Value))
+                    {
+                        return BadRequest($"Lot {lotNo.Value} has exceeded its dispatch date and is read-only. Deletion is not allowed.");
+                    }
+                }
+                else
+                {
+                    var lots = isNewModel
+                        ? await _context.NrData1.Where(d => d.ProjectId == ProjectId && d.Status).Select(d => d.LotNo).Distinct().ToListAsync()
+                        : await _context.NRDatas.Where(d => d.ProjectId == ProjectId && d.Status).Select(d => d.LotNo).Distinct().ToListAsync();
+                    foreach (var lot in lots)
+                    {
+                        if (await _dispatchService.IsLotDispatchedAsync(ProjectId, lot))
+                        {
+                            return BadRequest($"Lot {lot} has exceeded its dispatch date and is read-only. Deleting project data containing dispatched lots is not allowed.");
+                        }
+                    }
+                }
+
                 var nrDataList = new List<NRData>();
                 var nrData1List = new List<NrData1>();
                 var nrDataIds = new List<int>();
@@ -7177,6 +7285,14 @@ namespace Tools.Controllers
                     if (!nr1List.Any())
                         return NotFound($"Catch number {catchNo} not found for project {projectId}");
 
+                    foreach (var item in nr1List)
+                    {
+                        if (await _dispatchService.IsLotDispatchedAsync(projectId, item.LotNo))
+                        {
+                            return BadRequest($"Lot {item.LotNo} has exceeded its dispatch date and is read-only. Deleting catch {catchNo} is not allowed.");
+                        }
+                    }
+
                     var nr1Ids = nr1List.Select(n => n.Id).ToList();
 
                     // Soft delete NrData1
@@ -7225,6 +7341,14 @@ namespace Tools.Controllers
 
                 if (!allNrDataForCatch.Any())
                     return NotFound($"Catch number {catchNo} not found for project {projectId}");
+
+                foreach (var item in allNrDataForCatch)
+                {
+                    if (await _dispatchService.IsLotDispatchedAsync(projectId, item.LotNo))
+                    {
+                        return BadRequest($"Lot {item.LotNo} has exceeded its dispatch date and is read-only. Deleting catch {catchNo} is not allowed.");
+                    }
+                }
 
                 // 🔹 Active step check
                 var activeSteps = Tools.Models.PipelineNavigator.GetEligiblePickupSteps(

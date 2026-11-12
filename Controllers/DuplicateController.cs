@@ -501,7 +501,7 @@ WHERE ProjectId = {0};", ProjectId);
                 {
                     Console.WriteLine("Envelope breaking is called");
                     var envelopeController = new EnvelopeBreakagesController(_context, _logger, _apiSettingsOptions, _dispatchService);
-                     await envelopeController.EnvelopeConfiguration(ProjectId, bypassDispatch: true);
+                    await envelopeController.EnvelopeConfiguration(ProjectId);
                 }
                 catch (Exception ex)
                 {

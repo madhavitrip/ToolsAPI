@@ -50,56 +50,50 @@ namespace Tools.Controllers
 
                 if (!skipReset) await ResetReportStatus(ProjectId);
 
-                // ✅ STEP 0: Validate dispatch status (mandatory backend validation unless bypassed)
-                // Allow a global bypass via environment variable `BYPASS_DISPATCH_CHECK=true`
-                // Temporarily ignore dispatch date checks (force bypass for now)
-                var globalBypass = (Environment.GetEnvironmentVariable("BYPASS_DISPATCH_CHECK") ?? "").ToLowerInvariant() == "true";
-                var dispatchBypassEffective = true;
-
-                if (!dispatchBypassEffective)
+                // ✅ STEP 0: Validate dispatch status and update ProjectLotRanges status=0 if dispatched
+                List<int> inactiveLots = new List<int>();
+                if (lotNo.HasValue && lotNo.Value > 0)
                 {
-                    List<int> lotsToCheck = new List<int>();
-                    if (lotNo.HasValue)
+                    var isDispatched = await _dispatchService.SyncAndValidateLotDispatchStatusAsync(ProjectId, lotNo.Value);
+                    if (isDispatched)
                     {
-                        lotsToCheck.Add(lotNo.Value);
-                    }
-                    else if (!string.IsNullOrEmpty(catchNo))
-                    {
-                        var lot = await _context.NRDatas
-                            .Where(p => p.ProjectId == ProjectId && p.CatchNo == catchNo && p.Batch == (batchNo ?? 1))
-                            .Select(p => p.LotNo)
-                            .FirstOrDefaultAsync();
-                        if (lot != 0) lotsToCheck.Add(lot);
-                    }
-                    else
-                    {
-                        lotsToCheck = await _context.NRDatas
-                            .Where(p => p.ProjectId == ProjectId && p.Status == true && p.Batch == (batchNo ?? 1))
-                            .Select(p => p.LotNo)
-                            .Distinct()
-                            .ToListAsync();
-                    }
-
-                    if (lotsToCheck.Any())
-                    {
-                        var dispatchInfoDict = await _dispatchService.GetDispatchDatesAsync(ProjectId, lotsToCheck);
-                        var dispatchedLots = dispatchInfoDict.Where(d => d.Value.IsDispatched).ToList();
-
-                        if (dispatchedLots.Any())
+                        return BadRequest(new
                         {
-                            var dispatchedLotNumbers = string.Join(", ", dispatchedLots.Select(d => d.Key));
-                            //return BadRequest(new
-                            //{
-                            //    error = $"Lot(s) {dispatchedLotNumbers} already dispatched. Envelope Breaking not allowed.",
-                            //    dispatchedLots = dispatchedLots.Select(d => new
-                            //    {
-                            //        lotNo = d.Key,
-                            //        dispatchDate = d.Value.DispatchDate
-                            //    })
-                            //});
+                            error = $"Lot {lotNo.Value} already exceeded dispatch date / dispatched and is read-only. Envelope Breaking not allowed.",
+                            dispatchedLots = new List<int> { lotNo.Value }
+                        });
+                    }
+                }
+                else if (!string.IsNullOrEmpty(catchNo))
+                {
+                    var lot = await _context.NRDatas
+                        .Where(p => p.ProjectId == ProjectId && p.CatchNo == catchNo && p.Batch == (batchNo ?? 1))
+                        .Select(p => p.LotNo)
+                        .FirstOrDefaultAsync();
+                    if (lot != 0)
+                    {
+                        var isDispatched = await _dispatchService.SyncAndValidateLotDispatchStatusAsync(ProjectId, lot);
+                        if (isDispatched)
+                        {
+                            return BadRequest(new
+                            {
+                                error = $"Lot {lot} for catch {catchNo} already exceeded dispatch date / dispatched and is read-only. Envelope Breaking not allowed.",
+                                dispatchedLots = new List<int> { lot }
+                            });
                         }
                     }
                 }
+                else
+                {
+                    // Running for all lots: sync dispatch statuses and fetch only active lots (status=1 in ProjectLotRanges)
+                    await _dispatchService.SyncDispatchedLotRangesForProjectAsync(ProjectId);
+                    inactiveLots = await _context.ProjectLotRanges
+                        .AsNoTracking()
+                        .Where(r => r.ProjectId == ProjectId && !r.Status)
+                        .Select(r => r.LotNo)
+                        .ToListAsync();
+                }
+
                 var envCaps = await _context.EnvelopesTypes
                     .Select(e => new { e.EnvelopeName, e.Capacity })
                     .ToListAsync();
@@ -111,6 +105,7 @@ namespace Tools.Controllers
 
                 if (lotNo.HasValue) nrQuery = nrQuery.Where(p => p.LotNo == lotNo.Value);
                 if (!string.IsNullOrEmpty(catchNo)) nrQuery = nrQuery.Where(p => p.CatchNo == catchNo);
+                if (inactiveLots.Any()) nrQuery = nrQuery.Where(p => !inactiveLots.Contains(p.LotNo));
 
                 var nrData = await nrQuery
                     .OrderBy(p => p.CatchNo)
@@ -1760,6 +1755,50 @@ namespace Tools.Controllers
             {
                 if (!skipReset) await ResetReportStatus(ProjectId);
 
+                // ✅ STEP 0: Validate dispatch status and update ProjectLotRanges status=0 if dispatched
+                List<int> inactiveLots = new List<int>();
+                if (lotNo.HasValue && lotNo.Value > 0)
+                {
+                    var isDispatched = await _dispatchService.SyncAndValidateLotDispatchStatusAsync(ProjectId, lotNo.Value);
+                    if (isDispatched)
+                    {
+                        return BadRequest(new
+                        {
+                            error = $"Lot {lotNo.Value} already exceeded dispatch date / dispatched and is read-only. Envelope Breaking not allowed.",
+                            dispatchedLots = new List<int> { lotNo.Value }
+                        });
+                    }
+                }
+                else if (!string.IsNullOrEmpty(catchNo))
+                {
+                    var lot = await _context.NrData1
+                        .Where(p => p.ProjectId == ProjectId && p.CatchNo == catchNo && p.Batch == (batchNo ?? 1))
+                        .Select(p => p.LotNo)
+                        .FirstOrDefaultAsync();
+                    if (lot != 0)
+                    {
+                        var isDispatched = await _dispatchService.SyncAndValidateLotDispatchStatusAsync(ProjectId, lot);
+                        if (isDispatched)
+                        {
+                            return BadRequest(new
+                            {
+                                error = $"Lot {lot} for catch {catchNo} already exceeded dispatch date / dispatched and is read-only. Envelope Breaking not allowed.",
+                                dispatchedLots = new List<int> { lot }
+                            });
+                        }
+                    }
+                }
+                else
+                {
+                    // Running for all lots: sync dispatch statuses and fetch only active lots (status=1 in ProjectLotRanges)
+                    await _dispatchService.SyncDispatchedLotRangesForProjectAsync(ProjectId);
+                    inactiveLots = await _context.ProjectLotRanges
+                        .AsNoTracking()
+                        .Where(r => r.ProjectId == ProjectId && !r.Status)
+                        .Select(r => r.LotNo)
+                        .ToListAsync();
+                }
+
                 var envCaps = await _context.EnvelopesTypes
                     .Select(e => new { e.EnvelopeName, e.Capacity })
                     .ToListAsync();
@@ -1774,6 +1813,8 @@ namespace Tools.Controllers
                     nrQuery = nrQuery.Where(p => p.LotNo == lotNo.Value || p.EnvLotNo == lotNo.Value);
                 if (!string.IsNullOrEmpty(catchNo))
                     nrQuery = nrQuery.Where(p => p.CatchNo == catchNo);
+                if (inactiveLots.Any())
+                    nrQuery = nrQuery.Where(p => !inactiveLots.Contains(p.LotNo));
 
                 var nrDataList = await nrQuery
                     .OrderBy(p => p.CatchNo)

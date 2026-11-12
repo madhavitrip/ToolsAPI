@@ -187,14 +187,34 @@ namespace Tools.Controllers
 
                 if (extra.Any())
                 {
-
                     var projectId = extrasConfiguration.ProjectId;
-                   
+
+                    bool hasChanged = extra.Any(old =>
+                        old.Mode != extrasConfiguration.Mode ||
+                        old.Value != extrasConfiguration.Value ||
+                        old.IsExtraProcessingAsPerNR != extrasConfiguration.IsExtraProcessingAsPerNR ||
+                        old.AttachExtraForEachCatchForAllNodal != extrasConfiguration.AttachExtraForEachCatchForAllNodal ||
+                        old.nodalValue != extrasConfiguration.nodalValue ||
+                        old.RangeConfig != extrasConfiguration.RangeConfig ||
+                        old.EnvelopeType != extrasConfiguration.EnvelopeType
+                    );
+
                     _context.ExtraConfigurations.RemoveRange(extra);
                     await _context.SaveChangesAsync();
                     Console.WriteLine($" Deleted {extra.Count} old ExtrasConfiguration record(s) for ProjectId {projectId}");
                     await _loggerService.LogEventAsync($"Deleted {projectId} old ExtrasConfiguration record(s)",
                   "ExtrasConfiguration", LogHelper.GetTriggeredBy(User), extrasConfiguration.ProjectId);
+
+                    if (hasChanged)
+                    {
+                        const int resetStep = PipelineNavigator.STEP_ENV_BREAKING; // Step 3
+                        await _context.NRDatas
+                            .Where(x => x.ProjectId == projectId && x.Status == true && x.Steps > resetStep)
+                            .ExecuteUpdateAsync(s => s.SetProperty(x => x.Steps, resetStep));
+                        await _context.NrData1
+                            .Where(x => x.ProjectId == projectId && x.Status == true && x.Steps > resetStep)
+                            .ExecuteUpdateAsync(s => s.SetProperty(x => x.Steps, resetStep));
+                    }
                 }
 
 

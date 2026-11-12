@@ -246,6 +246,20 @@ namespace Tools.Controllers
                 };
             }
 
+            if (role.Id == 1 || string.Equals(role.RoleName, "Developer", StringComparison.OrdinalIgnoreCase))
+            {
+                // Administrative fail-safe: Developer always retains full access to Roles & Permissions Admin
+                map[ModuleCodes.RolesPermissions] = new ModuleActionFlags
+                {
+                    CanView = true,
+                    CanCreate = true,
+                    CanEdit = true,
+                    CanDelete = true,
+                    CanExecute = true,
+                    CanExport = true
+                };
+            }
+
             role.PermissionsJson = JsonSerializer.Serialize(map);
             role.UpdatedAt = DateTime.Now;
 
