@@ -450,7 +450,23 @@ namespace Tools.Controllers
                         if (int.TryParse(digits, out int parsedValue) && parsedValue > 0)
                             envelopeSize = parsedValue;
                     }
+                    else if (outerParts.Length > 1)
+                    {
+                        // Multi-denomination outer packaging: parse all valid denominations and select the minimum as the base envelope chunk size
+                        var parsedSizes = new List<int>();
+                        foreach (var part in outerParts)
+                        {
+                            string digits = new string(part.Trim().Where(char.IsDigit).ToArray());
+                            if (int.TryParse(digits, out int val) && val > 0)
+                                parsedSizes.Add(val);
+                        }
+                        if (parsedSizes.Count > 0)
+                            envelopeSize = parsedSizes.Min();
+                    }
                 }
+
+                // If still not resolved or 0, fallback to standard minimum outer envelope size of 10
+               
 
                 await _loggerService.LogEventAsync($"Starting main box breaking loop with envelope size {envelopeSize} in {sw.ElapsedMilliseconds}ms", "BoxBreakingProcessing", 0, ProjectId);
 
@@ -637,7 +653,7 @@ namespace Tools.Controllers
 
                         if (overflow)
                         {
-                            if (envelopeSize < 50 && envelopeSize > 0)
+                            if (envelopeSize > 0)
                             {
                                 int pagesPerUnit = pages;
                                 int remainingQty = (int)itemDict["Quantity"];
