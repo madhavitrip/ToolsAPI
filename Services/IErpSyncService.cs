@@ -15,6 +15,31 @@ namespace Tools.Services
         public Dictionary<string, int> OuterEnvelopeBreakdown { get; set; } = new();
         public string? CourseName { get; set; }
         public string? SubjectName { get; set; }
+        public string? ExamDate { get; set; }
+        public string? ExamTime { get; set; }
+        public int? CourseId { get; set; }
+        public int? SubjectId { get; set; }
+    }
+
+    public class ErpQuantitySheetPayloadItem
+    {
+        public int ProjectId { get; set; }
+        public string LotNo { get; set; } = string.Empty;
+        public string CatchNo { get; set; } = string.Empty;
+        public double Quantity { get; set; }
+        public int Pages { get; set; }
+        public string? InnerEnvelope { get; set; }
+        public int? OuterEnvelope { get; set; }
+        public string? ExamDate { get; set; }
+        public string? ExamTime { get; set; }
+        public int? TTFStatus { get; set; }
+        public int CourseId { get; set; }
+        public int SubjectId { get; set; }
+        public int ExamTypeId { get; set; }
+        public int Status { get; set; } = 1;
+        public string? PaperTitle { get; set; }
+        public string? PaperNumber { get; set; }
+        public int QPId { get; set; }
     }
 
     public class ErpLotCatchesPayloadDto

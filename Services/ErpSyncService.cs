@@ -1,3 +1,7 @@
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
+using Microsoft.IdentityModel.Tokens;
+using System.Text;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -68,7 +72,8 @@ namespace Tools.Services
                                    nr.Pages,
                                    nr.CourseName,
                                    nr.SubjectName,
-                                   nr.ExamDate
+                                   nr.ExamDate,
+                                   nr.ExamTime
                                };
 
                 var nr1Records = await nr1Query.ToListAsync();
@@ -109,6 +114,8 @@ namespace Tools.Services
                     int maxPages = grp.Max(x => x.Pages);
                     string? courseName = grp.FirstOrDefault(x => !string.IsNullOrWhiteSpace(x.CourseName))?.CourseName;
                     string? subjectName = grp.FirstOrDefault(x => !string.IsNullOrWhiteSpace(x.SubjectName))?.SubjectName;
+                    string? examDate = grp.FirstOrDefault(x => !string.IsNullOrWhiteSpace(x.ExamDate))?.ExamDate;
+                    string? examTime = grp.FirstOrDefault(x => !string.IsNullOrWhiteSpace(x.ExamTime))?.ExamTime;
 
                     int catchTotalQty = 0;
                     var innerAgg = new Dictionary<string, int>();
@@ -141,7 +148,9 @@ namespace Tools.Services
                         InnerEnvelopeBreakdown = innerAgg,
                         OuterEnvelopeBreakdown = outerAgg,
                         CourseName = courseName,
-                        SubjectName = subjectName
+                        SubjectName = subjectName,
+                        ExamDate = examDate,
+                        ExamTime = examTime
                     });
                 }
             }
@@ -206,7 +215,9 @@ namespace Tools.Services
                         InnerEnvelopeBreakdown = innerAgg,
                         OuterEnvelopeBreakdown = outerAgg,
                         CourseName = firstRow.CourseName,
-                        SubjectName = firstRow.SubjectName
+                        SubjectName = firstRow.SubjectName,
+                        ExamDate = firstRow.ExamDate,
+                        ExamTime = firstRow.ExamTime
                     });
                 }
             }
@@ -406,11 +417,427 @@ namespace Tools.Services
 
             try
             {
-                var response = await _httpClient.PostAsJsonAsync(erpUrl, payload);
+                // Generate SSO JWT token to authenticate with ERP
+                var jwtSecret = _configuration["JwtSettings:SecretKey"] ?? _configuration["Jwt:SecretKey"] ?? "your-secret-key-of-at-least-32-characters-length-for-256-bits";
+                var jwtIssuer = _configuration["JwtSettings:Issuer"] ?? "https://localhost:7247/";
+                var jwtAudience = _configuration["JwtSettings:Audience"] ?? "https://localhost:7247/";
+
+                var tokenHandler = new JwtSecurityTokenHandler();
+                var key = Encoding.UTF8.GetBytes(jwtSecret);
+                var tokenDescriptor = new SecurityTokenDescriptor
+                {
+                    Subject = new ClaimsIdentity(new[]
+                    {
+                        new Claim("userid", (userId ?? 1).ToString()),
+                        new Claim("roleid", "1")
+                    }),
+                    Expires = DateTime.UtcNow.AddHours(2),
+                    Issuer = jwtIssuer,
+                    Audience = jwtAudience,
+                    SigningCredentials = new SigningCredentials(new SymmetricSecurityKey(key), SecurityAlgorithms.HmacSha256Signature)
+                };
+                var localToken = tokenHandler.CreateToken(tokenDescriptor);
+                var tokenString = tokenHandler.WriteToken(localToken);
+
+                // Exchange for ERP token via sso-login if possible
+                string erpToken = tokenString;
+                string erpBaseApi = erpUrl;
+                int qsIdx = erpUrl.IndexOf("/QuantitySheet", StringComparison.OrdinalIgnoreCase);
+                if (qsIdx > 0)
+                {
+                    erpBaseApi = erpUrl.Substring(0, qsIdx);
+                }
+
+                try
+                {
+                    var ssoUrl = erpBaseApi + "/Login/sso-login?token=" + tokenString;
+                    var ssoResp = await _httpClient.GetAsync(ssoUrl);
+                    if (ssoResp.IsSuccessStatusCode)
+                    {
+                        var ssoJson = await ssoResp.Content.ReadAsStringAsync();
+                        using var doc = JsonDocument.Parse(ssoJson);
+                        if (doc.RootElement.TryGetProperty("token", out var tElem))
+                        {
+                            erpToken = tElem.GetString() ?? tokenString;
+                        }
+                    }
+                }
+                catch { }
+
+                // Fetch Project details from ERP to get default ExamTypeId, TypeId, and NoOfSeries
+                int defaultProjectExamTypeId = 1;
+                int projectTypeId = 0;
+                int noOfSeries = 0;
+                try
+                {
+                    var projReq = new HttpRequestMessage(HttpMethod.Get, $"{erpBaseApi}/Project/{projectId}");
+                    projReq.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", erpToken);
+                    var projResp = await _httpClient.SendAsync(projReq);
+                    if (projResp.IsSuccessStatusCode)
+                    {
+                        var projJson = await projResp.Content.ReadAsStringAsync();
+                        using var pDoc = JsonDocument.Parse(projJson);
+                        if (pDoc.RootElement.TryGetProperty("examTypeId", out var examElem) && examElem.ValueKind == JsonValueKind.Array && examElem.GetArrayLength() > 0)
+                        {
+                            defaultProjectExamTypeId = examElem[0].GetInt32();
+                        }
+                        if (pDoc.RootElement.TryGetProperty("typeId", out var typeIdElem) && typeIdElem.ValueKind == JsonValueKind.Number)
+                        {
+                            projectTypeId = typeIdElem.GetInt32();
+                        }
+                        if (pDoc.RootElement.TryGetProperty("noOfSeries", out var noOfSeriesElem) && noOfSeriesElem.ValueKind == JsonValueKind.Number)
+                        {
+                            noOfSeries = noOfSeriesElem.GetInt32();
+                        }
+                    }
+                }
+                catch { }
+
+                // Fetch existing QPMasters and ERP Catches to enrich missing metadata
+                var erpMetaByCatch = new Dictionary<string, (int CourseId, int SubjectId, int ExamTypeId, string? PaperTitle, string? PaperNumber, int QPId, int? TTFStatus, string? LotNo)>(StringComparer.OrdinalIgnoreCase);
+
+                // 1) QPMasters
+                try
+                {
+                    var qpReq = new HttpRequestMessage(HttpMethod.Get, $"{erpBaseApi}/QPMasters");
+                    qpReq.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", erpToken);
+                    var qpResp = await _httpClient.SendAsync(qpReq);
+                    if (qpResp.IsSuccessStatusCode)
+                    {
+                        var qpJson = await qpResp.Content.ReadAsStringAsync();
+                        using var qpDoc = JsonDocument.Parse(qpJson);
+                        if (qpDoc.RootElement.ValueKind == JsonValueKind.Array)
+                        {
+                            foreach (var item in qpDoc.RootElement.EnumerateArray())
+                            {
+                                if (item.TryGetProperty("catchNo", out var cElem) && cElem.ValueKind == JsonValueKind.String)
+                                {
+                                    var cVal = cElem.GetString()?.Trim();
+                                    if (!string.IsNullOrEmpty(cVal))
+                                    {
+                                        int cId = item.TryGetProperty("courseId", out var cIdElem) && cIdElem.ValueKind == JsonValueKind.Number ? cIdElem.GetInt32() : 0;
+                                        int sId = item.TryGetProperty("subjectId", out var sIdElem) && sIdElem.ValueKind == JsonValueKind.Number ? sIdElem.GetInt32() : 0;
+                                        int eId = item.TryGetProperty("examTypeId", out var eIdElem) && eIdElem.ValueKind == JsonValueKind.Number ? eIdElem.GetInt32() : 0;
+                                        string? pTitle = item.TryGetProperty("paperTitle", out var ptElem) ? ptElem.GetString() : null;
+                                        string? pNum = item.TryGetProperty("paperNumber", out var pnElem) ? pnElem.GetString() : null;
+                                        int qpId = item.TryGetProperty("qpMasterId", out var qpElem) && qpElem.ValueKind == JsonValueKind.Number ? qpElem.GetInt32() : 0;
+
+                                        var metaTuple = (cId, sId, eId, pTitle, pNum, qpId, (int?)null, (string?)null);
+                                        if (!erpMetaByCatch.ContainsKey(cVal))
+                                        {
+                                            erpMetaByCatch[cVal] = metaTuple;
+                                        }
+
+                                        // Also map normalized key if catch has suffix like -S or -N
+                                        if (cVal.EndsWith("-S", StringComparison.OrdinalIgnoreCase) || cVal.EndsWith("-N", StringComparison.OrdinalIgnoreCase))
+                                        {
+                                            var baseKey = cVal.Substring(0, cVal.Length - 2).Trim();
+                                            if (!string.IsNullOrEmpty(baseKey) && !erpMetaByCatch.ContainsKey(baseKey))
+                                            {
+                                                erpMetaByCatch[baseKey] = metaTuple;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                catch { }
+
+                // 2) Existing ERP QuantitySheet catches for the project
+                try
+                {
+                    var lotsReq = new HttpRequestMessage(HttpMethod.Get, $"{erpBaseApi}/QuantitySheet/Lots?ProjectId={projectId}");
+                    lotsReq.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", erpToken);
+                    var lotsResp = await _httpClient.SendAsync(lotsReq);
+                    if (lotsResp.IsSuccessStatusCode)
+                    {
+                        var lotsJson = await lotsResp.Content.ReadAsStringAsync();
+                        using var lotsDoc = JsonDocument.Parse(lotsJson);
+                        if (lotsDoc.RootElement.ValueKind == JsonValueKind.Array)
+                        {
+                            foreach (var lotElem in lotsDoc.RootElement.EnumerateArray())
+                            {
+                                var lVal = lotElem.GetString();
+                                if (!string.IsNullOrEmpty(lVal))
+                                {
+                                    var catchReq = new HttpRequestMessage(HttpMethod.Get, $"{erpBaseApi}/QuantitySheet/Catch?ProjectId={projectId}&lotNo={lVal}");
+                                    catchReq.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", erpToken);
+                                    var catchResp = await _httpClient.SendAsync(catchReq);
+                                    if (catchResp.IsSuccessStatusCode)
+                                    {
+                                        var catchJson = await catchResp.Content.ReadAsStringAsync();
+                                        using var cDoc = JsonDocument.Parse(catchJson);
+                                        if (cDoc.RootElement.ValueKind == JsonValueKind.Array)
+                                        {
+                                            foreach (var item in cDoc.RootElement.EnumerateArray())
+                                            {
+                                                if (item.TryGetProperty("catchNo", out var cElem) && cElem.ValueKind == JsonValueKind.String)
+                                                {
+                                                    var cVal = cElem.GetString()?.Trim();
+                                                    if (!string.IsNullOrEmpty(cVal))
+                                                    {
+                                                        int cId = item.TryGetProperty("courseId", out var cIdElem) && cIdElem.ValueKind == JsonValueKind.Number ? cIdElem.GetInt32() : 0;
+                                                        int sId = item.TryGetProperty("subjectId", out var sIdElem) && sIdElem.ValueKind == JsonValueKind.Number ? sIdElem.GetInt32() : 0;
+                                                        int eId = item.TryGetProperty("examTypeId", out var eIdElem) && eIdElem.ValueKind == JsonValueKind.Number ? eIdElem.GetInt32() : 0;
+                                                        string? pTitle = item.TryGetProperty("paperTitle", out var ptElem) ? ptElem.GetString() : null;
+                                                        string? pNum = item.TryGetProperty("paperNumber", out var pnElem) ? pnElem.GetString() : null;
+                                                        int qpId = item.TryGetProperty("qpId", out var qpElem) && qpElem.ValueKind == JsonValueKind.Number ? qpElem.GetInt32() : 0;
+
+                                                        int? ttf = item.TryGetProperty("ttfStatus", out var ttfElem) && ttfElem.ValueKind == JsonValueKind.Number ? ttfElem.GetInt32() : (int?)null;
+                                                        string? existingLot = item.TryGetProperty("lotNo", out var lotElemVal) && lotElemVal.ValueKind == JsonValueKind.String ? lotElemVal.GetString() : null;
+                                                        erpMetaByCatch[cVal] = (cId, sId, eId, pTitle, pNum, qpId, ttf, existingLot);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                catch { }
+
+                // Map to ERP QuantitySheet payload: List<QuantitySheet> with full enrichment
+                var erpSheets = payload.Catches.Select(c =>
+                {
+                    // Resolve minimum outer envelope size if available
+                    int? outerSize = null;
+                    if (c.OuterEnvelopeBreakdown != null && c.OuterEnvelopeBreakdown.Count > 0)
+                    {
+                        foreach (var key in c.OuterEnvelopeBreakdown.Keys)
+                        {
+                            var digits = new string(key.Where(char.IsDigit).ToArray());
+                            if (int.TryParse(digits, out int val) && val > 0)
+                            {
+                                if (!outerSize.HasValue || val < outerSize.Value)
+                                    outerSize = val;
+                            }
+                        }
+                    }
+
+                    int resolvedCourseId = c.CourseId ?? 0;
+                    int resolvedSubjectId = c.SubjectId ?? 0;
+                    int resolvedExamTypeId = 0;
+                    string? resolvedPaperTitle = c.CourseName;
+                    string? resolvedPaperNumber = c.SubjectName;
+                    int resolvedQpId = 0;
+
+                    var catchTrim = c.CatchNo?.Trim();
+                    bool foundMeta = false;
+                    (int CourseId, int SubjectId, int ExamTypeId, string? PaperTitle, string? PaperNumber, int QPId, int? TTFStatus, string? LotNo) meta = default;
+
+                    if (!string.IsNullOrWhiteSpace(catchTrim))
+                    {
+                        if (erpMetaByCatch.TryGetValue(catchTrim, out meta))
+                        {
+                            foundMeta = true;
+                        }
+                        else if (erpMetaByCatch.TryGetValue(catchTrim + "-S", out meta) || erpMetaByCatch.TryGetValue(catchTrim + "-N", out meta))
+                        {
+                            foundMeta = true;
+                        }
+                    }
+
+                    if (foundMeta)
+                    {
+                        if (resolvedCourseId <= 0 && meta.CourseId > 0) resolvedCourseId = meta.CourseId;
+                        if (resolvedSubjectId <= 0 && meta.SubjectId > 0) resolvedSubjectId = meta.SubjectId;
+                        if (meta.ExamTypeId > 0) resolvedExamTypeId = meta.ExamTypeId;
+                        if (!string.IsNullOrWhiteSpace(meta.PaperTitle)) resolvedPaperTitle = meta.PaperTitle;
+                        if (!string.IsNullOrWhiteSpace(meta.PaperNumber)) resolvedPaperNumber = meta.PaperNumber;
+                        if (meta.QPId > 0) resolvedQpId = meta.QPId;
+                    }
+
+                    if (resolvedExamTypeId <= 0)
+                    {
+                        resolvedExamTypeId = defaultProjectExamTypeId > 0 ? defaultProjectExamTypeId : 1;
+                    }
+
+                    // If catch already exists in ERP in another lot, keep its ERP lot number, otherwise use current lot
+                    string targetLot = (foundMeta && !string.IsNullOrWhiteSpace(meta.LotNo)) ? meta.LotNo : lotNo.ToString();
+                    // Retain existing TTFStatus (0 = Head Office, 1 = Factory), defaulting to 0 so it never shows Unknown
+                    int resolvedTtfStatus = (foundMeta && meta.TTFStatus.HasValue) ? meta.TTFStatus.Value : 0;
+
+                    // If TypeId == 1 (Booklet), divide quantity by NoOfSeries coming from ERP Project endpoint
+                    double resolvedQuantity = c.Quantity;
+                    if (projectTypeId == 1 && noOfSeries > 0)
+                    {
+                        resolvedQuantity = (double)c.Quantity / noOfSeries;
+                    }
+
+                    return new ErpQuantitySheetPayloadItem
+                    {
+                        ProjectId = projectId,
+                        LotNo = targetLot,
+                        CatchNo = c.CatchNo,
+                        Quantity = resolvedQuantity,
+                        Pages = c.Pages,
+                        InnerEnvelope = c.InnerEnv,
+                        OuterEnvelope = outerSize,
+                        ExamDate = c.ExamDate,
+                        ExamTime = c.ExamTime,
+                        TTFStatus = resolvedTtfStatus,
+                        CourseId = resolvedCourseId,
+                        SubjectId = resolvedSubjectId,
+                        ExamTypeId = resolvedExamTypeId,
+                        PaperTitle = resolvedPaperTitle,
+                        PaperNumber = resolvedPaperNumber,
+                        QPId = resolvedQpId,
+                        Status = 1
+                    };
+                }).ToList();
+
+
+
+                // Create request with Bearer authorization
+                var requestMsg = new HttpRequestMessage(HttpMethod.Put, erpUrl)
+                {
+                    Content = JsonContent.Create(erpSheets)
+                };
+                requestMsg.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", erpToken);
+
+                var response = await _httpClient.SendAsync(requestMsg);
+
+                // If ERP returns 404/405 on PUT, fallback to POST with the same token
+                if (!response.IsSuccessStatusCode && (response.StatusCode == System.Net.HttpStatusCode.MethodNotAllowed || response.StatusCode == System.Net.HttpStatusCode.NotFound))
+                {
+                    var postMsg = new HttpRequestMessage(HttpMethod.Post, erpUrl)
+                    {
+                        Content = JsonContent.Create(erpSheets)
+                    };
+                    postMsg.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", erpToken);
+                    response = await _httpClient.SendAsync(postMsg);
+                }
+
                 int statusCode = (int)response.StatusCode;
 
                 if (response.IsSuccessStatusCode)
                 {
+                    // Ensure accurate Quantity, ExamDate, ExamTime, and TTFStatus (Head Office = 0, Factory = 1)
+                    // are explicitly persisted for all records in the lot.
+                    // Note: ERP's UpdateQuantitySheet endpoint divides Quantity by NoOfSeries for Booklet projects,
+                    // and ignores TTFStatus if it is 0. Calling ERP's bulk-update endpoint guarantees that:
+                    // 1) The exact Quantity sent from Tools is assigned directly (without Booklet division).
+                    // 2) TTFStatus (0 = Head Office) is explicitly saved.
+                    // 3) ExamDate and ExamTime from Tools are preserved.
+                    try
+                    {
+                        var lotDataReq = new HttpRequestMessage(HttpMethod.Get, $"{erpBaseApi}/QuantitySheet/lot-data?projectId={projectId}&lotNo={lotNo}");
+                        lotDataReq.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", erpToken);
+                        var lotDataResp = await _httpClient.SendAsync(lotDataReq);
+                        if (lotDataResp.IsSuccessStatusCode)
+                        {
+                            var lotDataJson = await lotDataResp.Content.ReadAsStringAsync();
+                            using var lotDoc = JsonDocument.Parse(lotDataJson);
+                            if (lotDoc.RootElement.ValueKind == JsonValueKind.Array)
+                            {
+                                var toolsCatchMap = payload.Catches
+                                    .Where(c => !string.IsNullOrWhiteSpace(c.CatchNo))
+                                    .ToDictionary(c => c.CatchNo!.Trim(), c => c, StringComparer.OrdinalIgnoreCase);
+
+                                var sheetsToBulkFix = new List<Dictionary<string, object?>>();
+                                foreach (var elem in lotDoc.RootElement.EnumerateArray())
+                                {
+                                    string? catchNo = elem.TryGetProperty("catchNo", out var cNoEl) && cNoEl.ValueKind == JsonValueKind.String ? cNoEl.GetString()?.Trim() : null;
+                                    int? currentTtf = elem.TryGetProperty("ttfStatus", out var ttfEl) && ttfEl.ValueKind == JsonValueKind.Number ? ttfEl.GetInt32() : (int?)null;
+                                    double? currentQty = elem.TryGetProperty("quantity", out var qtyEl) && qtyEl.ValueKind == JsonValueKind.Number ? qtyEl.GetDouble() : (double?)null;
+
+                                    toolsCatchMap.TryGetValue(catchNo ?? "", out var toolsCatch);
+
+                                    double targetQty = toolsCatch != null ? toolsCatch.Quantity : 0;
+                                    if (projectTypeId == 1 && noOfSeries > 0 && targetQty > 0)
+                                    {
+                                        targetQty = targetQty / noOfSeries;
+                                    }
+
+                                    // Check if we need to update TTFStatus or Quantity or ExamDate/Time
+                                    bool needsUpdate = false;
+                                    if (!currentTtf.HasValue) needsUpdate = true;
+                                    if (targetQty > 0 && Math.Abs((currentQty ?? 0) - targetQty) > 0.001) needsUpdate = true;
+
+                                    if (needsUpdate)
+                                    {
+                                        var dict = new Dictionary<string, object?>();
+                                        foreach (var prop in elem.EnumerateObject())
+                                        {
+                                            dict[prop.Name] = prop.Value.Clone();
+                                        }
+
+                                        // Set TTFStatus (default to 0 = Head Office)
+                                        dict["ttfStatus"] = currentTtf ?? 0;
+
+                                        // Set resolved Quantity (divided by noOfSeries if booklet)
+                                        if (targetQty > 0)
+                                        {
+                                            dict["quantity"] = targetQty;
+                                            if (toolsCatch != null && !string.IsNullOrEmpty(toolsCatch.ExamDate)) dict["examDate"] = toolsCatch.ExamDate;
+                                            if (toolsCatch != null && !string.IsNullOrEmpty(toolsCatch.ExamTime)) dict["examTime"] = toolsCatch.ExamTime;
+                                        }
+
+                                        sheetsToBulkFix.Add(dict);
+                                    }
+                                }
+
+                                if (sheetsToBulkFix.Count > 0)
+                                {
+                                    // Update each record individually via ERP's PUT /QuantitySheet/update/{id}
+                                    // This guarantees exact Quantity, ExamDate, ExamTime, and TTFStatus (Head Office)
+                                    // are persisted in ERP database without booklet series division.
+                                    var tasks = sheetsToBulkFix.Select(async sheet =>
+                                    {
+                                        if (sheet.TryGetValue("quantitySheetId", out var idObj) && idObj != null)
+                                        {
+                                            int qId = 0;
+                                            if (idObj is JsonElement jEl && jEl.ValueKind == JsonValueKind.Number) qId = jEl.GetInt32();
+                                            else if (idObj is int intVal) qId = intVal;
+                                            else if (int.TryParse(idObj.ToString(), out int parsed)) qId = parsed;
+
+                                            if (qId > 0)
+                                            {
+                                                var putReq = new HttpRequestMessage(HttpMethod.Put, $"{erpBaseApi}/QuantitySheet/update/{qId}")
+                                                {
+                                                    Content = JsonContent.Create(sheet)
+                                                };
+                                                putReq.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", erpToken);
+                                                await _httpClient.SendAsync(putReq);
+                                            }
+                                        }
+                                    });
+
+                                    // Process in concurrent batches of 15 for fast performance
+                                    foreach (var chunk in sheetsToBulkFix.Chunk(15))
+                                    {
+                                        var chunkTasks = chunk.Select(async sheet =>
+                                        {
+                                            if (sheet.TryGetValue("quantitySheetId", out var idObj) && idObj != null)
+                                            {
+                                                int qId = 0;
+                                                if (idObj is JsonElement jEl && jEl.ValueKind == JsonValueKind.Number) qId = jEl.GetInt32();
+                                                else if (idObj is int intVal) qId = intVal;
+                                                else if (int.TryParse(idObj.ToString(), out int parsed)) qId = parsed;
+
+                                                if (qId > 0)
+                                                {
+                                                    var putReq = new HttpRequestMessage(HttpMethod.Put, $"{erpBaseApi}/QuantitySheet/update/{qId}")
+                                                    {
+                                                        Content = JsonContent.Create(sheet)
+                                                    };
+                                                    putReq.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", erpToken);
+                                                    await _httpClient.SendAsync(putReq);
+                                                }
+                                            }
+                                        });
+                                        await Task.WhenAll(chunkTasks);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    catch { }
+
                     var syncLog = new EventLog
                     {
                         ProjectId = projectId,
