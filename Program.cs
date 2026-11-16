@@ -31,6 +31,7 @@ builder.Services.AddScoped<ApiAuditLoggingFilter>();
 builder.Services.AddScoped<IAuthorizationService, AuthorizationService>();
 builder.Services.AddScoped<IMasterAuthService, MasterAuthService>();
 builder.Services.AddScoped<IPermissionService, PermissionService>();
+builder.Services.AddScoped<ToolsAPI.Services.ITranslationService, ToolsAPI.Services.TranslationService>();
 
 // Register API settings from configuration
 builder.Services.Configure<ApiSettings>(builder.Configuration.GetSection("ApiSettings"));
