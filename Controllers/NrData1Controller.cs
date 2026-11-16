@@ -421,6 +421,15 @@ namespace Tools.Controllers
                     return Ok(new { message = "Record deleted successfully" });
                 }
 
+                // Old values for step reset detection
+                var oldCentreCode = center?.CenterCode;
+                var oldNodalCode = center?.NodalCode;
+                var oldQuantity = center?.Quantity ?? 0;
+                var oldNRQuantity = center?.NRQuantity ?? 0;
+                var oldCatchNo = nr1?.CatchNo;
+                var oldLotNo = nr1?.LotNo ?? 0;
+                var oldPages = nr1?.Pages ?? 0;
+
                 // Field update logic
                 var centerProps = typeof(CenterList).GetProperties().ToDictionary(p => p.Name.ToLower(), p => p);
                 var nr1Props = typeof(NrData1).GetProperties().ToDictionary(p => p.Name.ToLower(), p => p);
@@ -436,6 +445,8 @@ namespace Tools.Controllers
                     catch { }
                 }
 
+                var changedFields = new List<string>();
+
                 foreach (var prop in inputData.EnumerateObject())
                 {
                     string key = NormalizeKey(prop.Name);
@@ -446,6 +457,12 @@ namespace Tools.Controllers
                     bool handled = false;
                     if (center != null && centerProps.TryGetValue(key, out var cp))
                     {
+                        var currentValue = cp.GetValue(center)?.ToString() ?? "";
+                        if (currentValue != val)
+                        {
+                            changedFields.Add(key);
+                        }
+
                         var targetType = Nullable.GetUnderlyingType(cp.PropertyType) ?? cp.PropertyType;
                         object? converted = string.IsNullOrWhiteSpace(val) ? null : Convert.ChangeType(val, targetType);
                         cp.SetValue(center, converted);
@@ -454,6 +471,12 @@ namespace Tools.Controllers
 
                     if (nr1 != null && nr1Props.TryGetValue(key, out var np))
                     {
+                        var currentValue = np.GetValue(nr1)?.ToString() ?? "";
+                        if (currentValue != val)
+                        {
+                            if (!changedFields.Contains(key)) changedFields.Add(key);
+                        }
+
                         var targetType = Nullable.GetUnderlyingType(np.PropertyType) ?? np.PropertyType;
                         object? converted = string.IsNullOrWhiteSpace(val) ? null : Convert.ChangeType(val, targetType);
                         np.SetValue(nr1, converted);
@@ -462,6 +485,12 @@ namespace Tools.Controllers
 
                     if (!handled)
                     {
+                        var matchedKey = existingExtra.Keys.FirstOrDefault(k => NormalizeKey(k) == key);
+                        var currentDynamicValue = matchedKey != null ? existingExtra[matchedKey] ?? "" : "";
+                        if (currentDynamicValue != val)
+                        {
+                            if (!changedFields.Contains(key)) changedFields.Add(key);
+                        }
                         extraData[prop.Name] = val;
                     }
                 }
@@ -470,9 +499,220 @@ namespace Tools.Controllers
                 {
                     foreach (var kv in extraData)
                     {
-                        existingExtra[kv.Key] = kv.Value;
+                        var matchedKey = existingExtra.Keys
+                            .FirstOrDefault(k => NormalizeKey(k) == NormalizeKey(kv.Key))
+                            ?? kv.Key;
+                        existingExtra[matchedKey] = kv.Value;
                     }
                     nr1.NRDatas = JsonSerializer.Serialize(existingExtra);
+                }
+
+                // =====================
+                // LOAD CONFIG & FIELDS FOR STEP RESET DECISION
+                // =====================
+                var config = await _context.ProjectConfigs
+                    .FirstOrDefaultAsync(c => c.ProjectId == targetProjectId);
+
+                var allFields = await _context.Fields.ToListAsync();
+
+                var envelopeFieldNames = allFields
+                    .Where(f => (config?.EnvelopeMakingCriteria ?? new List<int>()).Contains(f.FieldId))
+                    .Select(f => NormalizeKey(f.Name))
+                    .ToHashSet();
+
+                var boxFieldIds = new List<int>();
+                if (config != null)
+                {
+                    boxFieldIds.AddRange(config.BoxBreakingCriteria ?? new List<int>());
+                    boxFieldIds.AddRange(config.BoxBreakingCriteriaForNodalExtra ?? new List<int>());
+                    boxFieldIds.AddRange(config.BoxBreakingCriteriaForUniExtra ?? new List<int>());
+                    boxFieldIds.AddRange(config.BoxBreakingCriteriaForOffcExtra ?? new List<int>());
+                    boxFieldIds.AddRange(config.HeaderVerificationFields ?? new List<int>());
+                    boxFieldIds.AddRange(config.SortingBoxReport ?? new List<int>());
+                    boxFieldIds.AddRange(config.InnerBundlingCriteria ?? new List<int>());
+                    boxFieldIds.AddRange(config.DuplicateRemoveFields ?? new List<int>());
+                }
+
+                var boxFieldNames = allFields
+                    .Where(f => boxFieldIds.Contains(f.FieldId))
+                    .Select(f => NormalizeKey(f.Name))
+                    .ToHashSet();
+
+                bool envelopeFieldAffected = changedFields.Any(f => envelopeFieldNames.Contains(f));
+                bool boxFieldAffected = changedFields.Any(f => boxFieldNames.Contains(f));
+
+                var requiredLabelFields = await GetRequiredLabelFields(targetProjectId);
+                bool labelFieldAffected = changedFields.Any(f => requiredLabelFields.Any(rf => NormalizeKey(rf) == f));
+
+                bool nodalChanged = !string.Equals(oldNodalCode?.Trim(), center?.NodalCode?.Trim(), StringComparison.OrdinalIgnoreCase);
+                bool centerChanged = !string.Equals(oldCentreCode?.Trim(), center?.CenterCode?.Trim(), StringComparison.OrdinalIgnoreCase);
+                bool quantityChanged = center != null && oldQuantity != center.Quantity;
+                bool nrQuantityChanged = center != null && oldNRQuantity != center.NRQuantity;
+
+                bool shouldResetToStepEnvBreaking = centerChanged || envelopeFieldAffected;
+                bool shouldResetToStepAwaitingEnv = boxFieldAffected;
+                bool shouldResetToStepAwaitingBox = labelFieldAffected;
+
+                bool isBothSerialsPositive = config != null && config.OmrSerialNumber > 0 && (config.BookletSerialNumber ?? 0) > 0;
+                bool resetBookletSerial = config?.ResetBookletSerialOnCatchChange ?? false;
+                int resetStep = (isBothSerialsPositive && !resetBookletSerial) ? 4 : 5;
+
+                var catchNo = nr1?.CatchNo ?? oldCatchNo;
+
+                if (nr1 != null)
+                {
+                    if (quantityChanged)
+                    {
+                        nr1.Steps = 2; // STEP_ENHANCEMENT
+
+                        if (!string.IsNullOrWhiteSpace(catchNo))
+                        {
+                            var sameCatchRows = await _context.NrData1
+                                .Where(x => x.ProjectId == nr1.ProjectId && x.CatchNo == catchNo && x.Id != nr1.Id && x.Status)
+                                .ToListAsync();
+
+                            foreach (var row in sameCatchRows)
+                            {
+                                row.Steps = 3; // STEP_ENV_BREAKING
+                                _context.NrData1.Update(row);
+                            }
+                        }
+
+                        if (nr1.LotNo >= 0)
+                        {
+                            await _context.NrData1
+                                .Where(x => x.ProjectId == nr1.ProjectId && x.LotNo == nr1.LotNo && (string.IsNullOrWhiteSpace(catchNo) || x.CatchNo != catchNo) && x.Status && x.Steps > resetStep)
+                                .ExecuteUpdateAsync(s => s.SetProperty(x => x.Steps, resetStep));
+                        }
+                    }
+                    else if (nrQuantityChanged)
+                    {
+                        nr1.Steps = 1; // STEP_DUP_PARTIAL
+
+                        if (!string.IsNullOrWhiteSpace(catchNo))
+                        {
+                            var sameCatchRows = await _context.NrData1
+                                .Where(x => x.ProjectId == nr1.ProjectId && x.CatchNo == catchNo && x.Id != nr1.Id && x.Status)
+                                .ToListAsync();
+
+                            foreach (var row in sameCatchRows)
+                            {
+                                row.Steps = 3; // STEP_ENV_BREAKING
+                                _context.NrData1.Update(row);
+                            }
+                        }
+
+                        if (nr1.LotNo >= 0)
+                        {
+                            await _context.NrData1
+                                .Where(x => x.ProjectId == nr1.ProjectId && x.LotNo == nr1.LotNo && (string.IsNullOrWhiteSpace(catchNo) || x.CatchNo != catchNo) && x.Status && x.Steps > resetStep)
+                                .ExecuteUpdateAsync(s => s.SetProperty(x => x.Steps, resetStep));
+                        }
+                    }
+                    else
+                    {
+                        if (nodalChanged)
+                        {
+                            if (nr1.Steps > PipelineNavigator.STEP_ENHANCEMENT)
+                            {
+                                nr1.Steps = PipelineNavigator.STEP_ENHANCEMENT;
+                            }
+                        }
+                        else if (shouldResetToStepEnvBreaking)
+                        {
+                            if (nr1.Steps > 4)
+                            {
+                                nr1.Steps = 4; // STEP_AWAITING_EXTRA
+                            }
+                        }
+                        else if (shouldResetToStepAwaitingEnv)
+                        {
+                            if (nr1.Steps > PipelineNavigator.STEP_AWAITING_ENV)
+                            {
+                                nr1.Steps = PipelineNavigator.STEP_AWAITING_ENV;
+                            }
+                        }
+                        else if (shouldResetToStepAwaitingBox)
+                        {
+                            if (nr1.Steps > PipelineNavigator.STEP_AWAITING_BOX)
+                            {
+                                nr1.Steps = PipelineNavigator.STEP_AWAITING_BOX;
+                            }
+                        }
+
+                        // Propagation rules for non-quantity changes
+                        if (shouldResetToStepEnvBreaking && !nodalChanged)
+                        {
+                            if (!string.IsNullOrWhiteSpace(catchNo))
+                            {
+                                var sameCatchRows = await _context.NrData1
+                                    .Where(x => x.ProjectId == nr1.ProjectId && x.CatchNo == catchNo && x.Id != nr1.Id && x.Status)
+                                    .ToListAsync();
+
+                                foreach (var row in sameCatchRows)
+                                {
+                                    if (row.Steps > 4)
+                                    {
+                                        row.Steps = 4;
+                                        _context.NrData1.Update(row);
+                                    }
+                                }
+                            }
+
+                            if (isBothSerialsPositive && !(config?.ResetOmrSerialOnCatchChange ?? false))
+                            {
+                                await _context.NrData1
+                                    .Where(x => x.ProjectId == nr1.ProjectId && x.Id != nr1.Id && x.Status && x.Steps > 4)
+                                    .ExecuteUpdateAsync(s => s.SetProperty(x => x.Steps, 4));
+                            }
+                            else
+                            {
+                                if (nr1.LotNo >= 0)
+                                {
+                                    await _context.NrData1
+                                        .Where(x => x.ProjectId == nr1.ProjectId && x.LotNo == nr1.LotNo && (string.IsNullOrWhiteSpace(catchNo) || x.CatchNo != catchNo) && x.Status && x.Steps > 5)
+                                        .ExecuteUpdateAsync(s => s.SetProperty(x => x.Steps, 5));
+                                }
+                            }
+                        }
+                        else if ((nodalChanged || shouldResetToStepAwaitingEnv || shouldResetToStepAwaitingBox) && !string.IsNullOrWhiteSpace(catchNo))
+                        {
+                            var sameCatchRows = await _context.NrData1
+                                .Where(x => x.ProjectId == nr1.ProjectId && x.CatchNo == catchNo && x.Id != nr1.Id && x.Status)
+                                .ToListAsync();
+
+                            foreach (var row in sameCatchRows)
+                            {
+                                if (row.Steps > nr1.Steps)
+                                {
+                                    row.Steps = nr1.Steps;
+                                    _context.NrData1.Update(row);
+                                }
+                            }
+
+                            var stepResetTriggered = nodalChanged || shouldResetToStepAwaitingEnv || shouldResetToStepAwaitingBox;
+                            if (stepResetTriggered)
+                            {
+                                await _context.NrData1
+                                    .Where(x => x.ProjectId == nr1.ProjectId && x.Id != nr1.Id && x.Status && x.Steps > nr1.Steps)
+                                    .ExecuteUpdateAsync(s => s.SetProperty(x => x.Steps, nr1.Steps));
+                            }
+                        }
+                    }
+
+                    // Page change check
+                    bool pagesChanged = changedFields.Contains("pages");
+                    if (pagesChanged && nr1.LotNo > 0)
+                    {
+                        await _context.NrData1
+                            .Where(x => x.ProjectId == targetProjectId && x.LotNo == nr1.LotNo && x.Status && x.Steps == 6)
+                            .ExecuteUpdateAsync(s => s.SetProperty(x => x.Steps, 5));
+
+                        if (nr1.Steps == 6)
+                        {
+                            nr1.Steps = 5;
+                        }
+                    }
                 }
 
                 if (center != null)
@@ -3828,6 +4068,43 @@ namespace Tools.Controllers
                 await _loggerService.LogErrorAsync("Error deleting CatchNo in NrData1", ex.Message, nameof(NrData1Controller));
                 return StatusCode(500, "Internal Server Error");
             }
+        }
+
+        private async Task<HashSet<string>> GetRequiredLabelFields(int projectId)
+        {
+            var requiredFields = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            var templates = await _context.RPTTemplates
+                .Where(t => t.ProjectId == projectId && t.IsActive == true && (t.IsDeleted == false || t.IsDeleted == null))
+                .ToListAsync();
+
+            var boxTemplates = templates
+                .Where(t => t.ModuleIds != null && t.ModuleIds.Contains(5))
+                .ToList();
+
+            foreach (var template in boxTemplates)
+            {
+                if (!string.IsNullOrEmpty(template.ParsedFieldsJson))
+                {
+                    try
+                    {
+                        var fields = System.Text.Json.JsonSerializer.Deserialize<List<string>>(template.RequiredFieldsJson);
+                        if (fields != null)
+                        {
+                            foreach (var field in fields)
+                            {
+                                requiredFields.Add(field);
+                            }
+                        }
+                    }
+                    catch { }
+                }
+            }
+
+            requiredFields.Add("NRQuantity");
+            requiredFields.Add("Quantity");
+
+            return requiredFields;
         }
     }
 }
