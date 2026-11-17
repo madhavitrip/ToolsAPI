@@ -54,7 +54,7 @@ namespace ToolsAPI.Controllers
         }
 
         [HttpGet]
-        [RequirePermission(ModuleCodes.MasterConfig, PermissionAction.View)]
+        [RequirePermission(ModuleCodes.MessageManagement, PermissionAction.View)]
         public async Task<IActionResult> GetMessages([FromQuery] string? module, [FromQuery] string? search, [FromQuery] bool? missingHindiOnly, [FromQuery] int pageNumber = 1, [FromQuery] int pageSize = 20)
         {
             var result = await _translationService.GetMessagesAsync(module, search, missingHindiOnly, pageNumber, pageSize, HttpContext.RequestAborted);
@@ -62,7 +62,7 @@ namespace ToolsAPI.Controllers
         }
 
         [HttpGet("{id:int}")]
-        [RequirePermission(ModuleCodes.MasterConfig, PermissionAction.View)]
+        [RequirePermission(ModuleCodes.MessageManagement, PermissionAction.View)]
         public async Task<IActionResult> GetMessageById(int id)
         {
             var message = await _translationService.GetMessageByIdAsync(id, HttpContext.RequestAborted);
@@ -75,7 +75,7 @@ namespace ToolsAPI.Controllers
         }
 
         [HttpPost]
-        [RequirePermission(ModuleCodes.MasterConfig, PermissionAction.Create)]
+        [RequirePermission(ModuleCodes.MessageManagement, PermissionAction.Create)]
         public async Task<IActionResult> CreateMessage([FromBody] CreateMessageRequest request)
         {
             if (string.IsNullOrWhiteSpace(request.MessageKey) || string.IsNullOrWhiteSpace(request.Module) || string.IsNullOrWhiteSpace(request.EnglishText))
@@ -97,7 +97,7 @@ namespace ToolsAPI.Controllers
         }
 
         [HttpPut("{id:int}")]
-        [RequirePermission(ModuleCodes.MasterConfig, PermissionAction.Edit)]
+        [RequirePermission(ModuleCodes.MessageManagement, PermissionAction.Edit)]
         public async Task<IActionResult> UpdateMessage(int id, [FromBody] UpdateMessageRequest request)
         {
             if (string.IsNullOrWhiteSpace(request.EnglishText))
@@ -119,7 +119,7 @@ namespace ToolsAPI.Controllers
         }
 
         [HttpPatch("{id:int}/status")]
-        [RequirePermission(ModuleCodes.MasterConfig, PermissionAction.Edit)]
+        [RequirePermission(ModuleCodes.MessageManagement, PermissionAction.Edit)]
         public async Task<IActionResult> UpdateStatus(int id, [FromBody] UpdateStatusRequest request)
         {
             int userId = LogHelper.GetTriggeredBy(User, Request);

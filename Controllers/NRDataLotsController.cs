@@ -3,6 +3,8 @@ using ERPToolsAPI.Data;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Tools.Services;
+using Tools.Models;
+using Tools.Middleware;
 
 namespace Tools.Controllers
 {
@@ -223,6 +225,7 @@ namespace Tools.Controllers
         }
 
         [HttpPost("AssignEnvLotByCatches")]
+        [RequirePermission(ModuleCodes.LotBifurcation, PermissionAction.Edit)]
         public async Task<IActionResult> AssignEnvLotByCatches([FromBody] EnvLotAssignmentRequest request)
         {
             if (!ModelState.IsValid)
@@ -315,6 +318,7 @@ namespace Tools.Controllers
         }
 
         [HttpPost("UnassignEnvLotByCatches")]
+        [RequirePermission(ModuleCodes.LotBifurcation, PermissionAction.Edit)]
         public async Task<IActionResult> UnassignEnvLotByCatches([FromBody] EnvLotAssignmentRequest request)
         {
             if (!ModelState.IsValid)

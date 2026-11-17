@@ -19,6 +19,7 @@ namespace Tools.Services
     public interface IPermissionService
     {
         Task<bool> HasPermissionAsync(int userId, string moduleCode, PermissionAction action, int projectId = 0, HttpRequest? request = null);
+        Task<bool> HasSpecialActionAsync(int userId, string actionCode, string parentModule, PermissionAction requiredStandardAction, int projectId = 0, HttpRequest? request = null);
         Task<UserPermissionsDto> GetUserPermissionsAsync(int userId, HttpRequest? request = null, int? explicitErpRoleId = null);
         void InvalidateUserCache(int userId);
         void InvalidateAllCaches();
@@ -90,14 +91,14 @@ namespace Tools.Services
         {
             if (userId <= 0) return false;
 
-            // Compute effective permissions (cached)
-            var perms = await GetUserPermissionsAsync(userId, request);
-
-            // Fail-safe: Always allow Lead Developer (Role 1) to access and manage the Roles & Permissions module
-            if (perms.RoleId == 1 && string.Equals(moduleCode, ModuleCodes.RolesPermissions, StringComparison.OrdinalIgnoreCase))
+            // Dashboard is accessible to every authenticated user without requiring a permission check
+            if (string.Equals(moduleCode, ModuleCodes.Dashboard, StringComparison.OrdinalIgnoreCase))
             {
                 return true;
             }
+
+            // Compute effective permissions (cached)
+            var perms = await GetUserPermissionsAsync(userId, request);
 
             // 3. Check action flag based on effective computed permissions
             if (perms.Modules.TryGetValue(moduleCode, out var flags) && flags != null)
@@ -112,6 +113,46 @@ namespace Tools.Services
                     PermissionAction.Export => flags.CanExport ?? false,
                     _ => false
                 };
+            }
+
+            return false;
+        }
+
+        public async Task<bool> HasSpecialActionAsync(
+            int userId,
+            string actionCode,
+            string parentModule,
+            PermissionAction requiredStandardAction,
+            int projectId = 0,
+            HttpRequest? request = null)
+        {
+            if (userId <= 0) return false;
+
+            var perms = await GetUserPermissionsAsync(userId, request);
+
+            // Condition 1: User must have View permission on Parent Module
+            if (!perms.Modules.TryGetValue(parentModule, out var parentFlags) || parentFlags?.CanView != true)
+            {
+                return false;
+            }
+
+            // Condition 2: User must have the required standard action on Parent Module
+            bool hasStandardAction = requiredStandardAction switch
+            {
+                PermissionAction.View => parentFlags.CanView ?? false,
+                PermissionAction.Create => parentFlags.CanCreate ?? false,
+                PermissionAction.Edit => parentFlags.CanEdit ?? false,
+                PermissionAction.Delete => parentFlags.CanDelete ?? false,
+                PermissionAction.Execute => parentFlags.CanExecute ?? false,
+                PermissionAction.Export => parentFlags.CanExport ?? false,
+                _ => false
+            };
+            if (!hasStandardAction) return false;
+
+            // Condition 3: User must have the explicit special action permission
+            if (perms.SpecialActions != null && perms.SpecialActions.TryGetValue(actionCode, out bool specialAllowed))
+            {
+                return specialAllowed;
             }
 
             return false;
@@ -173,11 +214,8 @@ namespace Tools.Services
 
             bool isDeveloper = (effectiveRoleId == 1);
 
-            // Parse Role Permissions JSON
-            var rolePermsMap = ParsePermissionsMap(role?.PermissionsJson);
-
-            // Parse User Overrides JSON
-            var overridesMap = ParsePermissionsMap(userRecord?.OverridesJson);
+            // Parse Role Permissions JSON (Permissions are strictly assigned through roles; user overrides removed)
+            var (rolePermsMap, specialActionsMap) = ParseRolePermissionsPayload(role?.PermissionsJson);
 
             // Build effective permission dictionary across all module codes
             var effectiveModules = new Dictionary<string, ModuleActionFlags>(StringComparer.OrdinalIgnoreCase);
@@ -185,33 +223,17 @@ namespace Tools.Services
             foreach (var code in ModuleCodes.All)
             {
                 rolePermsMap.TryGetValue(code, out var roleFlags);
-                overridesMap.TryGetValue(code, out var overrideFlags);
 
-                // User override takes precedence, then role definition, default to false if unspecified
+                // Permissions derive exclusively from assigned role definition
                 effectiveModules[code] = new ModuleActionFlags
                 {
-                    CanView = overrideFlags?.CanView ?? roleFlags?.CanView ?? false,
-                    CanCreate = overrideFlags?.CanCreate ?? roleFlags?.CanCreate ?? false,
-                    CanEdit = overrideFlags?.CanEdit ?? roleFlags?.CanEdit ?? false,
-                    CanDelete = overrideFlags?.CanDelete ?? roleFlags?.CanDelete ?? false,
-                    CanExecute = overrideFlags?.CanExecute ?? roleFlags?.CanExecute ?? false,
-                    CanExport = overrideFlags?.CanExport ?? roleFlags?.CanExport ?? false,
+                    CanView = roleFlags?.CanView ?? false,
+                    CanCreate = roleFlags?.CanCreate ?? false,
+                    CanEdit = roleFlags?.CanEdit ?? false,
+                    CanDelete = roleFlags?.CanDelete ?? false,
+                    CanExecute = roleFlags?.CanExecute ?? false,
+                    CanExport = roleFlags?.CanExport ?? false,
                 };
-
-                // Fail-safe: Ensure Lead Developer (Role 1) always maintains access to the Roles & Permissions module
-                // so an administrator can never lock themselves out of managing permissions.
-                if (isDeveloper && string.Equals(code, ModuleCodes.RolesPermissions, StringComparison.OrdinalIgnoreCase))
-                {
-                    effectiveModules[code] = new ModuleActionFlags
-                    {
-                        CanView = true,
-                        CanCreate = true,
-                        CanEdit = true,
-                        CanDelete = true,
-                        CanExecute = true,
-                        CanExport = true
-                    };
-                }
             }
 
             var result = new UserPermissionsDto
@@ -220,7 +242,8 @@ namespace Tools.Services
                 RoleId = effectiveRoleId,
                 RoleName = roleName,
                 IsSuperuser = isDeveloper,
-                Modules = effectiveModules
+                Modules = effectiveModules,
+                SpecialActions = specialActionsMap
             };
 
             var cacheOptions = new MemoryCacheEntryOptions
@@ -304,20 +327,54 @@ namespace Tools.Services
             return project.UserAssigned != null && project.UserAssigned.Contains(userId);
         }
 
-        private static Dictionary<string, ModuleActionFlags> ParsePermissionsMap(string? json)
+        private static (Dictionary<string, ModuleActionFlags> Modules, Dictionary<string, bool> SpecialActions) ParseRolePermissionsPayload(string? json)
         {
-            if (string.IsNullOrWhiteSpace(json)) return new Dictionary<string, ModuleActionFlags>(StringComparer.OrdinalIgnoreCase);
+            var modules = new Dictionary<string, ModuleActionFlags>(StringComparer.OrdinalIgnoreCase);
+            var special = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+
+            if (string.IsNullOrWhiteSpace(json)) return (modules, special);
 
             try
             {
-                var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
-                return JsonSerializer.Deserialize<Dictionary<string, ModuleActionFlags>>(json, options)
-                    ?? new Dictionary<string, ModuleActionFlags>(StringComparer.OrdinalIgnoreCase);
+                using var doc = JsonDocument.Parse(json);
+                var root = doc.RootElement;
+
+                if (root.ValueKind == JsonValueKind.Object)
+                {
+                    // Check if it's new structured format: { "Modules": { ... }, "SpecialActions": { ... } }
+                    if (root.TryGetProperty("Modules", out var modProp) || root.TryGetProperty("modules", out modProp))
+                    {
+                        var opts = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+                        modules = JsonSerializer.Deserialize<Dictionary<string, ModuleActionFlags>>(modProp.GetRawText(), opts)
+                                  ?? new Dictionary<string, ModuleActionFlags>(StringComparer.OrdinalIgnoreCase);
+
+                        if (root.TryGetProperty("SpecialActions", out var specProp) || root.TryGetProperty("specialActions", out specProp))
+                        {
+                            special = JsonSerializer.Deserialize<Dictionary<string, bool>>(specProp.GetRawText(), opts)
+                                      ?? new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+                        }
+                    }
+                    else
+                    {
+                        // Legacy flat dictionary of module codes
+                        var opts = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+                        modules = JsonSerializer.Deserialize<Dictionary<string, ModuleActionFlags>>(json, opts)
+                                  ?? new Dictionary<string, ModuleActionFlags>(StringComparer.OrdinalIgnoreCase);
+                    }
+                }
             }
             catch
             {
-                return new Dictionary<string, ModuleActionFlags>(StringComparer.OrdinalIgnoreCase);
+                // Return empty safe fallbacks on error
             }
+
+            return (modules, special);
+        }
+
+        private static Dictionary<string, ModuleActionFlags> ParsePermissionsMap(string? json)
+        {
+            var (mods, _) = ParseRolePermissionsPayload(json);
+            return mods;
         }
 
         private async Task SeedDefaultRolesAsync()
@@ -346,7 +403,9 @@ namespace Tools.Services
             var operatorMap = new Dictionary<string, ModuleActionFlags>(StringComparer.OrdinalIgnoreCase);
             foreach (var m in ModuleCodes.All)
             {
-                bool canView = m is ModuleCodes.Dashboard or ModuleCodes.DataImport or ModuleCodes.ProcessingPipeline
+                bool canView = m is ModuleCodes.DataImport or ModuleCodes.UploadedData or ModuleCodes.ConflictReport
+                                or ModuleCodes.FillMissingData or ModuleCodes.LotBifurcation or ModuleCodes.MergeCatchNumbers
+                                or ModuleCodes.ProcessingPipeline or ModuleCodes.ReportTemplateManagement
                                 or ModuleCodes.HeaderVerification or ModuleCodes.BatchData or ModuleCodes.Reports;
                 operatorMap[m] = new ModuleActionFlags
                 {
@@ -355,7 +414,7 @@ namespace Tools.Services
                     CanEdit = false,
                     CanDelete = false,
                     CanExecute = false,
-                    CanExport = m is ModuleCodes.BatchData or ModuleCodes.Reports
+                    CanExport = m is ModuleCodes.BatchData or ModuleCodes.Reports or ModuleCodes.ReportTemplateManagement
                 };
             }
             var operatorJson = JsonSerializer.Serialize(operatorMap);

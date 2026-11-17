@@ -398,7 +398,8 @@ namespace ToolsAPI.Controllers
 
         // DELETE: api/EnvelopeLotReports/{id}
         [HttpDelete("{id}")]
-        [RequirePermission(ModuleCodes.ProcessingPipeline, PermissionAction.Delete)]
+        [RequirePermission(ModuleCodes.ReportTemplateManagement, PermissionAction.Delete)]
+        [RequireSpecialAction(SpecialActionCodes.PurgeReportRecord, ModuleCodes.ReportTemplateManagement, PermissionAction.Delete)]
         public async Task<IActionResult> DeleteEnvelopeLotReport(int id)
         {
             try

@@ -16,6 +16,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using Tools.Models;
 using Tools.Services;
+using Tools.Middleware;
 using ToolsAPI.Helpers;
 using ToolsAPI.Models;
 
@@ -3876,6 +3877,8 @@ namespace Tools.Controllers
 
         // DELETE: api/NrData1/DeleteByProject/5
         [HttpDelete("DeleteByProject/{projectId}")]
+        [RequirePermission(ModuleCodes.UploadedData, PermissionAction.Delete)]
+        [RequireSpecialAction(SpecialActionCodes.DeleteAllNrData, ModuleCodes.UploadedData, PermissionAction.Delete)]
         public async Task<IActionResult> DeleteByProject(int projectId, [FromQuery] int? lotNo = null)
         {
             try

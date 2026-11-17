@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Tools.Models;
+using Tools.Middleware;
 using ERPToolsAPI.Data;
 using System.Text.Json;
 using System.Text;
@@ -75,6 +76,8 @@ namespace Tools.Controllers
         }
 
         [HttpPost("MergeToTemporary/{projectId}")]
+        [RequirePermission(ModuleCodes.NodalCatch, PermissionAction.Edit)]
+        [RequireSpecialAction(SpecialActionCodes.PushNodalToNr, ModuleCodes.NodalCatch, PermissionAction.Edit)]
         public async Task<IActionResult> MergeToTemporary(int projectId, [FromQuery] string? mergeBy = "CollegeCode")
         {
             try
@@ -1546,6 +1549,8 @@ namespace Tools.Controllers
         }
 
         [HttpPost("PushToMain/{projectId}")]
+        [RequirePermission(ModuleCodes.NodalCatch, PermissionAction.Execute)]
+        [RequireSpecialAction(SpecialActionCodes.PushNodalToNr, ModuleCodes.NodalCatch, PermissionAction.Execute)]
         public async Task<IActionResult> PushToMain(int projectId)
         {
             try

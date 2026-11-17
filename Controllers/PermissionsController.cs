@@ -47,17 +47,80 @@ namespace Tools.Controllers
         }
 
         /// <summary>
-        /// Get supported system modules.
+        /// Get supported system modules with their actual page-specific supported standard actions.
         /// </summary>
         [HttpGet("modules")]
         public IActionResult GetModules()
         {
-            var list = ModuleCodes.All.Select(code => new
+            var list = ModuleCodes.All
+                .Where(code => !string.Equals(code, ModuleCodes.Dashboard, StringComparison.OrdinalIgnoreCase))
+                .Select(code => new
+                {
+                    Code = code,
+                    DisplayName = FormatDisplayName(code),
+                    SupportedActions = GetSupportedActionsForModule(code)
+                });
+
+            return Ok(list);
+        }
+
+        /// <summary>
+        /// Get supported special actions metadata.
+        /// </summary>
+        [HttpGet("special-actions")]
+        public IActionResult GetSpecialActions()
+        {
+            var list = new[]
             {
-                Code = code,
-                DisplayName = FormatDisplayName(code),
-                SupportedActions = new[] { "View", "Create", "Edit", "Delete", "Execute", "Export" }
-            });
+                new SpecialActionMetadata
+                {
+                    Code = SpecialActionCodes.DeleteAllNrData,
+                    DisplayName = "Delete All NR Data",
+                    ParentModule = ModuleCodes.UploadedData,
+                    RequiredStandardAction = PermissionAction.Delete,
+                    Description = "Allows purging the entire project or lot NR data from the system."
+                },
+                new SpecialActionMetadata
+                {
+                    Code = SpecialActionCodes.BulkUpdateNrData,
+                    DisplayName = "Bulk Update NR Data",
+                    ParentModule = ModuleCodes.UploadedData,
+                    RequiredStandardAction = PermissionAction.Edit,
+                    Description = "Allows executing mass batch updates across multiple NR records simultaneously."
+                },
+                new SpecialActionMetadata
+                {
+                    Code = SpecialActionCodes.BulkVerifyCatches,
+                    DisplayName = "Verify All Catches",
+                    ParentModule = ModuleCodes.HeaderVerification,
+                    RequiredStandardAction = PermissionAction.Edit,
+                    Description = "Allows bulk verification of all catch records across the project in one action."
+                },
+                new SpecialActionMetadata
+                {
+                    Code = SpecialActionCodes.ApplyChangedNr,
+                    DisplayName = "Apply Changed NR Comparisons",
+                    ParentModule = ModuleCodes.ChangedNr,
+                    RequiredStandardAction = PermissionAction.Edit,
+                    Description = "Allows applying differential changes from Changed NR analysis into active project data."
+                },
+                new SpecialActionMetadata
+                {
+                    Code = SpecialActionCodes.PushNodalToNr,
+                    DisplayName = "Push Nodal into Main NR Data",
+                    ParentModule = ModuleCodes.NodalCatch,
+                    RequiredStandardAction = PermissionAction.Edit,
+                    Description = "Allows merging verified Nodal center and catch assignments directly into primary NR records."
+                },
+                new SpecialActionMetadata
+                {
+                    Code = SpecialActionCodes.PurgeReportRecord,
+                    DisplayName = "Delete/Purge Report Records",
+                    ParentModule = ModuleCodes.ReportTemplateManagement,
+                    RequiredStandardAction = PermissionAction.Delete,
+                    Description = "Allows deleting generated report records and archiving history from the repository."
+                }
+            };
 
             return Ok(list);
         }
@@ -197,8 +260,10 @@ namespace Tools.Controllers
             var role = await _context.ToolsRoles.AsNoTracking().FirstOrDefaultAsync(r => r.Id == roleId);
             if (role == null) return NotFound(new { message = $"Role with ID {roleId} not found." });
 
-            var permsMap = ParseMap(role.PermissionsJson);
-            var list = ModuleCodes.All.Select(code =>
+            var (permsMap, specialMap) = ParseRolePermissions(role.PermissionsJson);
+            var list = ModuleCodes.All
+                .Where(code => !string.Equals(code, ModuleCodes.Dashboard, StringComparison.OrdinalIgnoreCase))
+                .Select(code =>
             {
                 permsMap.TryGetValue(code, out var f);
                 return new RolePermissionItemDto
@@ -213,7 +278,7 @@ namespace Tools.Controllers
                 };
             }).ToList();
 
-            return Ok(new { Role = role, Permissions = list });
+            return Ok(new { Role = role, Permissions = list, SpecialActions = specialMap });
         }
 
         /// <summary>
@@ -246,21 +311,15 @@ namespace Tools.Controllers
                 };
             }
 
-            if (role.Id == 1 || string.Equals(role.RoleName, "Developer", StringComparison.OrdinalIgnoreCase))
-            {
-                // Administrative fail-safe: Developer always retains full access to Roles & Permissions Admin
-                map[ModuleCodes.RolesPermissions] = new ModuleActionFlags
-                {
-                    CanView = true,
-                    CanCreate = true,
-                    CanEdit = true,
-                    CanDelete = true,
-                    CanExecute = true,
-                    CanExport = true
-                };
-            }
+            var specialMap = request.SpecialActions ?? new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
 
-            role.PermissionsJson = JsonSerializer.Serialize(map);
+            var payload = new
+            {
+                Modules = map,
+                SpecialActions = specialMap
+            };
+
+            role.PermissionsJson = JsonSerializer.Serialize(payload);
             role.UpdatedAt = DateTime.Now;
 
             await _context.SaveChangesAsync();
@@ -379,20 +438,81 @@ namespace Tools.Controllers
             return Ok(new { success = true, message = $"User {userId} permissions configuration saved." });
         }
 
-        private static Dictionary<string, ModuleActionFlags> ParseMap(string? json)
+        private static (Dictionary<string, ModuleActionFlags> Modules, Dictionary<string, bool> SpecialActions) ParseRolePermissions(string? json)
         {
-            if (string.IsNullOrWhiteSpace(json)) return new Dictionary<string, ModuleActionFlags>(StringComparer.OrdinalIgnoreCase);
+            var modules = new Dictionary<string, ModuleActionFlags>(StringComparer.OrdinalIgnoreCase);
+            var special = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+
+            if (string.IsNullOrWhiteSpace(json)) return (modules, special);
+
             try
             {
-                var opts = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
-                return JsonSerializer.Deserialize<Dictionary<string, ModuleActionFlags>>(json, opts)
-                    ?? new Dictionary<string, ModuleActionFlags>(StringComparer.OrdinalIgnoreCase);
+                using var doc = JsonDocument.Parse(json);
+                var root = doc.RootElement;
+
+                if (root.ValueKind == JsonValueKind.Object)
+                {
+                    if (root.TryGetProperty("Modules", out var modProp) || root.TryGetProperty("modules", out modProp))
+                    {
+                        var opts = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+                        modules = JsonSerializer.Deserialize<Dictionary<string, ModuleActionFlags>>(modProp.GetRawText(), opts)
+                                  ?? new Dictionary<string, ModuleActionFlags>(StringComparer.OrdinalIgnoreCase);
+
+                        if (root.TryGetProperty("SpecialActions", out var specProp) || root.TryGetProperty("specialActions", out specProp))
+                        {
+                            special = JsonSerializer.Deserialize<Dictionary<string, bool>>(specProp.GetRawText(), opts)
+                                      ?? new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+                        }
+                    }
+                    else
+                    {
+                        var opts = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+                        modules = JsonSerializer.Deserialize<Dictionary<string, ModuleActionFlags>>(json, opts)
+                                  ?? new Dictionary<string, ModuleActionFlags>(StringComparer.OrdinalIgnoreCase);
+                    }
+                }
             }
-            catch
-            {
-                return new Dictionary<string, ModuleActionFlags>(StringComparer.OrdinalIgnoreCase);
-            }
+            catch { }
+
+            return (modules, special);
         }
+
+        private static Dictionary<string, ModuleActionFlags> ParseMap(string? json)
+        {
+            var (mods, _) = ParseRolePermissions(json);
+            return mods;
+        }
+
+        private static string[] GetSupportedActionsForModule(string code) => code switch
+        {
+            ModuleCodes.MasterProject => new[] { "View", "Create", "Edit" },
+            ModuleCodes.MasterConfig => new[] { "View", "Create", "Edit" },
+            ModuleCodes.MasterBoxCapacity => new[] { "View", "Create", "Edit", "Delete" },
+            ModuleCodes.MasterEnvelope => new[] { "View", "Create", "Edit", "Delete" },
+            ModuleCodes.MasterFields => new[] { "View", "Create", "Edit", "Delete" },
+            ModuleCodes.MasterModules => new[] { "View", "Create", "Edit", "Delete" },
+            ModuleCodes.MasterNodalExtra => new[] { "View", "Create", "Edit", "Delete" },
+            ModuleCodes.MasterRpt => new[] { "View", "Create", "Edit", "Delete" },
+            ModuleCodes.MessageManagement => new[] { "View", "Create", "Edit" },
+            ModuleCodes.RolesPermissions => new[] { "View", "Create", "Edit", "Delete" },
+            ModuleCodes.ProjectConfig => new[] { "View", "Create", "Edit", "Delete" },
+            ModuleCodes.DataImport => new[] { "View", "Create" },
+            ModuleCodes.UploadedData => new[] { "View", "Edit", "Delete" },
+            ModuleCodes.ConflictReport => new[] { "View", "Edit" },
+            ModuleCodes.FillMissingData => new[] { "View", "Edit" },
+            ModuleCodes.LotBifurcation => new[] { "View", "Edit" },
+            ModuleCodes.MergeCatchNumbers => new[] { "View", "Edit" },
+            ModuleCodes.ProcessingPipeline => new[] { "View", "Edit" },
+            ModuleCodes.ReportTemplateManagement => new[] { "View", "Create", "Edit", "Delete" },
+            ModuleCodes.HeaderVerification => new[] { "View", "Edit" },
+            ModuleCodes.ChangedNr => new[] { "View", "Edit" },
+            ModuleCodes.BatchData => new[] { "View" },
+            ModuleCodes.NodalCatch => new[] { "View", "Create", "Edit", "Delete" },
+            ModuleCodes.HtovTool => new[] { "View", "Edit" },
+            ModuleCodes.CorrectionTool => new[] { "View", "Edit" },
+            ModuleCodes.Reports => new[] { "View" },
+            _ => new[] { "View", "Create", "Edit", "Delete" }
+        };
 
         private static string FormatDisplayName(string code) => code switch
         {
@@ -405,10 +525,15 @@ namespace Tools.Controllers
             ModuleCodes.MasterModules => "Tools Module",
             ModuleCodes.MasterNodalExtra => "Nodal Univ Extra",
             ModuleCodes.MasterRpt => "RPT Templates",
-            ModuleCodes.MasterCrystal => "Crystal Reports",
             ModuleCodes.ProjectConfig => "Project Configuration",
-            ModuleCodes.DataImport => "Data Import",
+            ModuleCodes.DataImport => "Data Import (Upload)",
+            ModuleCodes.UploadedData => "Data Import - Uploaded Data",
+            ModuleCodes.ConflictReport => "Data Import - Conflict Report",
+            ModuleCodes.FillMissingData => "Data Import - Fill Missing Data",
+            ModuleCodes.LotBifurcation => "Data Import - Lot Bifurcation",
+            ModuleCodes.MergeCatchNumbers => "Data Import - Merge Catch Numbers",
             ModuleCodes.ProcessingPipeline => "Processing Pipeline",
+            ModuleCodes.ReportTemplateManagement => "Report & Template Management",
             ModuleCodes.HeaderVerification => "Header Verification",
             ModuleCodes.ChangedNr => "Changed NR Analysis",
             ModuleCodes.BatchData => "Batch Wise Data",
@@ -416,7 +541,8 @@ namespace Tools.Controllers
             ModuleCodes.HtovTool => "Horizontal To Vertical",
             ModuleCodes.CorrectionTool => "Correction Tool",
             ModuleCodes.Reports => "Reports",
-            ModuleCodes.RolesPermissions => "Roles & Permissions Admin",
+            ModuleCodes.RolesPermissions => "Roles & Permissions",
+            ModuleCodes.MessageManagement => "Message Management",
             _ => code
         };
     }

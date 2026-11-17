@@ -141,7 +141,7 @@ namespace Tools.Controllers
 
 
         [HttpPost("upload-and-process")]
-        [RequirePermission(ModuleCodes.HtovTool, PermissionAction.Execute)]
+        [RequirePermission(ModuleCodes.HtovTool, PermissionAction.Edit)]
         public async Task<IActionResult> UploadAndProcessExcel([FromForm] IFormFile file, [FromForm] string fixedHeaders, [FromForm] int ProjectId)
         {
             if (file == null || file.Length == 0)

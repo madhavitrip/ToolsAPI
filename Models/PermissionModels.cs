@@ -72,10 +72,20 @@ namespace Tools.Models
         public const string MasterModules = "MASTER_MODULES";
         public const string MasterNodalExtra = "MASTER_NODAL_EXTRA";
         public const string MasterRpt = "MASTER_RPT";
-        public const string MasterCrystal = "MASTER_CRYSTAL";
         public const string ProjectConfig = "PROJECT_CONFIG";
+
+        // Data Import Sub-tabs
         public const string DataImport = "DATA_IMPORT";
+        public const string UploadedData = "UPLOADED_DATA";
+        public const string ConflictReport = "CONFLICT_REPORT";
+        public const string FillMissingData = "FILL_MISSING_DATA";
+        public const string LotBifurcation = "LOT_BIFURCATION";
+        public const string MergeCatchNumbers = "MERGE_CATCH_NUMBERS";
+
+        // Independent Processing & Report/Template Section
         public const string ProcessingPipeline = "PROCESSING_PIPELINE";
+        public const string ReportTemplateManagement = "REPORT_TEMPLATE_MANAGEMENT";
+
         public const string HeaderVerification = "HEADER_VERIFICATION";
         public const string ChangedNr = "CHANGED_NR";
         public const string BatchData = "BATCH_DATA";
@@ -84,14 +94,46 @@ namespace Tools.Models
         public const string CorrectionTool = "CORRECTION_TOOL";
         public const string Reports = "REPORTS";
         public const string RolesPermissions = "ROLES_PERMISSIONS";
+        public const string MessageManagement = "MESSAGE_MANAGEMENT";
 
         public static readonly string[] All = new[]
         {
-            Dashboard, MasterProject, ProjectConfig, MasterConfig, MasterBoxCapacity, MasterEnvelope,
-            MasterFields, MasterModules, MasterNodalExtra, MasterRpt, MasterCrystal,
-            DataImport, ProcessingPipeline, HeaderVerification, ChangedNr,
-            BatchData, NodalCatch, HtovTool, CorrectionTool, Reports, RolesPermissions
+            MasterProject, ProjectConfig, MasterConfig, MasterBoxCapacity, MasterEnvelope,
+            MasterFields, MasterModules, MasterNodalExtra, MasterRpt,
+            DataImport, UploadedData, ConflictReport, FillMissingData, LotBifurcation, MergeCatchNumbers,
+            ProcessingPipeline, ReportTemplateManagement,
+            HeaderVerification, ChangedNr, BatchData, NodalCatch, HtovTool, CorrectionTool,
+            Reports, RolesPermissions, MessageManagement
         };
+    }
+
+    public static class SpecialActionCodes
+    {
+        public const string DeleteAllNrData = "ACTION_DELETE_ALL_NR_DATA";
+        public const string BulkUpdateNrData = "ACTION_BULK_UPDATE_NR_DATA";
+        public const string BulkVerifyCatches = "ACTION_BULK_VERIFY_CATCHES";
+        public const string ApplyChangedNr = "ACTION_APPLY_CHANGED_NR";
+        public const string PushNodalToNr = "ACTION_PUSH_NODAL_TO_NR";
+        public const string PurgeReportRecord = "ACTION_PURGE_REPORT_RECORD";
+
+        public static readonly string[] All = new[]
+        {
+            DeleteAllNrData,
+            BulkUpdateNrData,
+            BulkVerifyCatches,
+            ApplyChangedNr,
+            PushNodalToNr,
+            PurgeReportRecord
+        };
+    }
+
+    public class SpecialActionMetadata
+    {
+        public string Code { get; set; } = string.Empty;
+        public string DisplayName { get; set; } = string.Empty;
+        public string ParentModule { get; set; } = string.Empty;
+        public PermissionAction RequiredStandardAction { get; set; }
+        public string Description { get; set; } = string.Empty;
     }
 
     public enum PermissionAction
@@ -125,6 +167,7 @@ namespace Tools.Models
         public string RoleName { get; set; } = string.Empty;
         public bool IsSuperuser { get; set; }
         public Dictionary<string, ModuleActionFlags> Modules { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<string, bool> SpecialActions { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     }
 
     public class RolePermissionItemDto
@@ -141,6 +184,7 @@ namespace Tools.Models
     public class UpdateRolePermissionsRequest
     {
         public List<RolePermissionItemDto> Permissions { get; set; } = new();
+        public Dictionary<string, bool>? SpecialActions { get; set; }
     }
 
     public class UserOverrideItemDto

@@ -829,7 +829,7 @@ namespace Tools.Controllers
         }
 
         [HttpPost("merge-catchnos")]
-        [RequirePermission(ModuleCodes.DataImport, PermissionAction.Execute)]
+        [RequirePermission(ModuleCodes.MergeCatchNumbers, PermissionAction.Execute)]
         public async Task<ActionResult> MergeCatchNos(int ProjectId, [FromBody] MergeCatchNoRequest request, [FromQuery] int? lotNo = null)
         {
             var isNewModel = await _context.NrData1.AnyAsync(p => p.ProjectId == ProjectId);
@@ -1350,7 +1350,7 @@ namespace Tools.Controllers
         // PUT: api/NRDatas/5
         // To protect from overposting attacks, see https://go.microsoft.com/fwlink/?linkid=2123754
         [HttpPut("{id}")]
-        [RequirePermission(ModuleCodes.DataImport, PermissionAction.Edit)]
+        [RequirePermission(ModuleCodes.UploadedData, PermissionAction.Edit)]
         public async Task<IActionResult> PutNRData(int id, NRData nRData)
         {
             if (id != nRData.Id)
@@ -1384,7 +1384,7 @@ namespace Tools.Controllers
 
         // PUT: api/NRDatas/UpdateSingle/{id}
         [HttpPut("UpdateSingle/{id}")]
-        [RequirePermission(ModuleCodes.DataImport, PermissionAction.Edit)]
+        [RequirePermission(ModuleCodes.UploadedData, PermissionAction.Edit)]
         public async Task<IActionResult> UpdateSingleNRData(int id, [FromBody] JsonElement inputData, [FromQuery] int? lotNo = null)
         {
             using var transaction = await _context.Database.BeginTransactionAsync();
@@ -1905,7 +1905,7 @@ namespace Tools.Controllers
         // PUT: api/NRDatas/UpdateCatchwise/{*catchNo}
         [HttpPut("UpdateCatchwise/{*catchNo}")]
         [HttpPut("UpdateCatchwise")]
-        [RequirePermission(ModuleCodes.DataImport, PermissionAction.Edit)]
+        [RequirePermission(ModuleCodes.UploadedData, PermissionAction.Edit)]
         public async Task<IActionResult> UpdateCatchwiseNRData(string? catchNo, [FromBody] JsonElement inputData, [FromQuery] int? lotNo = null, [FromQuery] string? queryCatchNo = null)
         {
             if (string.IsNullOrWhiteSpace(catchNo))
@@ -3608,6 +3608,7 @@ namespace Tools.Controllers
         }
 
         [HttpPut("conflicts/status")]
+        [RequirePermission(ModuleCodes.ConflictReport, PermissionAction.Edit)]
         public async Task<ActionResult> UpdateConflictStatus(int ProjectId, [FromBody] ConflictStatusUpdateDto payload, [FromQuery] int? lotNo = null)
         {
             if (payload == null || string.IsNullOrWhiteSpace(payload.ConflictType))
@@ -4868,6 +4869,7 @@ namespace Tools.Controllers
         }
 
         [HttpPost("missing-data")]
+        [RequirePermission(ModuleCodes.FillMissingData, PermissionAction.Edit)]
         public async Task<ActionResult> SaveMissingData([FromBody] MissingDataSaveRequest request, [FromQuery] int? lotNo = null)
         {
             if (request == null || request.ProjectId <= 0)
@@ -5734,7 +5736,8 @@ namespace Tools.Controllers
         }
 
         [HttpPut("BulkUpdate")]
-        [RequirePermission(ModuleCodes.DataImport, PermissionAction.Edit)]
+        [RequirePermission(ModuleCodes.UploadedData, PermissionAction.Edit)]
+        [RequireSpecialAction(SpecialActionCodes.BulkUpdateNrData, ModuleCodes.UploadedData, PermissionAction.Edit)]
         public async Task<IActionResult> BulkUpdateNRData(
             [FromBody] List<NRData> data,
             [FromQuery] int projectId
@@ -5886,7 +5889,7 @@ namespace Tools.Controllers
 
         // DELETE: api/NRDatas/5
         [HttpDelete("{id}")]
-        [RequirePermission(ModuleCodes.DataImport, PermissionAction.Delete)]
+        [RequirePermission(ModuleCodes.UploadedData, PermissionAction.Delete)]
         public async Task<IActionResult> DeleteNRData(int id)
         {
             try
@@ -6007,7 +6010,8 @@ namespace Tools.Controllers
         }
 
         [HttpDelete("DeleteByProject/{ProjectId}")]
-        [RequirePermission(ModuleCodes.DataImport, PermissionAction.Delete)]
+        [RequirePermission(ModuleCodes.UploadedData, PermissionAction.Delete)]
+        [RequireSpecialAction(SpecialActionCodes.DeleteAllNrData, ModuleCodes.UploadedData, PermissionAction.Delete)]
         public async Task<IActionResult> DeleteNR(int ProjectId, [FromQuery] int? lotNo = null)
         {
             try
@@ -7182,6 +7186,7 @@ namespace Tools.Controllers
         // ---------------------------------------------------------
         [HttpPost("~/api/Correction/HeaderVerification/BulkVerifyProject/{projectId}")]
         [RequirePermission(ModuleCodes.HeaderVerification, PermissionAction.Edit)]
+        [RequireSpecialAction(SpecialActionCodes.BulkVerifyCatches, ModuleCodes.HeaderVerification, PermissionAction.Edit)]
         public async Task<IActionResult> BulkVerifyProject(int projectId)
         {
             if (projectId <= 0)
@@ -7264,7 +7269,7 @@ namespace Tools.Controllers
 
         [HttpDelete("DeleteCatchNo/{projectId}/{*catchNo}")]
         [HttpDelete("DeleteCatchNo/{projectId}")]
-        [RequirePermission(ModuleCodes.DataImport, PermissionAction.Delete)]
+        [RequirePermission(ModuleCodes.UploadedData, PermissionAction.Delete)]
         public async Task<IActionResult> DeleteCatchNo(int projectId, string? catchNo, [FromQuery] string? queryCatchNo = null)
         {
             try
@@ -9319,6 +9324,7 @@ namespace Tools.Controllers
 
         [HttpPost("apply-comparison-changes")]
         [RequirePermission(ModuleCodes.ChangedNr, PermissionAction.Execute)]
+        [RequireSpecialAction(SpecialActionCodes.ApplyChangedNr, ModuleCodes.ChangedNr, PermissionAction.Execute)]
         public async Task<IActionResult> ApplyComparisonChanges([FromBody] ApplyComparisonChangesDto model)
         {
             try
