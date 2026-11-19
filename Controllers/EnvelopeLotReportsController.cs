@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using ERPToolsAPI.Data;
@@ -9,6 +10,7 @@ using System.ComponentModel.DataAnnotations;
 namespace ToolsAPI.Controllers
 {
     [Route("api/[controller]")]
+    [Authorize]
     [ApiController]
     public class EnvelopeLotReportsController : ControllerBase
     {
@@ -457,7 +459,7 @@ namespace ToolsAPI.Controllers
 
         // PUT: api/EnvelopeLotReports/{id}/archive
         [HttpPut("{id}/archive")]
-        [RequirePermission(ModuleCodes.ProcessingPipeline, PermissionAction.Edit)]
+        [RequirePermission(ModuleCodes.ReportTemplateManagement, PermissionAction.Edit)]
         public async Task<IActionResult> ArchiveReport(int id)
         {
             try
@@ -482,7 +484,7 @@ namespace ToolsAPI.Controllers
 
         // PUT: api/EnvelopeLotReports/{id}/unarchive
         [HttpPut("{id}/unarchive")]
-        [RequirePermission(ModuleCodes.ProcessingPipeline, PermissionAction.Edit)]
+        [RequirePermission(ModuleCodes.ReportTemplateManagement, PermissionAction.Edit)]
         public async Task<IActionResult> UnarchiveReport(int id)
         {
             try

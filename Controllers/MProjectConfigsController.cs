@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using ERPToolsAPI.Data;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -10,6 +11,7 @@ using System.Text.Json;
 namespace Tools.Controllers
 {
     [Route("api/[controller]")]
+    [Authorize]
     [ApiController]
     public class MProjectConfigsController : ControllerBase
     {

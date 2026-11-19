@@ -1,6 +1,8 @@
 using ERPToolsAPI.Data;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Tools.Middleware;
 using Tools.Models;
 using System.Globalization;
 using Microsoft.EntityFrameworkCore;
@@ -8,6 +10,7 @@ using Tools.Services;
 
 namespace Tools.Controllers
 {
+    [Authorize]
     [Route("api/[controller]")]
     [ApiController]
     public class ProjectLotRangeController : ControllerBase
@@ -23,6 +26,7 @@ namespace Tools.Controllers
 
         [HttpGet("{projectId}")]
         [HttpGet("by-project/{projectId}")]
+        [RequirePermission(ModuleCodes.ProjectConfig, PermissionAction.View)]
         public async Task<IActionResult> GetProjectLotRanges(int projectId)
         {
             if (projectId <= 0)
@@ -56,6 +60,7 @@ namespace Tools.Controllers
         }
 
         [HttpPost("sync-dispatch/{projectId}")]
+        [RequirePermission(ModuleCodes.ProjectConfig, PermissionAction.Edit)]
         public async Task<IActionResult> SyncDispatch(int projectId)
         {
             if (projectId <= 0)
@@ -78,6 +83,7 @@ namespace Tools.Controllers
         }
 
         [HttpPost]
+        [RequirePermission(ModuleCodes.ProjectConfig, PermissionAction.Edit)]
         public async Task<IActionResult> PostProjectLotRange([FromBody] ProjectLotRangeDto model)
         {
             try

@@ -1,11 +1,15 @@
 ﻿
 using ERPToolsAPI.Data;
 using ERPToolsAPI.Models;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System.Net.Http.Json;
 using System.Text.RegularExpressions;
+using Tools.Middleware;
+using Tools.Models;
 
+[Authorize]
 [ApiController]
 [Route("api/[controller]")]
 public class CorrectionController : ControllerBase
@@ -23,6 +27,7 @@ public class CorrectionController : ControllerBase
 
 
     [HttpPost("correct")]
+    [RequirePermission(ModuleCodes.CorrectionTool, PermissionAction.Edit)]
     public async Task<IActionResult> CorrectCourseOnly([FromBody] CorrectionPayload payload)
     {
         var client = _httpClientFactory.CreateClient();
@@ -153,6 +158,7 @@ public class CorrectionController : ControllerBase
 
 
     [HttpPost("updateRows")]
+    [RequirePermission(ModuleCodes.CorrectionTool, PermissionAction.Edit)]
     public async Task<IActionResult> UpdateRows([FromBody] List<ExcelUpload> updatedRows)
     {
         foreach (var updatedRow in updatedRows)
@@ -343,6 +349,7 @@ public class CorrectionController : ControllerBase
     }
 
     [HttpGet("audit")]
+    [RequirePermission(ModuleCodes.CorrectionTool, PermissionAction.View)]
     public async Task<IActionResult> AuditGroupData([FromQuery] int groupId)
     {
         var client = _httpClientFactory.CreateClient();

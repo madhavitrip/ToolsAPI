@@ -12,11 +12,14 @@ using System.Text.Json;
 using Humanizer;
 using Newtonsoft.Json;
 using NRData = Tools.Models.NRData;
+using Microsoft.AspNetCore.Authorization;
+using Tools.Models;
 using Tools.Services;
 using Tools.Middleware;
 
 namespace Tools.Controllers
 {
+    [Authorize]
     [Route("api/[controller]")]
     [ApiController]
     public class DuplicateController : ControllerBase
@@ -35,6 +38,7 @@ namespace Tools.Controllers
         }
 
         [HttpPost]
+        [RequirePermission(ModuleCodes.ProcessingPipeline, PermissionAction.Edit)]
         public async Task<IActionResult> MergeFields(int ProjectId, int? batchId = null, int? lotNo = null)
         {
             try
@@ -271,6 +275,7 @@ namespace Tools.Controllers
             }
         }
         [HttpPost("Enhancement")]
+        [RequirePermission(ModuleCodes.ProcessingPipeline, PermissionAction.Edit)]
         public async Task<IActionResult> ApplyEnhancement(int ProjectId, [FromQuery] int? batch = null, [FromQuery] int? lotNo = null)
         {
             try
@@ -526,6 +531,7 @@ WHERE ProjectId = {0};", ProjectId);
 
 
         [HttpGet("MergeData")]
+        [RequirePermission(ModuleCodes.ProcessingPipeline, PermissionAction.View)]
         public async Task<IActionResult> MergeEnvelope(int ProjectId)
         {
             // Helper function to parse JSON and sum the values (same as your existing one)
@@ -663,6 +669,7 @@ WHERE ProjectId = {0};", ProjectId);
 
 
         [HttpGet("DuplicateReport")]
+        [RequirePermission(ModuleCodes.ProcessingPipeline, PermissionAction.View)]
         public async Task<IActionResult> DuplicateReport(int ProjectId, int? uploadId = null, [FromQuery] int? lotNo = null)
         {
             try

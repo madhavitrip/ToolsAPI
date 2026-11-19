@@ -55,9 +55,30 @@ namespace ToolsAPI.Controllers
 
         [HttpGet]
         [RequirePermission(ModuleCodes.MessageManagement, PermissionAction.View)]
-        public async Task<IActionResult> GetMessages([FromQuery] string? module, [FromQuery] string? search, [FromQuery] bool? missingHindiOnly, [FromQuery] int pageNumber = 1, [FromQuery] int pageSize = 20)
+        public async Task<IActionResult> GetMessages(
+            [FromQuery] string? module,
+            [FromQuery] string? search,
+            [FromQuery] bool? missingHindiOnly,
+            [FromQuery] string? keySearch,
+            [FromQuery] string? englishSearch,
+            [FromQuery] string? hindiSearch,
+            [FromQuery] string? sortBy,
+            [FromQuery] string? sortOrder,
+            [FromQuery] int pageNumber = 1,
+            [FromQuery] int pageSize = 20)
         {
-            var result = await _translationService.GetMessagesAsync(module, search, missingHindiOnly, pageNumber, pageSize, HttpContext.RequestAborted);
+            var result = await _translationService.GetMessagesAsync(
+                module,
+                search,
+                missingHindiOnly,
+                keySearch,
+                englishSearch,
+                hindiSearch,
+                sortBy,
+                sortOrder,
+                pageNumber,
+                pageSize,
+                HttpContext.RequestAborted);
             return Ok(result);
         }
 

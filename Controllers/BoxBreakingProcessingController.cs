@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using ERPToolsAPI.Data;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -11,6 +12,7 @@ using Tools.Middleware;
 
 namespace Tools.Controllers
 {
+    [Authorize]
     [ApiController]
     [Route("api/[controller]")]
     public class BoxBreakingProcessingController : ControllerBase

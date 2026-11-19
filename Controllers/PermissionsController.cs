@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -12,6 +13,7 @@ using Tools.Middleware;
 
 namespace Tools.Controllers
 {
+    [Authorize]
     [ApiController]
     [Route("api/[controller]")]
     public class PermissionsController : ControllerBase
@@ -82,14 +84,6 @@ namespace Tools.Controllers
                 },
                 new SpecialActionMetadata
                 {
-                    Code = SpecialActionCodes.BulkUpdateNrData,
-                    DisplayName = "Bulk Update NR Data",
-                    ParentModule = ModuleCodes.UploadedData,
-                    RequiredStandardAction = PermissionAction.Edit,
-                    Description = "Allows executing mass batch updates across multiple NR records simultaneously."
-                },
-                new SpecialActionMetadata
-                {
                     Code = SpecialActionCodes.BulkVerifyCatches,
                     DisplayName = "Verify All Catches",
                     ParentModule = ModuleCodes.HeaderVerification,
@@ -107,7 +101,7 @@ namespace Tools.Controllers
                 new SpecialActionMetadata
                 {
                     Code = SpecialActionCodes.PushNodalToNr,
-                    DisplayName = "Push Nodal into Main NR Data",
+                    DisplayName = "Push Temp into Main NR Data",
                     ParentModule = ModuleCodes.NodalCatch,
                     RequiredStandardAction = PermissionAction.Edit,
                     Description = "Allows merging verified Nodal center and catch assignments directly into primary NR records."
@@ -115,10 +109,34 @@ namespace Tools.Controllers
                 new SpecialActionMetadata
                 {
                     Code = SpecialActionCodes.PurgeReportRecord,
-                    DisplayName = "Delete/Purge Report Records",
+                    DisplayName = "Delete Report Records",
                     ParentModule = ModuleCodes.ReportTemplateManagement,
                     RequiredStandardAction = PermissionAction.Delete,
                     Description = "Allows deleting generated report records and archiving history from the repository."
+                },
+                new SpecialActionMetadata
+                {
+                    Code = SpecialActionCodes.UploadRptTemplate,
+                    DisplayName = "Upload RPT Template",
+                    ParentModule = ModuleCodes.ReportTemplateManagement,
+                    RequiredStandardAction = PermissionAction.Create,
+                    Description = "Allows uploading Crystal Report (.rpt) template files into master and project repositories."
+                },
+                new SpecialActionMetadata
+                {
+                    Code = SpecialActionCodes.MapRptTemplate,
+                    DisplayName = "Configure Template Mapping",
+                    ParentModule = ModuleCodes.ReportTemplateManagement,
+                    RequiredStandardAction = PermissionAction.Edit,
+                    Description = "Allows configuring database field mappings and table relationships for RPT templates."
+                },
+                new SpecialActionMetadata
+                {
+                    Code = SpecialActionCodes.SendToErp,
+                    DisplayName = "Transmit Data to ERP",
+                    ParentModule = ModuleCodes.ProcessingPipeline,
+                    RequiredStandardAction = PermissionAction.Edit,
+                    Description = "Allows transmitting compiled lot catch records, quantities, envelopes, and pages directly to ERP."
                 }
             };
 
@@ -142,8 +160,7 @@ namespace Tools.Controllers
                     r.RoleName,
                     r.Description,
                     r.IsSystemRole,
-                    r.UpdatedAt,
-                    UserCount = _context.UserPermissions.Count(u => u.RoleId == r.Id)
+                    r.UpdatedAt
                 })
                 .ToListAsync();
 
@@ -178,7 +195,7 @@ namespace Tools.Controllers
             // Default empty permissions for new role
             var defaultPerms = ModuleCodes.All.ToDictionary(m => m, _ => new ModuleActionFlags
             {
-                CanView = false, CanCreate = false, CanEdit = false, CanDelete = false, CanExecute = false, CanExport = false
+                CanView = false, CanCreate = false, CanEdit = false, CanDelete = false
             });
 
             var newRole = new ToolsRole
@@ -272,9 +289,7 @@ namespace Tools.Controllers
                     CanView = f?.CanView ?? false,
                     CanCreate = f?.CanCreate ?? false,
                     CanEdit = f?.CanEdit ?? false,
-                    CanDelete = f?.CanDelete ?? false,
-                    CanExecute = f?.CanExecute ?? false,
-                    CanExport = f?.CanExport ?? false
+                    CanDelete = f?.CanDelete ?? false
                 };
             }).ToList();
 
@@ -305,9 +320,7 @@ namespace Tools.Controllers
                     CanView = item.CanView,
                     CanCreate = item.CanCreate,
                     CanEdit = item.CanEdit,
-                    CanDelete = item.CanDelete,
-                    CanExecute = item.CanExecute,
-                    CanExport = item.CanExport
+                    CanDelete = item.CanDelete
                 };
             }
 
@@ -326,116 +339,6 @@ namespace Tools.Controllers
             _permissionService.InvalidateAllCaches();
 
             return Ok(new { success = true, message = $"Permissions updated for role '{role.RoleName}'." });
-        }
-
-        /// <summary>
-        /// Get user's assigned role and overrides.
-        /// </summary>
-        [HttpGet("user/{userId}")]
-        public async Task<IActionResult> GetUserConfig(int userId, [FromQuery] int? erpRoleId = null)
-        {
-            await _permissionService.EnsureDatabaseInitializedAsync();
-            _permissionService.InvalidateUserCache(userId);
-
-            var userRecord = await _context.UserPermissions.AsNoTracking().FirstOrDefaultAsync(u => u.UserId == userId);
-            ToolsRole? assignedRole = null;
-            if (userRecord?.RoleId != null)
-            {
-                assignedRole = await _context.ToolsRoles.AsNoTracking().FirstOrDefaultAsync(r => r.Id == userRecord.RoleId.Value);
-            }
-
-            var overridesMap = ParseMap(userRecord?.OverridesJson);
-            var overridesList = ModuleCodes.All.Select(code =>
-            {
-                overridesMap.TryGetValue(code, out var f);
-                return new UserOverrideItemDto
-                {
-                    ModuleCode = code,
-                    CanView = f?.CanView,
-                    CanCreate = f?.CanCreate,
-                    CanEdit = f?.CanEdit,
-                    CanDelete = f?.CanDelete,
-                    CanExecute = f?.CanExecute,
-                    CanExport = f?.CanExport
-                };
-            }).ToList();
-
-            var effective = await _permissionService.GetUserPermissionsAsync(userId, Request, erpRoleId);
-
-            return Ok(new
-            {
-                UserId = userId,
-                AssignedRole = assignedRole != null ? new { RoleId = assignedRole.Id, RoleName = assignedRole.RoleName } : null,
-                EffectiveRole = new { effective.RoleId, effective.RoleName, effective.IsSuperuser },
-                Overrides = overridesList,
-                EffectivePermissions = effective.Modules
-            });
-        }
-
-        /// <summary>
-        /// Assign role to user or update user overrides.
-        /// </summary>
-        [HttpPut("user/{userId}")]
-        [RequirePermission(ModuleCodes.RolesPermissions, PermissionAction.Edit)]
-        public async Task<IActionResult> UpdateUserConfig(int userId, [FromBody] UpdateUserPermissionsRequest request)
-        {
-            int callerUserId = LogHelper.GetTriggeredBy(User, Request);
-            int callerRoleId = LogHelper.GetUserRoleId(User, Request);
-            if (callerRoleId != 1 && callerRoleId != 2)
-            {
-                return StatusCode(403, new { message = "Only administrators can configure user permissions." });
-            }
-
-            var userRecord = await _context.UserPermissions.FirstOrDefaultAsync(u => u.UserId == userId);
-
-            // Filter overrides: only store modules with at least one non-null override
-            var overridesMap = new Dictionary<string, ModuleActionFlags>(StringComparer.OrdinalIgnoreCase);
-            if (request.Overrides != null)
-            {
-                foreach (var item in request.Overrides)
-                {
-                    bool hasValue = item.CanView.HasValue || item.CanCreate.HasValue || item.CanEdit.HasValue
-                                    || item.CanDelete.HasValue || item.CanExecute.HasValue || item.CanExport.HasValue;
-                    if (hasValue)
-                    {
-                        overridesMap[item.ModuleCode] = new ModuleActionFlags
-                        {
-                            CanView = item.CanView,
-                            CanCreate = item.CanCreate,
-                            CanEdit = item.CanEdit,
-                            CanDelete = item.CanDelete,
-                            CanExecute = item.CanExecute,
-                            CanExport = item.CanExport
-                        };
-                    }
-                }
-            }
-
-            string? overridesJson = overridesMap.Count > 0 ? JsonSerializer.Serialize(overridesMap) : null;
-
-            if (userRecord != null)
-            {
-                userRecord.RoleId = request.RoleId;
-                userRecord.OverridesJson = overridesJson;
-                userRecord.UpdatedAt = DateTime.Now;
-                userRecord.UpdatedBy = callerUserId;
-            }
-            else
-            {
-                _context.UserPermissions.Add(new UserPermission
-                {
-                    UserId = userId,
-                    RoleId = request.RoleId,
-                    OverridesJson = overridesJson,
-                    UpdatedAt = DateTime.Now,
-                    UpdatedBy = callerUserId
-                });
-            }
-
-            await _context.SaveChangesAsync();
-            _permissionService.InvalidateUserCache(userId);
-
-            return Ok(new { success = true, message = $"User {userId} permissions configuration saved." });
         }
 
         private static (Dictionary<string, ModuleActionFlags> Modules, Dictionary<string, bool> SpecialActions) ParseRolePermissions(string? json)
@@ -477,16 +380,10 @@ namespace Tools.Controllers
             return (modules, special);
         }
 
-        private static Dictionary<string, ModuleActionFlags> ParseMap(string? json)
-        {
-            var (mods, _) = ParseRolePermissions(json);
-            return mods;
-        }
-
         private static string[] GetSupportedActionsForModule(string code) => code switch
         {
             ModuleCodes.MasterProject => new[] { "View", "Create", "Edit" },
-            ModuleCodes.MasterConfig => new[] { "View", "Create", "Edit" },
+            ModuleCodes.MasterConfig => new[] { "View","Edit" },
             ModuleCodes.MasterBoxCapacity => new[] { "View", "Create", "Edit", "Delete" },
             ModuleCodes.MasterEnvelope => new[] { "View", "Create", "Edit", "Delete" },
             ModuleCodes.MasterFields => new[] { "View", "Create", "Edit", "Delete" },
@@ -495,7 +392,7 @@ namespace Tools.Controllers
             ModuleCodes.MasterRpt => new[] { "View", "Create", "Edit", "Delete" },
             ModuleCodes.MessageManagement => new[] { "View", "Create", "Edit" },
             ModuleCodes.RolesPermissions => new[] { "View", "Create", "Edit", "Delete" },
-            ModuleCodes.ProjectConfig => new[] { "View", "Create", "Edit", "Delete" },
+            ModuleCodes.ProjectConfig => new[] { "View", "Edit", "Delete" },
             ModuleCodes.DataImport => new[] { "View", "Create" },
             ModuleCodes.UploadedData => new[] { "View", "Edit", "Delete" },
             ModuleCodes.ConflictReport => new[] { "View", "Edit" },
@@ -503,9 +400,9 @@ namespace Tools.Controllers
             ModuleCodes.LotBifurcation => new[] { "View", "Edit" },
             ModuleCodes.MergeCatchNumbers => new[] { "View", "Edit" },
             ModuleCodes.ProcessingPipeline => new[] { "View", "Edit" },
-            ModuleCodes.ReportTemplateManagement => new[] { "View", "Create", "Edit", "Delete" },
+            ModuleCodes.ReportTemplateManagement => new[] { "View", "Edit", "Delete" },
             ModuleCodes.HeaderVerification => new[] { "View", "Edit" },
-            ModuleCodes.ChangedNr => new[] { "View", "Edit" },
+            ModuleCodes.ChangedNr => new[] { "View", "Create", "Edit" },
             ModuleCodes.BatchData => new[] { "View" },
             ModuleCodes.NodalCatch => new[] { "View", "Create", "Edit", "Delete" },
             ModuleCodes.HtovTool => new[] { "View", "Edit" },

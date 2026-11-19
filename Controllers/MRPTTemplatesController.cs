@@ -102,6 +102,7 @@ namespace Tools.Controllers
 
         [Authorize]
         [RequirePermission(ModuleCodes.MasterRpt, PermissionAction.Create)]
+        [RequireSpecialAction(SpecialActionCodes.UploadRptTemplate, ModuleCodes.ReportTemplateManagement, PermissionAction.Create)]
         [RequireMasterAuth(Module = "Master Templates", Operation = "SAVE MASTER")]
         [HttpPost("upload")]
         [DisableRequestSizeLimit]
@@ -319,6 +320,7 @@ namespace Tools.Controllers
 
         [Authorize]
         [RequirePermission(ModuleCodes.MasterRpt, PermissionAction.Edit)]
+        [RequireSpecialAction(SpecialActionCodes.MapRptTemplate, ModuleCodes.ReportTemplateManagement, PermissionAction.Edit)]
         [HttpPost("{id}/mapping")]
         public async Task<ActionResult> SaveMapping(int id, [FromBody] MSaveMappingRequest req)
         {

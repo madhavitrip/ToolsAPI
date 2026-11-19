@@ -7,8 +7,11 @@ using Tools.Services;
 using Tools.Middleware;
 using System.Text.Json;
 
+using Microsoft.AspNetCore.Authorization;
+
 namespace Tools.Controllers
 {
+    [Authorize]
     [Route("api/[controller]")]
     [ApiController]
     public class MExtraConfigsController : ControllerBase
@@ -23,6 +26,7 @@ namespace Tools.Controllers
 
         // POST: api/MExtrasConfigs
         [HttpPost]
+        [RequirePermission(ModuleCodes.MasterNodalExtra, PermissionAction.Edit)]
         [RequireMasterAuth(Module = "MExtraConfigs", Operation = "SAVE MASTER")]
         public async Task<ActionResult<MExtraConfigurations>> PostMExtrasConfiguration(MExtraConfigurations extrasConfiguration)
         {
@@ -126,6 +130,7 @@ namespace Tools.Controllers
 
 
         [HttpGet("ByTypeGroup/{typeId}/{groupId}")]
+        [RequirePermission(ModuleCodes.MasterNodalExtra, PermissionAction.View)]
         public async Task<ActionResult<IEnumerable<MExtraConfigurations>>> GetExtrasByTypeGroup(int typeId, int groupId)
         {
             var extras = await _context.MExtraConfigurations

@@ -110,20 +110,24 @@ namespace Tools.Models
     public static class SpecialActionCodes
     {
         public const string DeleteAllNrData = "ACTION_DELETE_ALL_NR_DATA";
-        public const string BulkUpdateNrData = "ACTION_BULK_UPDATE_NR_DATA";
         public const string BulkVerifyCatches = "ACTION_BULK_VERIFY_CATCHES";
         public const string ApplyChangedNr = "ACTION_APPLY_CHANGED_NR";
         public const string PushNodalToNr = "ACTION_PUSH_NODAL_TO_NR";
         public const string PurgeReportRecord = "ACTION_PURGE_REPORT_RECORD";
+        public const string UploadRptTemplate = "ACTION_UPLOAD_RPT_TEMPLATE";
+        public const string MapRptTemplate = "ACTION_MAP_RPT_TEMPLATE";
+        public const string SendToErp = "ACTION_SEND_TO_ERP";
 
         public static readonly string[] All = new[]
         {
             DeleteAllNrData,
-            BulkUpdateNrData,
             BulkVerifyCatches,
             ApplyChangedNr,
             PushNodalToNr,
-            PurgeReportRecord
+            PurgeReportRecord,
+            UploadRptTemplate,
+            MapRptTemplate,
+            SendToErp
         };
     }
 

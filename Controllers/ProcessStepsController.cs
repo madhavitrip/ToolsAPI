@@ -1,9 +1,12 @@
 ﻿using ERPToolsAPI.Data;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System;
+using Tools.Middleware;
 using Tools.Models;
 
+[Authorize]
 [ApiController]
 [Route("api/[controller]")]
 public class ProcessStepsController : ControllerBase
@@ -16,6 +19,7 @@ public class ProcessStepsController : ControllerBase
     }
 
     [HttpPost]
+    [RequirePermission(ModuleCodes.ProcessingPipeline, PermissionAction.Edit)]
     public async Task<IActionResult> AddProcessStep([FromBody] ProcessSteps model)
     {
         if (!ModelState.IsValid)
@@ -59,6 +63,7 @@ public class ProcessStepsController : ControllerBase
     }
 
     [HttpGet]
+    [RequirePermission(ModuleCodes.ProcessingPipeline, PermissionAction.View)]
     public async Task<IActionResult> GetAllProcessSteps()
     {
         var processSteps = await _context.ProcessSteps

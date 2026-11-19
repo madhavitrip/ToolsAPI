@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -19,6 +20,7 @@ using Tools.Middleware;
 namespace Tools.Controllers
 {
     [Route("api/[controller]")]
+    [Authorize]
     [ApiController]
     public class EnvelopeBreakageProcessingController : ControllerBase
     {

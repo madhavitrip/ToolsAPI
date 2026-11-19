@@ -1,11 +1,14 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System.Text.Json;
+using Tools.Middleware;
 using Tools.Models;
 using ERPToolsAPI.Data;
 
 namespace Tools.Controllers
 {
+    [Authorize]
     [Route("api/[controller]")]
     [ApiController]
     public class TemporaryNrDatasController : ControllerBase
@@ -18,6 +21,7 @@ namespace Tools.Controllers
         }
 
         [HttpGet("{projectId}")]
+        [RequirePermission(ModuleCodes.NodalCatch, PermissionAction.View)]
         public async Task<IActionResult> GetTemporaryData(int projectId, [FromQuery] int pageNo = 1, [FromQuery] int pageSize = 10, [FromQuery] string? search = null, [FromQuery] string? sortField = null, [FromQuery] string? sortOrder = null, [FromQuery] string? columnFilters = null)
         {
             try
@@ -127,6 +131,7 @@ namespace Tools.Controllers
         }
 
         [HttpPut("{id}")]
+        [RequirePermission(ModuleCodes.NodalCatch, PermissionAction.Edit)]
         public async Task<IActionResult> UpdateTemporaryData(int id, [FromBody] UpdateTemporaryDataDto updatedRecord)
         {
             if (id != updatedRecord.Id && updatedRecord.Id != 0)
@@ -166,6 +171,7 @@ namespace Tools.Controllers
         }
 
         [HttpDelete("{id}")]
+        [RequirePermission(ModuleCodes.NodalCatch, PermissionAction.Delete)]
         public async Task<IActionResult> DeleteTemporaryData(int id)
         {
             try
@@ -188,6 +194,7 @@ namespace Tools.Controllers
         }
 
         [HttpDelete("deleteAll/{projectId}")]
+        [RequirePermission(ModuleCodes.NodalCatch, PermissionAction.Delete)]
         public async Task<IActionResult> DeleteAllTemporaryData(int projectId)
         {
             try
@@ -205,6 +212,7 @@ namespace Tools.Controllers
         }
 
         [HttpPost("batch-delete")]
+        [RequirePermission(ModuleCodes.NodalCatch, PermissionAction.Delete)]
         public async Task<IActionResult> BatchDeleteTemporaryData([FromBody] List<int> ids)
         {
             if (ids == null || !ids.Any()) return BadRequest("No records selected for deletion.");

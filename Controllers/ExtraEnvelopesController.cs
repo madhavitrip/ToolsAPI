@@ -16,8 +16,12 @@ using Tools.Services;
 using Microsoft.CodeAnalysis;
 using Tools.Middleware;
 
+using Microsoft.AspNetCore.Authorization;
+using Tools.Models;
+
 namespace Tools.Controllers
 {
+    [Authorize]
     [Route("api/[controller]")]
     [ApiController]
     public class ExtraEnvelopesController : ControllerBase
@@ -33,6 +37,7 @@ namespace Tools.Controllers
 
         // GET: api/ExtraEnvelopes
         [HttpGet]
+        [RequirePermission(ModuleCodes.MasterNodalExtra, PermissionAction.View)]
         public async Task<ActionResult<IEnumerable<ExtraEnvelopes>>> GetExtrasEnvelope(int ProjectId)
         {
             var NrData = await _context.NRDatas.Where(p => p.ProjectId == ProjectId && p.Status == true).ToListAsync();
@@ -100,6 +105,7 @@ namespace Tools.Controllers
 
         // GET: api/ExtraEnvelopes/5
         [HttpGet("{id}")]
+        [RequirePermission(ModuleCodes.MasterNodalExtra, PermissionAction.View)]
         public async Task<ActionResult<ExtraEnvelopes>> GetExtraEnvelopes(int id)
         {
             var extraEnvelopes = await _context.ExtrasEnvelope.FindAsync(id);
@@ -115,6 +121,7 @@ namespace Tools.Controllers
         // PUT: api/ExtraEnvelopes/5
         // To protect from overposting attacks, see https://go.microsoft.com/fwlink/?linkid=2123754
         [HttpPut("{id}")]
+        [RequirePermission(ModuleCodes.MasterNodalExtra, PermissionAction.Edit)]
         public async Task<IActionResult> PutExtraEnvelopes(int id, ExtraEnvelopes extraEnvelopes)
         {
             if (id != extraEnvelopes.Id)
@@ -160,6 +167,7 @@ namespace Tools.Controllers
         // POST: api/ExtraEnvelopes
         // To protect from overposting attacks, see https://go.microsoft.com/fwlink/?linkid=2123754
         [HttpPost]
+        [RequirePermission(ModuleCodes.MasterNodalExtra, PermissionAction.Create)]
         public async Task<ActionResult> PostExtraEnvelopes(int ProjectId, int? uploadId = null, [FromQuery] int? batchNo = null, [FromQuery] int? lotNo = null)
         {
             try
@@ -706,6 +714,7 @@ namespace Tools.Controllers
 
         // DELETE: api/ExtraEnvelopes/5
         [HttpDelete("{id}")]
+        [RequirePermission(ModuleCodes.MasterNodalExtra, PermissionAction.Delete)]
         public async Task<IActionResult> DeleteExtraEnvelopes(int id)
         {
             try

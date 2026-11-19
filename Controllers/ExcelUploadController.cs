@@ -7,9 +7,12 @@ using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using OfficeOpenXml;
 using System.Net.Http.Headers;
+using Tools.Middleware;
+using Tools.Models;
 
 namespace Tools.Controllers
 {
+    [Authorize]
     [Route("api/[controller]")]
     [ApiController]
     public class ExcelUploadController : ControllerBase
@@ -25,6 +28,7 @@ namespace Tools.Controllers
 
 
         [HttpGet("group/{groupId}")]
+        [RequirePermission(ModuleCodes.DataImport, PermissionAction.View)]
         public IActionResult GetByGroup(int groupId)
         {
             var data = _context.ExcelUploads
@@ -36,6 +40,7 @@ namespace Tools.Controllers
 
 
         [HttpGet]
+        [RequirePermission(ModuleCodes.DataImport, PermissionAction.View)]
         public IActionResult GetUploads()
         {
             var uploads = _context.ExcelUploads.ToList();
@@ -56,8 +61,8 @@ namespace Tools.Controllers
         }*/
 
 
-        [AllowAnonymous]
         [HttpPost("upload-mapped")]
+        [RequirePermission(ModuleCodes.DataImport, PermissionAction.Create)]
         public async Task<IActionResult> UploadMapped([FromQuery] int groupId, [FromBody] List<ExcelUpload> data)
         {
             if (data == null || !data.Any())

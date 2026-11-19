@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -14,6 +15,7 @@ using Microsoft.CodeAnalysis;
 namespace Tools.Controllers
 {
     [Route("api/[controller]")]
+    [Authorize]
     [ApiController]
     public class ExtraTypesController : ControllerBase
     {

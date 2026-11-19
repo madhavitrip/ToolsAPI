@@ -558,6 +558,7 @@ namespace Tools.Controllers
         [Authorize]
         [HttpPost("upload")]
         [RequirePermission(ModuleCodes.MasterRpt, PermissionAction.Create)]
+        [RequireSpecialAction(SpecialActionCodes.UploadRptTemplate, ModuleCodes.ReportTemplateManagement, PermissionAction.Create)]
         public async Task<ActionResult> Upload([FromForm] int typeId, [FromForm] string templateName, [FromForm] string? subName, IFormFile file,
             [FromForm] int? groupId, [FromForm] int? projectId, [FromForm] List<int>? moduleIds, [FromForm] bool forceUpload = false)
         {
@@ -1652,6 +1653,7 @@ namespace Tools.Controllers
         [Authorize]
         [HttpPost("{id}/mapping")]
         [RequirePermission(ModuleCodes.MasterRpt, PermissionAction.Edit)]
+        [RequireSpecialAction(SpecialActionCodes.MapRptTemplate, ModuleCodes.ReportTemplateManagement, PermissionAction.Edit)]
         public async Task<ActionResult> SaveMapping(int id, [FromBody] SaveMappingRequest req)
         {
             var template = await _context.RPTTemplates.FirstOrDefaultAsync(t => t.TemplateId == id);

@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System.Text.Json;
@@ -10,6 +11,7 @@ using ERPToolsAPI.Data;
 namespace Tools.Controllers
 {
     [Route("api/[controller]")]
+    [Authorize]
     [ApiController]
     public class CatchListsController : ControllerBase
     {

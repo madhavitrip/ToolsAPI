@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -9,10 +10,12 @@ using ERPToolsAPI.Data;
 using Tools.Models;
 using static Tools.Controllers.ExtraEnvelopesController;
 using Tools.Services;
+using Tools.Middleware;
 using Microsoft.VisualStudio.Web.CodeGenerators.Mvc.Templates.Blazor;
 
 namespace Tools.Controllers
 {
+    [Authorize]
     [Route("api/[controller]")]
     [ApiController]
     public class ExtrasConfigurationsController : ControllerBase
@@ -56,6 +59,7 @@ namespace Tools.Controllers
 
         // GET: api/ExtrasConfigurations
         [HttpGet]
+        [RequirePermission(ModuleCodes.MasterNodalExtra, PermissionAction.View)]
         public async Task<ActionResult<IEnumerable<ExtrasConfiguration>>> GetExtraConfigurations()
         {
             await EnsureSchemaAsync();
@@ -65,6 +69,7 @@ namespace Tools.Controllers
 
         // GET: api/ExtrasConfigurations/ByProjectId
         [HttpGet("ByProject/{projectId}")]
+        [RequirePermission(ModuleCodes.MasterNodalExtra, PermissionAction.View)]
         public async Task<ActionResult<IEnumerable<ExtrasConfiguration>>> GetExtrasByProjectId(int projectId)
         {
             await EnsureSchemaAsync();
@@ -83,6 +88,7 @@ namespace Tools.Controllers
 
         // GET: api/ExtrasConfigurations/5
         [HttpGet("{id}")]
+        [RequirePermission(ModuleCodes.MasterNodalExtra, PermissionAction.View)]
         public async Task<ActionResult<ExtrasConfiguration>> GetExtrasConfiguration(int id)
         {
             await EnsureSchemaAsync();
@@ -97,6 +103,7 @@ namespace Tools.Controllers
         }
 
         [HttpGet("DistinctNodals/{projectId}")]
+        [RequirePermission(ModuleCodes.MasterNodalExtra, PermissionAction.View)]
         public async Task<IActionResult> GetDistinctNodalsByProject(int projectId)
         {
             var isNewModel = await _context.NrData1.AnyAsync(p => p.ProjectId == projectId);
@@ -130,6 +137,7 @@ namespace Tools.Controllers
         // PUT: api/ExtrasConfigurations/5
         // To protect from overposting attacks, see https://go.microsoft.com/fwlink/?linkid=2123754
         [HttpPut("{id}")]
+        [RequirePermission(ModuleCodes.MasterNodalExtra, PermissionAction.Edit)]
         public async Task<IActionResult> PutExtrasConfiguration(int id, ExtrasConfiguration extrasConfiguration)
         {
             if (id != extrasConfiguration.Id)
@@ -167,6 +175,7 @@ namespace Tools.Controllers
         // POST: api/ExtrasConfigurations
         // To protect from overposting attacks, see https://go.microsoft.com/fwlink/?linkid=2123754
         [HttpPost]
+        [RequirePermission(ModuleCodes.MasterNodalExtra, PermissionAction.Create)]
         public async Task<ActionResult<ExtrasConfiguration>> PostExtrasConfiguration(ExtrasConfiguration extrasConfiguration)
         {
             try
@@ -242,6 +251,7 @@ namespace Tools.Controllers
 
         // DELETE: api/ExtrasConfigurations/5
         [HttpDelete("{id}")]
+        [RequirePermission(ModuleCodes.MasterNodalExtra, PermissionAction.Delete)]
         public async Task<IActionResult> DeleteExtrasConfiguration(int id)
         {
             try

@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Tools.Models;
@@ -28,6 +29,7 @@ namespace Tools.Controllers
     }
 
     [Route("api/[controller]")]
+    [Authorize]
     [ApiController]
     public class MergingController : ControllerBase
     {
@@ -1549,8 +1551,8 @@ namespace Tools.Controllers
         }
 
         [HttpPost("PushToMain/{projectId}")]
-        [RequirePermission(ModuleCodes.NodalCatch, PermissionAction.Execute)]
-        [RequireSpecialAction(SpecialActionCodes.PushNodalToNr, ModuleCodes.NodalCatch, PermissionAction.Execute)]
+        [RequirePermission(ModuleCodes.NodalCatch, PermissionAction.Edit)]
+        [RequireSpecialAction(SpecialActionCodes.PushNodalToNr, ModuleCodes.NodalCatch, PermissionAction.Edit)]
         public async Task<IActionResult> PushToMain(int projectId)
         {
             try

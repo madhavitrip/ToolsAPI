@@ -1,10 +1,14 @@
 using System;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Tools.Middleware;
+using Tools.Models;
 using Tools.Services;
 
 namespace Tools.Controllers
 {
+    [Authorize]
     [Route("api/[controller]")]
     [ApiController]
     public class ErpSyncController : ControllerBase
@@ -25,6 +29,7 @@ namespace Tools.Controllers
         /// Also returns the finalization status of the lot.
         /// </summary>
         [HttpGet("GetLotCatches/{projectId}/{lotNo}")]
+        [RequirePermission(ModuleCodes.DataImport, PermissionAction.View)]
         public async Task<IActionResult> GetLotCatches(int projectId, int lotNo)
         {
             if (projectId <= 0 || lotNo <= 0)
@@ -50,6 +55,7 @@ namespace Tools.Controllers
         /// Gets finalization and sync status for all lots in a project.
         /// </summary>
         [HttpGet("GetLotsSyncStatus/{projectId}")]
+        [RequirePermission(ModuleCodes.DataImport, PermissionAction.View)]
         public async Task<IActionResult> GetLotsSyncStatus(int projectId)
         {
             if (projectId <= 0)
@@ -75,6 +81,7 @@ namespace Tools.Controllers
         /// Finalizes a lot so that its catch details are officially approved and locked for ERP transmission.
         /// </summary>
         [HttpPost("FinalizeLot")]
+        [RequirePermission(ModuleCodes.DataImport, PermissionAction.Edit)]
         public async Task<IActionResult> FinalizeLot([FromBody] FinalizeLotRequest request)
         {
             if (request == null || request.ProjectId <= 0 || request.LotNo <= 0)
@@ -111,6 +118,7 @@ namespace Tools.Controllers
         /// Reverts finalization for a lot if adjustments are required before ERP transmission.
         /// </summary>
         [HttpPost("UnfinalizeLot")]
+        [RequirePermission(ModuleCodes.DataImport, PermissionAction.Edit)]
         public async Task<IActionResult> UnfinalizeLot([FromBody] FinalizeLotRequest request)
         {
             if (request == null || request.ProjectId <= 0 || request.LotNo <= 0)
@@ -142,6 +150,8 @@ namespace Tools.Controllers
         /// STRICT REQUIREMENT: Only allowed if the lot has been finalized.
         /// </summary>
         [HttpPost("SendLotCatchesToErp")]
+        [RequirePermission(ModuleCodes.DataImport, PermissionAction.Edit)]
+        [RequireSpecialAction(SpecialActionCodes.SendToErp, ModuleCodes.ProcessingPipeline, PermissionAction.Edit)]
         public async Task<IActionResult> SendLotCatchesToErp([FromBody] SendLotCatchesRequest request)
         {
             if (request == null || request.ProjectId <= 0 || request.LotNo <= 0)

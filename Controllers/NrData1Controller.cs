@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using ERPToolsAPI.Data;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -23,6 +24,7 @@ using ToolsAPI.Models;
 namespace Tools.Controllers
 {
     [Route("api/[controller]")]
+    [Authorize]
     [ApiController]
     public class NrData1Controller : ControllerBase
     {

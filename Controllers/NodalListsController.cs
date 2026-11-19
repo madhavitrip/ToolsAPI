@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System.Text.Json;
@@ -9,6 +10,7 @@ using ERPToolsAPI.Data;
 namespace Tools.Controllers
 {
     [Route("api/[controller]")]
+    [Authorize]
     [ApiController]
     public class NodalListsController : ControllerBase
     {
@@ -286,7 +288,7 @@ namespace Tools.Controllers
         }
 
         [HttpPost("resolve-college-center")]
-        [RequirePermission(ModuleCodes.NodalCatch, PermissionAction.Execute)]
+        [RequirePermission(ModuleCodes.NodalCatch, PermissionAction.Edit)]
         public async Task<IActionResult> ResolveCollegeCenter([FromBody] ResolveCollegeCenterDto req)
         {
             try
@@ -424,7 +426,7 @@ namespace Tools.Controllers
         }
 
         [HttpPost("resolve-center-nodal")]
-        [RequirePermission(ModuleCodes.NodalCatch, PermissionAction.Execute)]
+        [RequirePermission(ModuleCodes.NodalCatch, PermissionAction.Edit)]
         public async Task<IActionResult> ResolveCenterNodal([FromBody] ResolveCenterNodalDto req)
         {
             try

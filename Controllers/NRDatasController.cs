@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using ERPToolsAPI.Data;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -20,6 +21,7 @@ using System.Globalization;
 namespace Tools.Controllers
 {
     [Route("api/[controller]")]
+    [Authorize]
     [ApiController]
     public class NRDatasController : ControllerBase
     {
@@ -829,7 +831,7 @@ namespace Tools.Controllers
         }
 
         [HttpPost("merge-catchnos")]
-        [RequirePermission(ModuleCodes.MergeCatchNumbers, PermissionAction.Execute)]
+        [RequirePermission(ModuleCodes.MergeCatchNumbers, PermissionAction.Edit)]
         public async Task<ActionResult> MergeCatchNos(int ProjectId, [FromBody] MergeCatchNoRequest request, [FromQuery] int? lotNo = null)
         {
             var isNewModel = await _context.NrData1.AnyAsync(p => p.ProjectId == ProjectId);
@@ -5737,7 +5739,6 @@ namespace Tools.Controllers
 
         [HttpPut("BulkUpdate")]
         [RequirePermission(ModuleCodes.UploadedData, PermissionAction.Edit)]
-        [RequireSpecialAction(SpecialActionCodes.BulkUpdateNrData, ModuleCodes.UploadedData, PermissionAction.Edit)]
         public async Task<IActionResult> BulkUpdateNRData(
             [FromBody] List<NRData> data,
             [FromQuery] int projectId
@@ -9323,8 +9324,8 @@ namespace Tools.Controllers
         }
 
         [HttpPost("apply-comparison-changes")]
-        [RequirePermission(ModuleCodes.ChangedNr, PermissionAction.Execute)]
-        [RequireSpecialAction(SpecialActionCodes.ApplyChangedNr, ModuleCodes.ChangedNr, PermissionAction.Execute)]
+        [RequirePermission(ModuleCodes.ChangedNr, PermissionAction.Edit)]
+        [RequireSpecialAction(SpecialActionCodes.ApplyChangedNr, ModuleCodes.ChangedNr, PermissionAction.Edit)]
         public async Task<IActionResult> ApplyComparisonChanges([FromBody] ApplyComparisonChangesDto model)
         {
             try

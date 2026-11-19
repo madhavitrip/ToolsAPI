@@ -12,8 +12,13 @@ using Tools.Models;
 using Tools.Middleware;
 using Tools.Services;
 
+using Microsoft.AspNetCore.Authorization;
+using Tools.Middleware;
+using Tools.Models;
+
 namespace Tools.Controllers
 {
+    [Authorize]
     [Route("api/[controller]")]
     [ApiController]
     public class ExcelReportsController : ControllerBase
@@ -27,6 +32,7 @@ namespace Tools.Controllers
 
         // GET: api/ExcelReports/ByProject/{projectId}
         [HttpGet("ByProject/{projectId}")]
+        [RequirePermission(ModuleCodes.Reports, PermissionAction.View)]
         public async Task<ActionResult<IEnumerable<ExcelReport>>> GetReportsByProject(int projectId)
         {
             var reports = await _context.ExcelReports
@@ -93,6 +99,7 @@ namespace Tools.Controllers
 
         // GET: api/ExcelReports/ByModule/{moduleId}/{projectId}
         [HttpGet("ByModule/{moduleId}/{projectId}")]
+        [RequirePermission(ModuleCodes.Reports, PermissionAction.View)]
         public async Task<ActionResult<IEnumerable<ExcelReport>>> GetReportsByModule(int moduleId, int projectId)
         {
             var reports = await _context.ExcelReports
@@ -160,6 +167,7 @@ namespace Tools.Controllers
 
         // POST: api/ExcelReports
         [HttpPost]
+        [RequirePermission(ModuleCodes.Reports, PermissionAction.Edit)]
         public async Task<ActionResult<ExcelReport>> CreateReport([FromBody] ExcelReport report)
         {
             if (report == null) return BadRequest("Invalid report data.");
@@ -183,6 +191,7 @@ namespace Tools.Controllers
 
         // DELETE: api/ExcelReports/{id}
         [HttpDelete("{id}")]
+        [RequirePermission(ModuleCodes.Reports, PermissionAction.Delete)]
         public async Task<IActionResult> DeleteReport(int id)
         {
             var report = await _context.ExcelReports.FindAsync(id);
@@ -197,6 +206,7 @@ namespace Tools.Controllers
 
         // GET: api/ExcelReports/Download/{id}
         [HttpGet("Download/{id}")]
+        [RequirePermission(ModuleCodes.Reports, PermissionAction.View)]
         public async Task<IActionResult> DownloadReport(int id)
         {
             ExcelReport? report = null;
@@ -253,6 +263,7 @@ namespace Tools.Controllers
 
         // GET: api/ExcelReports/DownloadByPath
         [HttpGet("DownloadByPath")]
+        [RequirePermission(ModuleCodes.Reports, PermissionAction.View)]
         public async Task<IActionResult> DownloadReportByPath([FromQuery] string filePath)
         {
             if (string.IsNullOrWhiteSpace(filePath))

@@ -13,7 +13,18 @@ namespace ToolsAPI.Services
     public interface ITranslationService
     {
         Task<Dictionary<string, string>> GetBundleAsync(string lang, CancellationToken cancellationToken = default);
-        Task<PagedResult<MessageDto>> GetMessagesAsync(string? module, string? search, bool? missingHindiOnly, int pageNumber, int pageSize, CancellationToken cancellationToken = default);
+        Task<PagedResult<MessageDto>> GetMessagesAsync(
+            string? module,
+            string? search,
+            bool? missingHindiOnly,
+            string? keySearch,
+            string? englishSearch,
+            string? hindiSearch,
+            string? sortBy,
+            string? sortOrder,
+            int pageNumber,
+            int pageSize,
+            CancellationToken cancellationToken = default);
         Task<MessageDto?> GetMessageByIdAsync(int id, CancellationToken cancellationToken = default);
         Task<MessageDto> CreateMessageAsync(CreateMessageRequest request, int userId, CancellationToken cancellationToken = default);
         Task<MessageDto> UpdateMessageAsync(int id, UpdateMessageRequest request, int userId, CancellationToken cancellationToken = default);
@@ -75,7 +86,18 @@ namespace ToolsAPI.Services
             return bundle;
         }
 
-        public async Task<PagedResult<MessageDto>> GetMessagesAsync(string? module, string? search, bool? missingHindiOnly, int pageNumber, int pageSize, CancellationToken cancellationToken = default)
+        public async Task<PagedResult<MessageDto>> GetMessagesAsync(
+            string? module,
+            string? search,
+            bool? missingHindiOnly,
+            string? keySearch,
+            string? englishSearch,
+            string? hindiSearch,
+            string? sortBy,
+            string? sortOrder,
+            int pageNumber,
+            int pageSize,
+            CancellationToken cancellationToken = default)
         {
             var query = _context.ApplicationMessages.AsNoTracking().AsQueryable();
 
@@ -90,6 +112,24 @@ namespace ToolsAPI.Services
                 query = query.Where(m => m.MessageKey.Contains(s) || m.EnglishText.Contains(s) || (m.HindiText != null && m.HindiText.Contains(s)));
             }
 
+            if (!string.IsNullOrWhiteSpace(keySearch))
+            {
+                var ks = keySearch.Trim();
+                query = query.Where(m => m.MessageKey.Contains(ks));
+            }
+
+            if (!string.IsNullOrWhiteSpace(englishSearch))
+            {
+                var es = englishSearch.Trim();
+                query = query.Where(m => m.EnglishText.Contains(es));
+            }
+
+            if (!string.IsNullOrWhiteSpace(hindiSearch))
+            {
+                var hs = hindiSearch.Trim();
+                query = query.Where(m => m.HindiText != null && m.HindiText.Contains(hs));
+            }
+
             if (missingHindiOnly == true)
             {
                 query = query.Where(m => m.HindiText == null || m.HindiText.Trim() == "");
@@ -97,9 +137,31 @@ namespace ToolsAPI.Services
 
             var totalCount = await query.CountAsync(cancellationToken);
 
+            var normalizedSortBy = (sortBy ?? "").Trim().ToLowerInvariant();
+            var isDescending = string.Equals(sortOrder?.Trim(), "descend", StringComparison.OrdinalIgnoreCase) ||
+                               string.Equals(sortOrder?.Trim(), "desc", StringComparison.OrdinalIgnoreCase);
+
+            query = normalizedSortBy switch
+            {
+                "messagekey" or "key" => isDescending
+                    ? query.OrderByDescending(m => m.MessageKey)
+                    : query.OrderBy(m => m.MessageKey),
+                "module" => isDescending
+                    ? query.OrderByDescending(m => m.Module).ThenBy(m => m.MessageKey)
+                    : query.OrderBy(m => m.Module).ThenBy(m => m.MessageKey),
+                "englishtext" or "english" => isDescending
+                    ? query.OrderByDescending(m => m.EnglishText)
+                    : query.OrderBy(m => m.EnglishText),
+                "hinditext" or "hindi" => isDescending
+                    ? query.OrderByDescending(m => m.HindiText)
+                    : query.OrderBy(m => m.HindiText),
+                "isactive" or "status" => isDescending
+                    ? query.OrderByDescending(m => m.IsActive).ThenBy(m => m.MessageKey)
+                    : query.OrderBy(m => m.IsActive).ThenBy(m => m.MessageKey),
+                _ => query.OrderBy(m => m.Module).ThenBy(m => m.MessageKey)
+            };
+
             var items = await query
-                .OrderBy(m => m.Module)
-                .ThenBy(m => m.MessageKey)
                 .Skip((pageNumber - 1) * pageSize)
                 .Take(pageSize)
                 .Select(m => new MessageDto

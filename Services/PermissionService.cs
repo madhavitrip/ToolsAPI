@@ -109,8 +109,6 @@ namespace Tools.Services
                     PermissionAction.Create => flags.CanCreate ?? false,
                     PermissionAction.Edit => flags.CanEdit ?? false,
                     PermissionAction.Delete => flags.CanDelete ?? false,
-                    PermissionAction.Execute => flags.CanExecute ?? false,
-                    PermissionAction.Export => flags.CanExport ?? false,
                     _ => false
                 };
             }
@@ -143,8 +141,6 @@ namespace Tools.Services
                 PermissionAction.Create => parentFlags.CanCreate ?? false,
                 PermissionAction.Edit => parentFlags.CanEdit ?? false,
                 PermissionAction.Delete => parentFlags.CanDelete ?? false,
-                PermissionAction.Execute => parentFlags.CanExecute ?? false,
-                PermissionAction.Export => parentFlags.CanExport ?? false,
                 _ => false
             };
             if (!hasStandardAction) return false;
@@ -180,13 +176,9 @@ namespace Tools.Services
             {
                 erpRoleId = explicitErpRoleId.Value;
             }
-            else if (httpReq?.Query.TryGetValue("erpRoleId", out var qVal) == true && int.TryParse(qVal, out var qRoleId) && qRoleId > 0)
-            {
-                erpRoleId = qRoleId;
-            }
             else if (callerUserId > 0 && callerUserId == userId)
             {
-                // Only extract role from request token if the token actually belongs to this target user
+                // Extract role strictly from authenticated JWT claims
                 erpRoleId = LogHelper.GetUserRoleId(claimsUser, httpReq);
             }
             else
@@ -195,27 +187,65 @@ namespace Tools.Services
                 erpRoleId = await FetchErpUserRoleIdAsync(userId, httpReq);
             }
 
-            // Fetch user permission row if exists
-            var userRecord = await _context.UserPermissions.AsNoTracking().FirstOrDefaultAsync(u => u.UserId == userId);
+            // Fail-closed: If RoleId is missing, invalid, or <= 0, return empty permissions.
+            // Do not automatically assign RoleId 5 or any fallback role.
+            if (erpRoleId <= 0)
+            {
+                var emptyResult = new UserPermissionsDto
+                {
+                    UserId = userId,
+                    RoleId = 0,
+                    RoleName = string.Empty,
+                    IsSuperuser = false,
+                    Modules = ModuleCodes.All.ToDictionary(
+                        code => code,
+                        _ => new ModuleActionFlags
+                        {
+                            CanView = false,
+                            CanCreate = false,
+                            CanEdit = false,
+                            CanDelete = false
+                        },
+                        StringComparer.OrdinalIgnoreCase),
+                    SpecialActions = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase)
+                };
 
-            // Inherit ERP role if no local override; default to Operator (5) if unknown, never Developer (1)!
-            int effectiveRoleId = userRecord?.RoleId ?? (erpRoleId > 0 ? erpRoleId : 5);
+                return emptyResult;
+            }
+
+            int effectiveRoleId = erpRoleId;
             var role = await _context.ToolsRoles.AsNoTracking().FirstOrDefaultAsync(r => r.Id == effectiveRoleId);
 
-            string roleName = role?.RoleName ?? effectiveRoleId switch
+            // Fail-closed: If role does not exist in ToolsRoles, return empty permissions
+            if (role == null)
             {
-                1 => "Developer",
-                2 => "Admin",
-                3 => "Head",
-                4 => "Manager",
-                5 => "Operator",
-                _ => $"Role {effectiveRoleId}"
-            };
+                var emptyResult = new UserPermissionsDto
+                {
+                    UserId = userId,
+                    RoleId = effectiveRoleId,
+                    RoleName = $"Role {effectiveRoleId}",
+                    IsSuperuser = false,
+                    Modules = ModuleCodes.All.ToDictionary(
+                        code => code,
+                        _ => new ModuleActionFlags
+                        {
+                            CanView = false,
+                            CanCreate = false,
+                            CanEdit = false,
+                            CanDelete = false
+                        },
+                        StringComparer.OrdinalIgnoreCase),
+                    SpecialActions = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase)
+                };
 
+                return emptyResult;
+            }
+
+            string roleName = role.RoleName;
             bool isDeveloper = (effectiveRoleId == 1);
 
-            // Parse Role Permissions JSON (Permissions are strictly assigned through roles; user overrides removed)
-            var (rolePermsMap, specialActionsMap) = ParseRolePermissionsPayload(role?.PermissionsJson);
+            // Parse Role Permissions JSON from ToolsRoles
+            var (rolePermsMap, specialActionsMap) = ParseRolePermissionsPayload(role.PermissionsJson);
 
             // Build effective permission dictionary across all module codes
             var effectiveModules = new Dictionary<string, ModuleActionFlags>(StringComparer.OrdinalIgnoreCase);
@@ -230,9 +260,7 @@ namespace Tools.Services
                     CanView = roleFlags?.CanView ?? false,
                     CanCreate = roleFlags?.CanCreate ?? false,
                     CanEdit = roleFlags?.CanEdit ?? false,
-                    CanDelete = roleFlags?.CanDelete ?? false,
-                    CanExecute = roleFlags?.CanExecute ?? false,
-                    CanExport = roleFlags?.CanExport ?? false,
+                    CanDelete = roleFlags?.CanDelete ?? false
                 };
             }
 
@@ -379,7 +407,7 @@ namespace Tools.Services
 
         private async Task SeedDefaultRolesAsync()
         {
-            var fullAccessFlags = new ModuleActionFlags { CanView = true, CanCreate = true, CanEdit = true, CanDelete = true, CanExecute = true, CanExport = true };
+            var fullAccessFlags = new ModuleActionFlags { CanView = true, CanCreate = true, CanEdit = true, CanDelete = true };
             var fullAccessJson = JsonSerializer.Serialize(ModuleCodes.All.ToDictionary(m => m, _ => fullAccessFlags));
 
             var managerMap = new Dictionary<string, ModuleActionFlags>(StringComparer.OrdinalIgnoreCase);
@@ -392,10 +420,8 @@ namespace Tools.Services
                 {
                     CanView = !isRoles,
                     CanCreate = !isMaster && !isRoles,
-                    CanEdit = !isRoles && m != ModuleCodes.MasterProject,
-                    CanDelete = !isMaster && !isRoles,
-                    CanExecute = !isRoles,
-                    CanExport = !isRoles
+                    CanEdit = !isRoles,
+                    CanDelete = !isMaster && !isRoles
                 };
             }
             var managerJson = JsonSerializer.Serialize(managerMap);
@@ -412,9 +438,7 @@ namespace Tools.Services
                     CanView = canView,
                     CanCreate = false,
                     CanEdit = false,
-                    CanDelete = false,
-                    CanExecute = false,
-                    CanExport = m is ModuleCodes.BatchData or ModuleCodes.Reports or ModuleCodes.ReportTemplateManagement
+                    CanDelete = false
                 };
             }
             var operatorJson = JsonSerializer.Serialize(operatorMap);

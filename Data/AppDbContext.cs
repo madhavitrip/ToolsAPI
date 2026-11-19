@@ -61,9 +61,8 @@ namespace ERPToolsAPI.Data
         public DbSet<TemporaryNrDatas> TemporaryNrDatas { get; set; }
         public DbSet<ExcelReport> ExcelReports { get; set; }
 
-        // Roles & Permissions (2 Clean Tables)
+        // Roles & Permissions (ToolsRoles)
         public DbSet<Tools.Models.ToolsRole> ToolsRoles { get; set; }
-        public DbSet<Tools.Models.UserPermission> UserPermissions { get; set; }
         public DbSet<ApplicationMessage> ApplicationMessages { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -72,10 +71,6 @@ namespace ERPToolsAPI.Data
 
             modelBuilder.Entity<Tools.Models.ToolsRole>()
                 .HasIndex(r => r.RoleName)
-                .IsUnique();
-
-            modelBuilder.Entity<Tools.Models.UserPermission>()
-                .HasIndex(u => u.UserId)
                 .IsUnique();
 
             modelBuilder.Entity<ApplicationMessage>()

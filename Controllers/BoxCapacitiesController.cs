@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -12,6 +13,7 @@ using Tools.Middleware;
 
 namespace Tools.Controllers
 {
+    [Authorize]
     [Route("api/[controller]")]
     [ApiController]
     public class BoxCapacitiesController : ControllerBase
@@ -26,6 +28,7 @@ namespace Tools.Controllers
 
         // GET: api/BoxCapacities
         [HttpGet]
+        [RequirePermission(ModuleCodes.MasterBoxCapacity, PermissionAction.View)]
         public async Task<ActionResult<IEnumerable<BoxCapacity>>> GetBoxCapacity()
         {
             return await _context.BoxCapacity.ToListAsync();
@@ -33,6 +36,7 @@ namespace Tools.Controllers
 
         // GET: api/BoxCapacities/5
         [HttpGet("{id}")]
+        [RequirePermission(ModuleCodes.MasterBoxCapacity, PermissionAction.View)]
         public async Task<ActionResult<BoxCapacity>> GetBoxCapacity(int id)
         {
             var boxCapacity = await _context.BoxCapacity.FindAsync(id);
