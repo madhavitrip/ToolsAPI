@@ -166,30 +166,31 @@ namespace Tools.Services
 
             await EnsureDatabaseInitializedAsync();
 
-            var httpReq = request ?? _httpContextAccessor.HttpContext?.Request;
-            var claimsUser = _httpContextAccessor.HttpContext?.User;
+            int effectiveRoleId = 0;
 
-            int callerUserId = LogHelper.GetTriggeredBy(claimsUser, httpReq);
-
-            int erpRoleId = 0;
+            // 1. If explicit role ID is passed in (for administrative testing/preview)
             if (explicitErpRoleId.HasValue && explicitErpRoleId.Value > 0)
             {
-                erpRoleId = explicitErpRoleId.Value;
-            }
-            else if (callerUserId > 0 && callerUserId == userId)
-            {
-                // Extract role strictly from authenticated JWT claims
-                erpRoleId = LogHelper.GetUserRoleId(claimsUser, httpReq);
+                effectiveRoleId = explicitErpRoleId.Value;
             }
             else
             {
-                // Target user is different from caller: fetch their ERP role from ERP User API
-                erpRoleId = await FetchErpUserRoleIdAsync(userId, httpReq);
+                // 2. Query internal Tools role assignment table: UserToolsRoles
+                var assignment = await _context.UserToolsRoles.AsNoTracking().FirstOrDefaultAsync(u => u.UserId == userId);
+                if (assignment != null && assignment.RoleId > 0)
+                {
+                    effectiveRoleId = assignment.RoleId;
+                }
+                else
+                {
+                    // 3. Independent fallback: Use protected Read Only role (never ERP JWT roleId!)
+                    var readOnlyRole = await _context.ToolsRoles.AsNoTracking().FirstOrDefaultAsync(r => r.RoleName == "Read Only");
+                    effectiveRoleId = readOnlyRole?.Id ?? 0;
+                }
             }
 
             // Fail-closed: If RoleId is missing, invalid, or <= 0, return empty permissions.
-            // Do not automatically assign RoleId 5 or any fallback role.
-            if (erpRoleId <= 0)
+            if (effectiveRoleId <= 0)
             {
                 var emptyResult = new UserPermissionsDto
                 {
@@ -213,7 +214,6 @@ namespace Tools.Services
                 return emptyResult;
             }
 
-            int effectiveRoleId = erpRoleId;
             var role = await _context.ToolsRoles.AsNoTracking().FirstOrDefaultAsync(r => r.Id == effectiveRoleId);
 
             // Fail-closed: If role does not exist in ToolsRoles, return empty permissions
@@ -445,11 +445,11 @@ namespace Tools.Services
 
             var roles = new[]
             {
-                new ToolsRole { Id = 1, RoleName = "Developer", Description = "Lead Developer (Superuser)", IsSystemRole = true, PermissionsJson = fullAccessJson },
-                new ToolsRole { Id = 2, RoleName = "Admin", Description = "System Administrator", IsSystemRole = true, PermissionsJson = fullAccessJson },
-                new ToolsRole { Id = 3, RoleName = "Head", Description = "Project / Department Head", IsSystemRole = true, PermissionsJson = fullAccessJson },
-                new ToolsRole { Id = 4, RoleName = "Manager", Description = "Project Manager", IsSystemRole = true, PermissionsJson = managerJson },
-                new ToolsRole { Id = 5, RoleName = "Operator", Description = "Standard Tool Operator", IsSystemRole = true, PermissionsJson = operatorJson }
+                new ToolsRole { Id = 1, RoleName = "Developer", PermissionsJson = fullAccessJson },
+                new ToolsRole { Id = 2, RoleName = "Admin", PermissionsJson = fullAccessJson },
+                new ToolsRole { Id = 3, RoleName = "Head", PermissionsJson = fullAccessJson },
+                new ToolsRole { Id = 4, RoleName = "Manager", PermissionsJson = managerJson },
+                new ToolsRole { Id = 5, RoleName = "Operator", PermissionsJson = operatorJson }
             };
 
             foreach (var r in roles)
@@ -462,8 +462,6 @@ namespace Tools.Services
                 else
                 {
                     existing.RoleName = r.RoleName;
-                    existing.Description = r.Description;
-                    existing.IsSystemRole = r.IsSystemRole;
                     existing.UpdatedAt = DateTime.Now;
                 }
             }

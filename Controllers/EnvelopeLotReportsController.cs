@@ -459,7 +459,7 @@ namespace ToolsAPI.Controllers
 
         // PUT: api/EnvelopeLotReports/{id}/archive
         [HttpPut("{id}/archive")]
-        [RequirePermission(ModuleCodes.ReportTemplateManagement, PermissionAction.Edit)]
+        [RequirePermission(ModuleCodes.ReportTemplateManagement, PermissionAction.Delete)]
         public async Task<IActionResult> ArchiveReport(int id)
         {
             try

@@ -1319,17 +1319,49 @@ namespace Tools.Controllers
                         }
                     }
 
-                    if (isReserveRemark && centerList.Quantity <= 0 && itemQty > 0)
+                    if (centerList.Quantity <= 0 && itemQty > 0)
                     {
                         centerList.Quantity = itemQty;
-                        centerList.NRQuantity = itemQty;
+                    }
+                    if (centerList.NRQuantity <= 0)
+                    {
+                        centerList.NRQuantity = itemNrQty > 0 ? itemNrQty : centerList.Quantity;
                     }
 
-                    // Reserve centers are associated with a specific center code and must be saved in catchGroup.Centers
-                    if (!isExtraRow || isReserveRemark)
+                    if (extraTypeId.HasValue && extraTypeId > 0)
                     {
-                        catchGroup.Centers.Add(centerList);
+                        if (centerList.CenterSort == 0)
+                        {
+                            centerList.CenterSort = extraTypeId switch
+                            {
+                                1 => 10000,
+                                2 => 100000,
+                                3 => 1000000,
+                                _ => 10000
+                            };
+                        }
+                        if (centerList.NodalSort == 0 && extraTypeId > 1)
+                        {
+                            centerList.NodalSort = extraTypeId switch
+                            {
+                                2 => 10000,
+                                3 => 100000,
+                                _ => 10000
+                            };
+                        }
+                        if (centerList.RouteSort == 0 && extraTypeId > 1)
+                        {
+                            centerList.RouteSort = extraTypeId switch
+                            {
+                                2 => 10000,
+                                3 => 100000,
+                                _ => 10000
+                            };
+                        }
                     }
+
+                    // Save all centers (including extra centers with ExtraId > 0) into catchGroup.Centers
+                    catchGroup.Centers.Add(centerList);
 
                     // Process Extra Envelopes
                     var extraEnvelopes = ProcessExtraEnvelopes(
@@ -2430,7 +2462,8 @@ namespace Tools.Controllers
                 if (envelopeDict == null)
                     return BadRequest("Invalid envelope JSON format.");
 
-                var innerSizes = envelopeDict["Inner"]
+                // Default sizes from ProjectConfig (used for ExtraId == 0)
+                var defaultInnerSizes = envelopeDict["Inner"]
                     .Split(',', StringSplitOptions.RemoveEmptyEntries)
                     .Select(e => e.Trim().ToUpper().Replace("E", ""))
                     .Where(x => int.TryParse(x, out _))
@@ -2438,13 +2471,35 @@ namespace Tools.Controllers
                     .OrderByDescending(x => x)
                     .ToList();
 
-                var outerSizes = envelopeDict["Outer"]
+                var defaultOuterSizes = envelopeDict["Outer"]
                     .Split(',', StringSplitOptions.RemoveEmptyEntries)
                     .Select(e => e.Trim().ToUpper().Replace("E", ""))
                     .Where(x => int.TryParse(x, out _))
                     .Select(int.Parse)
                     .OrderByDescending(x => x)
                     .ToList();
+
+                // Load ExtraConfigurations for this project (keyed by ExtraType)
+                var extraConfigsForEnv = await _context.ExtraConfigurations
+                    .Where(ec => ec.ProjectId == ProjectId)
+                    .ToListAsync();
+
+                static List<int> ParseEnvSizes(string json, string key)
+                {
+                    if (string.IsNullOrWhiteSpace(json)) return new List<int>();
+                    try
+                    {
+                        var d = JsonSerializer.Deserialize<Dictionary<string, string>>(json);
+                        if (d == null || !d.TryGetValue(key, out var val)) return new List<int>();
+                        return val.Split(',', StringSplitOptions.RemoveEmptyEntries)
+                            .Select(e => e.Trim().ToUpper().Replace("E", ""))
+                            .Where(x => int.TryParse(x, out _))
+                            .Select(int.Parse)
+                            .OrderByDescending(x => x)
+                            .ToList();
+                    }
+                    catch { return new List<int>(); }
+                }
 
                 // 1. Fetch enhanced NrData1 records for Project
                 var nrDataList = await _context.NrData1
@@ -2494,6 +2549,31 @@ namespace Tools.Controllers
                 // 4. Calculate envelope breaking for EACH center
                 foreach (var center in centerList)
                 {
+                    // Pick envelope sizes: ExtraId > 0 → ExtraConfigurations, else → ProjectConfig
+                    List<int> innerSizes;
+                    List<int> outerSizes;
+                    if (center.ExtraId > 0)
+                    {
+                        var ec = extraConfigsForEnv.FirstOrDefault(x => x.ExtraType == center.ExtraId);
+                        if (ec != null && !string.IsNullOrWhiteSpace(ec.EnvelopeType))
+                        {
+                            innerSizes = ParseEnvSizes(ec.EnvelopeType, "Inner");
+                            outerSizes = ParseEnvSizes(ec.EnvelopeType, "Outer");
+                            // Fall back to defaults if parsing yielded nothing
+                            if (!innerSizes.Any()) innerSizes = defaultInnerSizes;
+                            if (!outerSizes.Any()) outerSizes = defaultOuterSizes;
+                        }
+                        else
+                        {
+                            innerSizes = defaultInnerSizes;
+                            outerSizes = defaultOuterSizes;
+                        }
+                    }
+                    else
+                    {
+                        innerSizes = defaultInnerSizes;
+                        outerSizes = defaultOuterSizes;
+                    }
                     int quantity = center.Quantity > 0 ? center.Quantity : center.NRQuantity;
                     if (quantity <= 0 && !string.IsNullOrWhiteSpace(center.CenterData))
                     {
@@ -2674,7 +2754,12 @@ namespace Tools.Controllers
                 }
 
                 if (!nrDataList.Any())
-                    return BadRequest("No suitable data found for Extra Configuration. Either no data is at the required step or all data is already processed.");
+                {
+                    bool hasExtras = await _context.ExtrasEnvelope.AnyAsync(e => e.ProjectId == ProjectId && e.Status == 1)
+                        || await _context.CenterList.AnyAsync(c => c.ProjectId == ProjectId && c.Status && c.ExtraId > 0);
+                    if (!hasExtras)
+                        return BadRequest("No suitable data found for Extra Configuration. Either no data is at the required step or all data is already processed.");
+                }
 
                 var extraConfig = await _context.ExtraConfigurations
                     .Where(c => c.ProjectId == ProjectId)

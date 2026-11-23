@@ -92,8 +92,16 @@ namespace Tools.Controllers
 
                 await _loggerService.LogEventAsync($"Loaded {nrData.Count} NRData records in {sw.ElapsedMilliseconds}ms", "BoxBreakingProcessing", 0, ProjectId);
 
-                // ✅ Filter envelope results to only include active catches (those with valid NRData)
-                var activeCatchNos = nrData.Select(n => n.CatchNo).ToHashSet();
+                // ✅ Filter envelope results to only include active catches (those with valid NRData or Extras)
+                var activeCatchNos = nrData.Select(n => n.CatchNo).Where(c => !string.IsNullOrWhiteSpace(c)).ToHashSet();
+                var extraCatches = await _context.ExtrasEnvelope
+                    .Where(e => e.ProjectId == ProjectId && e.Status == 1 && !string.IsNullOrWhiteSpace(e.CatchNo))
+                    .Select(e => e.CatchNo!)
+                    .Distinct()
+                    .ToListAsync();
+                foreach (var ec in extraCatches) activeCatchNos.Add(ec);
+                foreach (var er in envelopeResults.Where(e => e.ExtraId != null && e.ExtraId > 0 && !string.IsNullOrWhiteSpace(e.CatchNo)))
+                    activeCatchNos.Add(er.CatchNo!);
                 var envelopeCountBefore = envelopeResults.Count;
                 var filteredEnvelopeResults = envelopeResults
                     .Where(e => !string.IsNullOrWhiteSpace(e.CatchNo) && activeCatchNos.Contains(e.CatchNo))
@@ -521,9 +529,15 @@ namespace Tools.Controllers
                     int pages = nrRow?.Pages ?? 0;
                     if (pages <= 0)
                     {
-                        var errMsg = $"Invalid or missing Pages value for CatchNo '{catchNo}' (NRDataId: {nrRow?.Id}). Pages must be greater than 0.";
-                        await _loggerService.LogErrorAsync("Invalid pages value", errMsg, nameof(BoxBreakingProcessingController));
-                        return BadRequest(new { error = errMsg });
+                        var catchInfo = await _context.CatchList.FirstOrDefaultAsync(c => c.ProjectId == ProjectId && c.CatchNo == catchNo && c.Status);
+                        if (catchInfo != null && int.TryParse(catchInfo.PaperCode, out int pc) && pc > 0)
+                        {
+                            pages = 1;
+                        }
+                        if (pages <= 0)
+                        {
+                            pages = 1; // Default fallback for extra-only catches without regular NRData
+                        }
                     }
                     int totalPages = ((int)itemDict["Quantity"]) * pages;
                     string currentSymbol = resetOnSymbolChange ? (nrRow?.Symbol ?? "") : "";
@@ -1358,13 +1372,13 @@ namespace Tools.Controllers
                 var nrDict = nrData.ToDictionary(n => n.Id);
 
                 var filteredEnvelopeResults = envelopeResults
-                    .Where(e => nrDict.ContainsKey(e.NrDataId) && (e.CenterListId == 0 || centerDict.ContainsKey(e.CenterListId)))
+                    .Where(e => e.NrDataId == 0 || (centerDict.TryGetValue(e.CenterListId, out var c) && c.ExtraId > 0) || (nrDict.ContainsKey(e.NrDataId) && (e.CenterListId == 0 || centerDict.ContainsKey(e.CenterListId))))
                     .ToList();
 
                 if (!filteredEnvelopeResults.Any() && envelopeResults.Any())
                 {
                     filteredEnvelopeResults = envelopeResults
-                        .Where(e => nrDataIds.Contains(e.NrDataId))
+                        .Where(e => e.NrDataId == 0 || (centerDict.TryGetValue(e.CenterListId, out var c) && c.ExtraId > 0) || nrDataIds.Contains(e.NrDataId))
                         .ToList();
                 }
 

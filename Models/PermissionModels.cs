@@ -20,10 +20,6 @@ namespace Tools.Models
         [MaxLength(50)]
         public string RoleName { get; set; } = string.Empty;
 
-        [MaxLength(255)]
-        public string? Description { get; set; }
-
-        public bool IsSystemRole { get; set; } = false;
 
         /// <summary>
         /// JSON map: { "MODULE_CODE": { "view": true, "create": true, "edit": true, "delete": true, "execute": true, "export": true } }
@@ -33,8 +29,8 @@ namespace Tools.Models
         public DateTime UpdatedAt { get; set; } = DateTime.Now;
     }
 
-    [Table("UserPermissions")]
-    public class UserPermission
+    [Table("usertoolsroles")]
+    public class UserToolsRole
     {
         [Key]
         [DatabaseGenerated(DatabaseGeneratedOption.Identity)]
@@ -43,19 +39,14 @@ namespace Tools.Models
         [Required]
         public int UserId { get; set; }
 
-        /// <summary>
-        /// Optional local Tools Role ID. If null, user inherits their ERP JWT roleId.
-        /// </summary>
-        public int? RoleId { get; set; }
+        [Required]
+        public int RoleId { get; set; }
 
-        /// <summary>
-        /// JSON map of user overrides: { "MODULE_CODE": { "view": true, "delete": false } }
-        /// </summary>
-        public string? OverridesJson { get; set; }
-
-        public DateTime UpdatedAt { get; set; } = DateTime.Now;
-        public int UpdatedBy { get; set; }
+        [ForeignKey("RoleId")]
+        public virtual ToolsRole? Role { get; set; }
     }
+
+    
 
     // ==========================================
     // 2. MODULE CODES & ACTIONS
@@ -218,5 +209,45 @@ namespace Tools.Models
     {
         public string RoleName { get; set; } = string.Empty;
         public string? Description { get; set; }
+    }
+
+    public class AssignUserRoleRequest
+    {
+        [Required]
+        public int UserId { get; set; }
+
+        [Required]
+        public int RoleId { get; set; }
+    }
+
+    public class BulkAssignUserRolesRequest
+    {
+        [Required]
+        public List<int> UserIds { get; set; } = new();
+
+        [Required]
+        public int RoleId { get; set; }
+    }
+
+    public class UserRoleAssignmentDto
+    {
+        public int UserId { get; set; }
+        public string UserName { get; set; } = string.Empty;
+        public string FirstName { get; set; } = string.Empty;
+        public string LastName { get; set; } = string.Empty;
+        public string MobileNo { get; set; } = string.Empty;
+        public string Address { get; set; } = string.Empty;
+        public string ProfilePicturePath { get; set; } = string.Empty;
+        public int RoleId { get; set; }
+        public string RoleName { get; set; } = string.Empty;
+        public bool IsExplicit { get; set; }
+    }
+
+    public class UserRolesPagedResponse
+    {
+        public List<UserRoleAssignmentDto> Items { get; set; } = new();
+        public int TotalCount { get; set; }
+        public int PageNumber { get; set; }
+        public int PageSize { get; set; }
     }
 }

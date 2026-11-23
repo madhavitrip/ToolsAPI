@@ -1129,6 +1129,9 @@ namespace Tools.Migrations
 
                     b.HasKey("EnvelopeId");
 
+                    b.HasIndex("ProjectId", "CenterListId", "NrDataId")
+                        .HasDatabaseName("IX_newenvelopebreakage_ProjectId_CenterListId_NrDataId");
+
                     b.ToTable("newenvelopebreakage", (string)null);
                 });
 

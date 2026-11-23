@@ -125,17 +125,17 @@ namespace Tools.Controllers
                     .Where(p => p.ProjectId == ProjectId && (p.Status == true))
                     .ToListAsync();
                 
-                if (!envBreaking.Any())
-                    return BadRequest("No Envelope Breakdown configuration found. Please run the Envelope Breakages (Inner/Outer) configuration first.");
-
-                if (!nrData.Any())
-                    return BadRequest("No valid NR Data found for Envelope Breaking processing.");
-
                 var extrasQuery = _context.ExtrasEnvelope.Where(p => p.ProjectId == ProjectId && p.Status == 1);
                 if (!string.IsNullOrEmpty(catchNo)) extrasQuery = extrasQuery.Where(e => e.CatchNo == catchNo);
                 // Note: ExtraEnvelopes doesn't usually have LotNo, so we filter by catchNo if provided.
                 
                 var extras = await extrasQuery.ToListAsync();
+
+                if (!envBreaking.Any() && !extras.Any())
+                    return BadRequest("No Envelope Breakdown configuration found. Please run the Envelope Breakages (Inner/Outer) configuration first.");
+
+                if (!nrData.Any() && !extras.Any())
+                    return BadRequest("No valid NR Data or Extra Envelopes found for Envelope Breaking processing.");
 
                 var projectconfig = await _context.ProjectConfigs
                     .Where(p => p.ProjectId == ProjectId)
@@ -144,7 +144,7 @@ namespace Tools.Controllers
                 if (projectconfig == null)
                     return NotFound("Project config not found");
 
-                var envelopeCapacities = envCaps.ToDictionary(x => x.EnvelopeName, x => x.Capacity);
+                var envelopeCapacities = BuildEnvelopeCapacityMap(envCaps, x => x.EnvelopeName, x => x.Capacity);
                 var envDict = envBreaking.ToDictionary(
                     e => e.NrDataId,
                     e => new { e.TotalEnvelope, e.OuterEnvelope, e.InnerEnvelope }
@@ -390,7 +390,11 @@ namespace Tools.Controllers
                         }
                     }
 
+                    if (extra.Quantity <= 0) return;
+                    if (envCapacity <= 0) envCapacity = extra.Quantity > 0 ? extra.Quantity : 30;
+
                     int totalEnv = (int)Math.Ceiling((double)extra.Quantity / envCapacity);
+                    if (totalEnv <= 0) return;
                     extraCenterEnvCounter = 0;
 
                     for (int j = 1; j <= totalEnv; j++)
@@ -664,7 +668,7 @@ namespace Tools.Controllers
 
                     envelopeBreakdown = envelopeBreakdown.OrderBy(x => x.Capacity).ToList();
 
-                    if (envelopeBreakdown.Count > 0)
+                    if (envelopeBreakdown.Count > 0 && current.Quantity > 0)
                     {
                         List<int> innerPool = null;
                         string innerJson = envDict.TryGetValue(current.Id, out var eInfo) ? eInfo.InnerEnvelope : null;
@@ -717,7 +721,7 @@ namespace Tools.Controllers
                             if (remainingQty <= 0) break;
                         }
                     }
-                    else
+                    else if (current.Quantity > 0)
                     {
                         centerEnvCounter++;
                         var nrRow = new System.Dynamic.ExpandoObject();
@@ -803,9 +807,43 @@ namespace Tools.Controllers
                     }
                 }
 
-              
+                // Process Extra-Only Catches (catches that exist in ExtrasEnvelope but have no active NRData rows)
+                var processedCatches = new HashSet<string>(resultList
+                    .Select(r => ((IDictionary<string, object>)r).TryGetValue("CatchNo", out var c) ? c?.ToString() ?? "" : "")
+                    .Where(c => !string.IsNullOrEmpty(c)));
 
-                // sortFields and sortingFieldNames already loaded above ✅
+                var extraOnlyCatches = extras
+                    .Where(e => !string.IsNullOrEmpty(e.CatchNo) && !processedCatches.Contains(e.CatchNo))
+                    .GroupBy(e => e.CatchNo)
+                    .ToList();
+
+                if (extraOnlyCatches.Any())
+                {
+                    var extraCatchNames = extraOnlyCatches.Select(g => g.Key).ToList();
+                    var catchListInfos = await _context.CatchList
+                        .AsNoTracking()
+                        .Where(c => c.ProjectId == ProjectId && extraCatchNames.Contains(c.CatchNo))
+                        .GroupBy(c => c.CatchNo)
+                        .ToDictionaryAsync(g => g.Key, g => g.First());
+
+                    foreach (var catchGroup in extraOnlyCatches)
+                    {
+                        string extraCatchNo = catchGroup.Key;
+                        catchListInfos.TryGetValue(extraCatchNo, out var catchInfo);
+
+                        string examDate = catchInfo?.ExamDate ?? "";
+                        string examTime = catchInfo?.ExamTime ?? "";
+                        string course = catchInfo?.CourseName ?? "";
+                        string centerCode = catchInfo?.CenterCode ?? "EXTRA";
+
+                        foreach (var extra in catchGroup)
+                        {
+                            string nodalCode = !string.IsNullOrEmpty(extra.NodalCode) ? extra.NodalCode : (catchInfo?.CenterCode ?? "-");
+                            AddExtraWithEnv(extra, examDate, examTime, course, 0,
+                                nodalCode, centerCode, 10000, 10000, 10000, "-", 0, "-", 0);
+                        }
+                    }
+                }
 
                 var nonMssRows = resultList
                     .Where(r =>
@@ -1804,7 +1842,7 @@ namespace Tools.Controllers
                 var envCaps = await _context.EnvelopesTypes
                     .Select(e => new { e.EnvelopeName, e.Capacity })
                     .ToListAsync();
-                var envelopeCapacities = envCaps.ToDictionary(x => x.EnvelopeName, x => x.Capacity);
+                var envelopeCapacities = BuildEnvelopeCapacityMap(envCaps, x => x.EnvelopeName, x => x.Capacity);
 
                 var eligibleSteps = Tools.Models.PipelineNavigator.GetEligiblePickupSteps(Tools.Models.PipelineNavigator.STEP_AWAITING_ENV);
 
@@ -1833,8 +1871,12 @@ namespace Tools.Controllers
                     nrDataList = await fallbackQuery.OrderBy(p => p.CatchNo).ToListAsync();
                 }
 
-                if (!nrDataList.Any())
-                    return BadRequest("No valid NR Data found for Envelope Breaking processing.");
+                var extrasQueryNew = _context.ExtrasEnvelope.Where(p => p.ProjectId == ProjectId && p.Status == 1);
+                if (!string.IsNullOrEmpty(catchNo)) extrasQueryNew = extrasQueryNew.Where(e => e.CatchNo == catchNo);
+                var extrasNew = await extrasQueryNew.ToListAsync();
+
+                if (!nrDataList.Any() && !extrasNew.Any())
+                    return BadRequest("No valid NR Data or Extra Envelopes found for Envelope Breaking processing.");
 
                 var nrDataIds = nrDataList.Select(n => n.Id).ToList();
                 var centers = await _context.CenterList
@@ -1844,7 +1886,7 @@ namespace Tools.Controllers
                     .ThenBy(c => c.CenterSort)
                     .ToListAsync();
 
-                if (!centers.Any())
+                if (!centers.Any() && !extrasNew.Any())
                     return BadRequest("No centers found for the selected NR data.");
 
                 var centerIds = centers.Select(c => c.Id).ToList();
@@ -1852,7 +1894,7 @@ namespace Tools.Controllers
                     .Where(b => b.ProjectId == ProjectId && centerIds.Contains(b.CenterListId) && b.Status)
                     .ToListAsync();
 
-                if (!newBreakages.Any())
+                if (!newBreakages.Any() && !extrasNew.Any())
                     return BadRequest("No Envelope Breakdown configuration found. Please run the Envelope Breakages (Inner/Outer) configuration first.");
 
                 var envDict = newBreakages.ToDictionary(e => e.CenterListId);
@@ -2063,7 +2105,7 @@ namespace Tools.Controllers
                     envelopeBreakdown = envelopeBreakdown.OrderBy(x => x.Capacity).ToList();
                     int centerQty = center.Quantity > 0 ? center.Quantity : center.NRQuantity;
 
-                    if (envelopeBreakdown.Count > 0)
+                    if (envelopeBreakdown.Count > 0 && centerQty > 0)
                     {
                         List<int>? innerPool = null;
                         string? innerJson = envInfo?.InnerEnvelope;
@@ -2101,6 +2143,7 @@ namespace Tools.Controllers
                                 rowDict["DistrictSort"] = center.DistrictSort;
                                 rowDict["NrDataId"] = parentNr.Id;
                                 rowDict["CenterListId"] = center.Id;
+                                rowDict["ExtraId"] = center.ExtraId;
 
                                 // Compute packing denomination: inner breakdown or fallback to envelope capacity
                                 string? packingDenom = GetPackingDenominationForQuantity(innerJson, envQty, ref innerPool);
@@ -2121,7 +2164,7 @@ namespace Tools.Controllers
                             if (remainingQty <= 0) break;
                         }
                     }
-                    else
+                    else if (centerQty > 0 || center.ExtraId > 0)
                     {
                         centerEnvCounter++;
                         var row = new ExpandoObject();
@@ -2148,6 +2191,7 @@ namespace Tools.Controllers
                         rowDict["DistrictSort"] = center.DistrictSort;
                         rowDict["NrDataId"] = parentNr.Id;
                         rowDict["CenterListId"] = center.Id;
+                        rowDict["ExtraId"] = center.ExtraId;
 
                         List<int>? innerPool = null;
                         string? packingDenom = GetPackingDenominationForQuantity(envInfo?.InnerEnvelope, centerQty, ref innerPool);
@@ -2159,6 +2203,116 @@ namespace Tools.Controllers
 
                         FillDynamicFields(rowDict, parentNr.Id);
                         resultList.Add(row);
+                    }
+                }
+
+                // Process Extra-Only Catches for New Model
+                var processedCatchesNew = new HashSet<string>(resultList
+                    .Select(r => ((IDictionary<string, object>)r).TryGetValue("CatchNo", out var c) ? c?.ToString() ?? "" : "")
+                    .Where(c => !string.IsNullOrEmpty(c)));
+
+                var extraOnlyCatchesNew = extrasNew
+                    .Where(e => !string.IsNullOrEmpty(e.CatchNo) && !processedCatchesNew.Contains(e.CatchNo))
+                    .GroupBy(e => e.CatchNo)
+                    .ToList();
+
+                if (extraOnlyCatchesNew.Any())
+                {
+                    var extraCatchNamesNew = extraOnlyCatchesNew.Select(g => g.Key).ToList();
+                    var catchListInfosNew = await _context.CatchList
+                        .AsNoTracking()
+                        .Where(c => c.ProjectId == ProjectId && extraCatchNamesNew.Contains(c.CatchNo))
+                        .GroupBy(c => c.CatchNo)
+                        .ToDictionaryAsync(g => g.Key, g => g.First());
+
+                    var extrasconfigNew = await _context.ExtraConfigurations
+                        .Where(p => p.ProjectId == ProjectId)
+                        .ToListAsync();
+
+                    foreach (var catchGroup in extraOnlyCatchesNew)
+                    {
+                        string extraCatchNo = catchGroup.Key;
+                        catchListInfosNew.TryGetValue(extraCatchNo, out var catchInfo);
+
+                        string examDate = catchInfo?.ExamDate ?? "";
+                        string examTime = catchInfo?.ExamTime ?? "";
+                        string course = catchInfo?.CourseName ?? "";
+
+                        foreach (var extra in catchGroup)
+                        {
+                            if (extra.Quantity <= 0) continue;
+
+                            var extraConfig = extrasconfigNew.FirstOrDefault(e => e.ExtraType == extra.ExtraId);
+                            int envCapacity = 0;
+                            string? extraOuterTypeStr = null;
+
+                            if (extraConfig != null && !string.IsNullOrEmpty(extraConfig.EnvelopeType))
+                            {
+                                try
+                                {
+                                    var envType = JsonSerializer.Deserialize<Dictionary<string, string>>(extraConfig.EnvelopeType);
+                                    if (envType != null && envType.TryGetValue("Outer", out string? outerType))
+                                    {
+                                        if (envelopeCapacities.TryGetValue(outerType, out int cap))
+                                        {
+                                            envCapacity = cap;
+                                        }
+                                        extraOuterTypeStr = outerType.Replace("E", "");
+                                    }
+                                }
+                                catch { }
+                            }
+
+                            if (envCapacity <= 0) envCapacity = extra.Quantity > 0 ? extra.Quantity : 30;
+                            int totalEnv = (int)Math.Ceiling((double)extra.Quantity / envCapacity);
+                            if (totalEnv <= 0) continue;
+
+                            int extraCounter = 0;
+                            for (int j = 1; j <= totalEnv; j++)
+                            {
+                                int envQuantity = (j == 1 && totalEnv > 1)
+                                    ? extra.Quantity - (envCapacity * (totalEnv - 1))
+                                    : Math.Min(extra.Quantity - (envCapacity * (j - 1)), envCapacity);
+
+                                string extraPackingDenom = !string.IsNullOrEmpty(extraOuterTypeStr) ? $"[{extraOuterTypeStr}x1]" : null;
+                                extraCounter++;
+
+                                var row = new ExpandoObject();
+                                var rowDict = (IDictionary<string, object>)row;
+
+                                rowDict["isMss"] = false;
+                                rowDict["CatchNo"] = extra.CatchNo;
+                                rowDict["CenterCode"] = extra.ExtraId switch
+                                {
+                                    1 => "Nodal Extra",
+                                    2 => "University Extra",
+                                    3 => "Office Extra",
+                                    _ => "Extra"
+                                };
+                                rowDict["CourseName"] = course;
+                                rowDict["ExamTime"] = examTime;
+                                rowDict["ExamDate"] = examDate;
+                                rowDict["Quantity"] = extra.Quantity;
+                                rowDict["EnvQuantity"] = envQuantity;
+                                rowDict["NodalCode"] = !string.IsNullOrEmpty(extra.NodalCode) ? extra.NodalCode : (catchInfo?.CenterCode ?? "-");
+                                rowDict["CenterEnv"] = extraCounter;
+                                rowDict["TotalEnv"] = totalEnv;
+                                rowDict["Env"] = $"{j}/{totalEnv}";
+                                rowDict["NRQuantity"] = 0;
+                                rowDict["CenterSort"] = extra.ExtraId switch { 1 => 10000.0, 2 => 100000.0, 3 => 1000000.0, _ => 10000.0 };
+                                rowDict["NodalSort"] = extra.ExtraId switch { 1 => 10000.1, 2 => 100000.0, 3 => 1000000.0, _ => 10000.0 };
+                                rowDict["Route"] = "-";
+                                rowDict["RouteSort"] = extra.ExtraId switch { 1 => 10000, 2 => 10000, 3 => 100000, _ => 10000 };
+                                rowDict["District"] = "-";
+                                rowDict["DistrictSort"] = extra.ExtraId switch { 1 => 10000, 2 => 10000, 3 => 100000, _ => 10000 };
+                                rowDict["NrDataId"] = 0;
+                                rowDict["CenterListId"] = 0;
+                                rowDict["ExtraId"] = extra.ExtraId;
+                                rowDict["PackingDenomination"] = extraPackingDenom;
+
+                                resultList.Add(row);
+                            }
+                        }
                     }
                 }
 
@@ -3045,6 +3199,24 @@ namespace Tools.Controllers
             }
         }
 
+        private static Dictionary<string, int> BuildEnvelopeCapacityMap<T>(
+            IEnumerable<T> envelopeTypes,
+            Func<T, string> getName,
+            Func<T, int> getCapacity)
+        {
+            var capacitiesByName = new Dictionary<string, int>();
+            foreach (var group in envelopeTypes.GroupBy(getName))
+            {
+                var capacities = group.Select(getCapacity).Distinct().ToList();
+                if (capacities.Count != 1)
+                    throw new InvalidOperationException($"Envelope type '{group.Key}' has conflicting capacities.");
+
+                capacitiesByName.Add(group.Key, capacities[0]);
+            }
+
+            return capacitiesByName;
+        }
+
         private async Task ResetReportStatus(int projectId)
         {
             try
@@ -3072,4 +3244,3 @@ namespace Tools.Controllers
         }
     }
 }
-

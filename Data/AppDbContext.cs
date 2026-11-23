@@ -63,6 +63,7 @@ namespace ERPToolsAPI.Data
 
         // Roles & Permissions (ToolsRoles)
         public DbSet<Tools.Models.ToolsRole> ToolsRoles { get; set; }
+        public DbSet<Tools.Models.UserToolsRole> UserToolsRoles { get; set; }
         public DbSet<ApplicationMessage> ApplicationMessages { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -88,6 +89,10 @@ namespace ERPToolsAPI.Data
 
             modelBuilder.Entity<NewEnvelopeBreakage>()
                 .ToTable("newenvelopebreakage");
+
+            modelBuilder.Entity<NewEnvelopeBreakage>()
+                .HasIndex(e => new { e.ProjectId, e.CenterListId, e.NrDataId })
+                .HasDatabaseName("IX_newenvelopebreakage_ProjectId_CenterListId_NrDataId");
 
             modelBuilder.Entity<NewEnvelopeBreakingResult>()
                 .ToTable("newenvelopebreakingresults");

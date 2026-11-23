@@ -565,6 +565,11 @@ namespace Tools.Controllers
             if (file == null || file.Length == 0)
                 return BadRequest("No file uploaded.");
 
+            templateName = templateName?.Trim() ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(templateName))
+                return BadRequest("templateName is required.");
+            subName = subName?.Trim();
+
             // Authorization check: Extract user role from JWT token
             int userRoleId = LogHelper.GetUserRoleId(User, Request);
             
@@ -794,7 +799,7 @@ namespace Tools.Controllers
                 RPTFilePath  = relativePath,   // store relative path only
                 ParsedFieldsJson = parsedFieldsJson,
                 RequiredFieldsJson = requiredFieldsJson,
-                DesignSnapshotJson = await GetDesignSnapshotJson(absolutePath, file.FileName),
+                DesignSnapshotJson = await GetDesignSnapshotJsonSafe(absolutePath, file.FileName),
                 Version      = lastVersion + 1,
                 IsActive     = true,
                 CreatedDate  = DateTime.Now,
@@ -2189,6 +2194,24 @@ namespace Tools.Controllers
             catch (Exception ex)
             {
                 return (new List<FieldDto>(), $"Parser exception: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Calls GetDesignSnapshotJson but swallows all errors so an unavailable or
+        /// mis-configured RPT microservice (e.g. missing Crystal Reports runtime DLLs)
+        /// never blocks a template upload. Returns null on any failure.
+        /// </summary>
+        private async Task<string> GetDesignSnapshotJsonSafe(string filePath, string fileName)
+        {
+            try
+            {
+                return await GetDesignSnapshotJson(filePath, fileName);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[RPTTemplates] Design snapshot skipped (non-fatal): {ex.Message}");
+                return null;
             }
         }
 

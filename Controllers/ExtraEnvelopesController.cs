@@ -213,7 +213,19 @@ namespace Tools.Controllers
                 }
 
                 if (!nrDataList.Any())
-                    return BadRequest("No suitable data found for Extra Configuration. Either no data is at the required step or all data is already processed.");
+                {
+                    var fallback = await _context.NRDatas.Where(d => d.ProjectId == ProjectId && d.Status == true && d.Batch == (batchNo ?? 1)).ToListAsync();
+                    if (fallback.Any())
+                    {
+                        nrDataList = fallback;
+                    }
+                    else
+                    {
+                        bool hasExistingExtras = await _context.ExtrasEnvelope.AnyAsync(e => e.ProjectId == ProjectId && e.Status == 1);
+                        if (!hasExistingExtras)
+                            return BadRequest("No suitable data found for Extra Configuration. Either no data is at the required step or all data is already processed.");
+                    }
+                }
 
                 // var project = await _context.Projects
                 //     .Where(p => p.ProjectId == ProjectId)
@@ -481,7 +493,9 @@ namespace Tools.Controllers
 
                    
 
-                    envelopesToUse = envelopesToAdd;
+                    envelopesToUse = await _context.ExtrasEnvelope
+                        .Where(e => e.ProjectId == ProjectId && e.Status == 1)
+                        .ToListAsync();
                 }
                 foreach (var nr in nrDataList)
                     nr.Steps = Tools.Models.PipelineNavigator.GetNextStep(Tools.Models.PipelineNavigator.STEP_ENV_BREAKING, projectConfig?.Modules);
