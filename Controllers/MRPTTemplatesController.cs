@@ -101,7 +101,6 @@ namespace Tools.Controllers
         }
 
         [Authorize]
-        [RequirePermission(ModuleCodes.MasterRpt, PermissionAction.Create)]
         [RequireMasterAuth(Module = "Master Templates", Operation = "SAVE MASTER")]
         [HttpPost("upload")]
         [DisableRequestSizeLimit]
@@ -221,7 +220,6 @@ namespace Tools.Controllers
         }
 
         [Authorize]
-        [RequirePermission(ModuleCodes.MasterRpt, PermissionAction.Delete)]
         [HttpDelete("{id}/soft-delete")]
         public async Task<ActionResult> SoftDelete(int id)
         {
@@ -243,7 +241,6 @@ namespace Tools.Controllers
         }
 
         [Authorize]
-        [RequirePermission(ModuleCodes.MasterRpt, PermissionAction.Edit)]
         [HttpPost("{id}/restore")]
         public async Task<ActionResult> Restore(int id)
         {
@@ -282,7 +279,6 @@ namespace Tools.Controllers
         }
 
         [Authorize]
-        [RequirePermission(ModuleCodes.MasterRpt, PermissionAction.Edit)]
         [HttpPost("{id}/activate")]
         public async Task<ActionResult> ActivateVersion(int id)
         {
@@ -318,7 +314,6 @@ namespace Tools.Controllers
         }
 
         [Authorize]
-        [RequirePermission(ModuleCodes.MasterRpt, PermissionAction.Edit)]
         [HttpPost("{id}/mapping")]
         public async Task<ActionResult> SaveMapping(int id, [FromBody] MSaveMappingRequest req)
         {

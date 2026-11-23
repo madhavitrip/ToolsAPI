@@ -14,7 +14,6 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using Tools.Models;
 using Tools.Services;
-using Tools.Middleware;
 using System.Globalization;
 
 namespace Tools.Controllers
@@ -744,7 +743,6 @@ namespace Tools.Controllers
         }
 
         [HttpPost("merge-catchnos")]
-        [RequirePermission(ModuleCodes.DataImport, PermissionAction.Execute)]
         public async Task<ActionResult> MergeCatchNos(int ProjectId, [FromBody] MergeCatchNoRequest request, [FromQuery] int? lotNo = null)
         {
             if (request == null)
@@ -1250,7 +1248,6 @@ namespace Tools.Controllers
         // PUT: api/NRDatas/5
         // To protect from overposting attacks, see https://go.microsoft.com/fwlink/?linkid=2123754
         [HttpPut("{id}")]
-        [RequirePermission(ModuleCodes.DataImport, PermissionAction.Edit)]
         public async Task<IActionResult> PutNRData(int id, NRData nRData)
         {
             if (id != nRData.Id)
@@ -1284,7 +1281,6 @@ namespace Tools.Controllers
 
         // PUT: api/NRDatas/UpdateSingle/{id}
         [HttpPut("UpdateSingle/{id}")]
-        [RequirePermission(ModuleCodes.DataImport, PermissionAction.Edit)]
         public async Task<IActionResult> UpdateSingleNRData(int id, [FromBody] JsonElement inputData, [FromQuery] int? lotNo = null)
         {
             using var transaction = await _context.Database.BeginTransactionAsync();
@@ -1787,7 +1783,6 @@ namespace Tools.Controllers
 
         // PUT: api/NRDatas/UpdateCatchwise/{catchNo}
         [HttpPut("UpdateCatchwise/{catchNo}")]
-        [RequirePermission(ModuleCodes.DataImport, PermissionAction.Edit)]
         public async Task<IActionResult> UpdateCatchwiseNRData(string catchNo, [FromBody] JsonElement inputData, [FromQuery] int? lotNo = null)
         {
             using var transaction = await _context.Database.BeginTransactionAsync();
@@ -2061,7 +2056,6 @@ namespace Tools.Controllers
 
 
         [HttpPost]
-        [RequirePermission(ModuleCodes.DataImport, PermissionAction.Create)]
         public async Task<IActionResult> PostNRData([FromBody] JsonElement inputData, [FromQuery] int? lotNo = null)
         {
             if (!ModelState.IsValid)
@@ -2471,7 +2465,6 @@ namespace Tools.Controllers
         }
 
         [HttpPost("single")]
-        [RequirePermission(ModuleCodes.DataImport, PermissionAction.Create)]
         public async Task<IActionResult> PostSingleCatch([FromBody] JsonElement inputData, [FromQuery] int? lotNo = null)
         {
             if (!ModelState.IsValid)
@@ -4667,7 +4660,6 @@ namespace Tools.Controllers
         }
 
         [HttpPut("BulkUpdate")]
-        [RequirePermission(ModuleCodes.DataImport, PermissionAction.Edit)]
         public async Task<IActionResult> BulkUpdateNRData(
             [FromBody] List<NRData> data,
             [FromQuery] int projectId
@@ -4819,7 +4811,6 @@ namespace Tools.Controllers
 
         // DELETE: api/NRDatas/5
         [HttpDelete("{id}")]
-        [RequirePermission(ModuleCodes.DataImport, PermissionAction.Delete)]
         public async Task<IActionResult> DeleteNRData(int id)
         {
             try
@@ -4889,7 +4880,6 @@ namespace Tools.Controllers
         }
 
         [HttpDelete("DeleteByProject/{ProjectId}")]
-        [RequirePermission(ModuleCodes.DataImport, PermissionAction.Delete)]
         public async Task<IActionResult> DeleteNR(int ProjectId, [FromQuery] int? lotNo = null)
         {
             try
@@ -5424,7 +5414,6 @@ namespace Tools.Controllers
         }
 
         [HttpPut("~/api/Correction/HeaderVerification/{id}")]
-        [RequirePermission(ModuleCodes.HeaderVerification, PermissionAction.Edit)]
         public async Task<IActionResult> UpdateHeaderVerificationRecord(
             int id,
             [FromQuery] int projectId,
@@ -5752,7 +5741,6 @@ namespace Tools.Controllers
         // Skips the normal A/B/C/D presence validation intentionally.
         // ---------------------------------------------------------
         [HttpPost("~/api/Correction/HeaderVerification/BulkVerifyProject/{projectId}")]
-        [RequirePermission(ModuleCodes.HeaderVerification, PermissionAction.Edit)]
         public async Task<IActionResult> BulkVerifyProject(int projectId)
         {
             if (projectId <= 0)
@@ -5799,7 +5787,6 @@ namespace Tools.Controllers
 
 
         [HttpDelete("DeleteCatchNo/{projectId}/{catchNo}")]
-        [RequirePermission(ModuleCodes.DataImport, PermissionAction.Delete)]
         public async Task<IActionResult> DeleteCatchNo(int projectId, string catchNo)
         {
             try
@@ -7686,7 +7673,6 @@ namespace Tools.Controllers
         }
 
         [HttpPost("apply-comparison-changes")]
-        [RequirePermission(ModuleCodes.ChangedNr, PermissionAction.Execute)]
         public async Task<IActionResult> ApplyComparisonChanges([FromBody] ApplyComparisonChangesDto model)
         {
             try

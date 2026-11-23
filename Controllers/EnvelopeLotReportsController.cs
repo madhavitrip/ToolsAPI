@@ -2,8 +2,6 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using ERPToolsAPI.Data;
 using ToolsAPI.Models;
-using Tools.Models;
-using Tools.Middleware;
 using System.ComponentModel.DataAnnotations;
 
 namespace ToolsAPI.Controllers
@@ -389,7 +387,6 @@ namespace ToolsAPI.Controllers
 
         // DELETE: api/EnvelopeLotReports/{id}
         [HttpDelete("{id}")]
-        [RequirePermission(ModuleCodes.ProcessingPipeline, PermissionAction.Delete)]
         public async Task<IActionResult> DeleteEnvelopeLotReport(int id)
         {
             try
@@ -447,7 +444,6 @@ namespace ToolsAPI.Controllers
 
         // PUT: api/EnvelopeLotReports/{id}/archive
         [HttpPut("{id}/archive")]
-        [RequirePermission(ModuleCodes.ProcessingPipeline, PermissionAction.Edit)]
         public async Task<IActionResult> ArchiveReport(int id)
         {
             try
@@ -472,7 +468,6 @@ namespace ToolsAPI.Controllers
 
         // PUT: api/EnvelopeLotReports/{id}/unarchive
         [HttpPut("{id}/unarchive")]
-        [RequirePermission(ModuleCodes.ProcessingPipeline, PermissionAction.Edit)]
         public async Task<IActionResult> UnarchiveReport(int id)
         {
             try

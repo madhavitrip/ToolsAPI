@@ -8,7 +8,6 @@ using Microsoft.EntityFrameworkCore;
 using ERPToolsAPI.Data;
 using Tools.Models;
 using Tools.Services;
-using Tools.Middleware;
 using Microsoft.CodeAnalysis;
 
 namespace Tools.Controllers
@@ -49,7 +48,6 @@ namespace Tools.Controllers
         // PUT: api/ExtraTypes/5
         // To protect from overposting attacks, see https://go.microsoft.com/fwlink/?linkid=2123754
         [HttpPut("{id}")]
-        [RequirePermission(ModuleCodes.MasterNodalExtra, PermissionAction.Edit)]
         public async Task<IActionResult> PutExtraType(int id, ExtraType extraType)
         {
             if (id != extraType.ExtraTypeId)
@@ -85,7 +83,6 @@ namespace Tools.Controllers
         // POST: api/ExtraTypes
         // To protect from overposting attacks, see https://go.microsoft.com/fwlink/?linkid=2123754
         [HttpPost]
-        [RequirePermission(ModuleCodes.MasterNodalExtra, PermissionAction.Create)]
         public async Task<ActionResult<ExtraType>> PostExtraType(ExtraType extraType)
         {
             try
@@ -104,7 +101,6 @@ namespace Tools.Controllers
 
         // DELETE: api/ExtraTypes/5
         [HttpDelete("{id}")]
-        [RequirePermission(ModuleCodes.MasterNodalExtra, PermissionAction.Delete)]
         public async Task<IActionResult> DeleteExtraType(int id)
         {
             try

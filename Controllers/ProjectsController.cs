@@ -11,7 +11,6 @@ using Microsoft.IdentityModel.Tokens;
 using System.IdentityModel.Tokens.Jwt;
 using Microsoft.AspNetCore.Authorization;
 using Tools.Services;
-using Tools.Middleware;
 using System.Data;
 using System.Security.Claims;
 
@@ -358,7 +357,6 @@ namespace Tools.Controllers
         // PUT: api/Projects/5
         // To protect from overposting attacks, see https://go.microsoft.com/fwlink/?linkid=2123754
         [HttpPut("{id}")]
-        [RequirePermission(ModuleCodes.MasterProject, PermissionAction.Edit)]
         public async Task<IActionResult> PutProject(int id, Project project)
         {
             if (id != project.ProjectId)
@@ -411,7 +409,6 @@ namespace Tools.Controllers
         // POST: api/Projects
         // To protect from overposting attacks, see https://go.microsoft.com/fwlink/?linkid=2123754
         [HttpPost]
-        [RequirePermission(ModuleCodes.MasterProject, PermissionAction.Create)]
         public async Task<ActionResult<Project>> PostProject(Project project)
         {
             // Authorization check: Managers (RoleId 4) cannot create new projects
