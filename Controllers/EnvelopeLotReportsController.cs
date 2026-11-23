@@ -86,10 +86,10 @@ namespace ToolsAPI.Controllers
                     SubName = rptTemplatesLookup.TryGetValue(r.TemplateId, out var tpl) ? tpl.SubName : null,
                     r.EnvLotNumbers,
                     r.FileName,
-                    r.GeneratedAt,
+                    GeneratedAt = DateTime.SpecifyKind(r.GeneratedAt, DateTimeKind.Utc),
                     r.GeneratedByUserId,
                     r.DownloadedByUserId,
-                    r.DownloadedAt,
+                    DownloadedAt = r.DownloadedAt.HasValue ? DateTime.SpecifyKind(r.DownloadedAt.Value, DateTimeKind.Utc) : (DateTime?)null,
                     r.FilePath,
                     r.Status,
 
@@ -100,15 +100,19 @@ namespace ToolsAPI.Controllers
                     LotNumber = r.LotNo
                 }).ToList();
 
-                // When latestOnly=true: keep only the latest generated report per
-                // (TemplateName + Batch + Lot) combination.
+                // When latestOnly=true: keep the latest generated report per
+                // (TemplateName + Batch + Lot + IsArchived) combination.
+                // This ensures the most recent ACTIVE report is returned (so if the latest report was archived,
+                // the second most recent active report takes its place), while still allowing the most recent
+                // ARCHIVED report to be returned for the Archived view.
                 var result = latestOnly
                     ? reports
                         .GroupBy(r => new
                         {
                             r.TemplateName,           // Template name (e.g., "Envelope Breaking", "Box Breaking")
                             Batch = r.EnvLotNumbers ?? "",  // Batch identifier
-                            Lot = r.LotNumber ?? 0    // Lot number
+                            Lot = r.LotNumber ?? 0,   // Lot number
+                            IsArchived = r.Status == false // Separate active vs archived stream
                         })
                         .Select(g => g.OrderByDescending(r => r.GeneratedAt).ThenByDescending(r => r.Id).First())
                         .OrderByDescending(r => r.GeneratedAt)
@@ -428,7 +432,7 @@ namespace ToolsAPI.Controllers
                 { 
                     message = "Download tracked successfully",
                     downloadedByUserId = report.DownloadedByUserId,
-                    downloadedAt = report.DownloadedAt
+                    downloadedAt = report.DownloadedAt.HasValue ? DateTime.SpecifyKind(report.DownloadedAt.Value, DateTimeKind.Utc) : (DateTime?)null
                 });
             }
             catch (Exception ex)
