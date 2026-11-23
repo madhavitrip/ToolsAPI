@@ -86,10 +86,10 @@ namespace ToolsAPI.Controllers
                     SubName = rptTemplatesLookup.TryGetValue(r.TemplateId, out var tpl) ? tpl.SubName : null,
                     r.EnvLotNumbers,
                     r.FileName,
-                    r.GeneratedAt,
+                    GeneratedAt = DateTime.SpecifyKind(r.GeneratedAt, DateTimeKind.Utc),
                     r.GeneratedByUserId,
                     r.DownloadedByUserId,
-                    r.DownloadedAt,
+                    DownloadedAt = r.DownloadedAt.HasValue ? DateTime.SpecifyKind(r.DownloadedAt.Value, DateTimeKind.Utc) : (DateTime?)null,
                     r.FilePath,
                     r.Status,
 
@@ -432,7 +432,7 @@ namespace ToolsAPI.Controllers
                 { 
                     message = "Download tracked successfully",
                     downloadedByUserId = report.DownloadedByUserId,
-                    downloadedAt = report.DownloadedAt
+                    downloadedAt = report.DownloadedAt.HasValue ? DateTime.SpecifyKind(report.DownloadedAt.Value, DateTimeKind.Utc) : (DateTime?)null
                 });
             }
             catch (Exception ex)
