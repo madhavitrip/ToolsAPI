@@ -3281,7 +3281,8 @@ namespace Tools.Controllers
                 }
 
                 var rawLotSteps1 = await activeQuery1
-                    .Select(n => new { LotNo = n.EnvLotNo > 0 ? n.EnvLotNo : n.LotNo, n.Steps })
+                    .Where(n => n.LotNo > 0)
+                    .Select(n => new { n.LotNo, n.Steps })
                     .ToListAsync();
 
                 var lotStats1 = rawLotSteps1
@@ -3400,6 +3401,7 @@ namespace Tools.Controllers
 
             // Fetch raw lot steps into memory to avoid MySQL GROUP BY complexity timeout
             var rawLotSteps = await activeQuery
+                .Where(n => n.LotNo > 0)
                 .Select(n => new { n.LotNo, n.Steps })
                 .ToListAsync();
 
