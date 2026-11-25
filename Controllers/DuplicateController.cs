@@ -627,20 +627,30 @@ WHERE ProjectId = {0};", ProjectId);
                 })
                 .ToList();
 
-            // Step 3: Fetch EnvelopeBreakages data and group by NRDataIds, then sum in-memory
-            var innerEnvData = await _context.EnvelopeBreakages
-                .Where(p => p.ProjectId == ProjectId && (p.Status == true))
-                .ToListAsync();
-
-            var processedInnerEnv = innerEnvData
-                .GroupBy(p => p.NrDataId) // Grouping by NrDataId
-                .Select(g => new
-                {
-                    NRDataId = g.Key,
-                    TotalInnerEnvelopes = g.Sum(p => ParseJsonEnvBreakage(p.InnerEnvelope)),
-                    TotalOuterEnvelopes = g.Sum(p => ParseJsonEnvBreakage(p.OuterEnvelope))
-                })
-                .ToList();
+            // Step 3: Fetch envelope breakages data and group by entity ID (CenterListId for new model, NrDataId for legacy), then sum in-memory
+            var processedInnerEnv = isNewModel
+                ? (await _context.NewEnvelopeBreakages
+                    .Where(p => p.ProjectId == ProjectId && p.Status)
+                    .ToListAsync())
+                    .GroupBy(p => p.CenterListId)
+                    .Select(g => new
+                    {
+                        EntityId = g.Key,
+                        TotalInnerEnvelopes = g.Sum(p => ParseJsonEnvBreakage(p.InnerEnvelope)),
+                        TotalOuterEnvelopes = g.Sum(p => ParseJsonEnvBreakage(p.OuterEnvelope))
+                    })
+                    .ToList()
+                : (await _context.EnvelopeBreakages
+                    .Where(p => p.ProjectId == ProjectId && (p.Status == true))
+                    .ToListAsync())
+                    .GroupBy(p => p.NrDataId)
+                    .Select(g => new
+                    {
+                        EntityId = g.Key,
+                        TotalInnerEnvelopes = g.Sum(p => ParseJsonEnvBreakage(p.InnerEnvelope)),
+                        TotalOuterEnvelopes = g.Sum(p => ParseJsonEnvBreakage(p.OuterEnvelope))
+                    })
+                    .ToList();
 
             // Step 4: Merge NRDataGrouped and processedInnerEnv in-memory
             var mergedResult = from nr in NRdataGrouped
@@ -652,14 +662,14 @@ WHERE ProjectId = {0};", ProjectId);
                                    NRDataIds = nr.NRDataId,
                                    TotalNRDataQuantity = nr.TotalQuantity + (extraEnv?.TotalQuantity ?? 0),
                                    TotalInnerEnvEnvelopes = processedInnerEnv
-                               .Where(env => nr.NRDataId.Contains(env.NRDataId))
-                               .Sum(env => env.TotalInnerEnvelopes)
-                               + (extraEnv?.InnerEnvelopeSum ?? 0),  // Add ExtraEnv inner envelope
+                                       .Where(env => nr.NRDataId.Contains(env.EntityId))
+                                       .Sum(env => env.TotalInnerEnvelopes)
+                                       + (extraEnv?.InnerEnvelopeSum ?? 0),  // Add ExtraEnv inner envelope
 
                                    TotalOuterEnvEnvelopes = processedInnerEnv
-                               .Where(env => nr.NRDataId.Contains(env.NRDataId))
-                               .Sum(env => env.TotalOuterEnvelopes)
-                               + (extraEnv?.OuterEnvelopeSum ?? 0)
+                                       .Where(env => nr.NRDataId.Contains(env.EntityId))
+                                       .Sum(env => env.TotalOuterEnvelopes)
+                                       + (extraEnv?.OuterEnvelopeSum ?? 0)
                                };
 
             return Ok(mergedResult);

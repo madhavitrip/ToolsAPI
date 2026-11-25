@@ -1182,7 +1182,9 @@ namespace Tools.Controllers
 
                 // ✅ One file per lot(s) selection or version
                 var lotStr = LotNo != null && LotNo.Any() ? string.Join("_", LotNo) : "All";
-                var fileName = uploadId.HasValue ? $"BoxBreaking_v{uploadId}.xlsx" : ReportVersionHelper.GetNextVersionFileName(reportPath, $"BoxBreaking_{lotStr}.xlsx");
+                var (fileName, reportVer) = uploadId.HasValue
+                    ? ($"BoxBreaking_v{uploadId}.xlsx", uploadId.Value)
+                    : await ReportVersionHelper.GetNextVersionAsync(_context, ProjectId, reportPath, $"BoxBreaking_{lotStr}.xlsx");
                 var filePath = Path.Combine(reportPath, fileName);
 
                 using (var package = new ExcelPackage())
@@ -1261,12 +1263,7 @@ namespace Tools.Controllers
                     package.SaveAs(new FileInfo(filePath));
                 }
 
-                int reportVer = uploadId ?? 1;
-                var vMatch = System.Text.RegularExpressions.Regex.Match(fileName, @"_v(\d+)\.xlsx$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-                if (vMatch.Success && int.TryParse(vMatch.Groups[1].Value, out int parsedVer))
-                {
-                    reportVer = parsedVer;
-                }
+                reportVer = ReportVersionHelper.ParseVersionFromFileName(fileName, reportVer);
 
                 await ToolsAPI.Helpers.ExcelReportHelper.RecordExcelReportAsync(
                     _context,
@@ -1569,37 +1566,8 @@ namespace Tools.Controllers
                 var sortedList = ordered?.ToList() ?? uniqueRows;
 
                 // Step 3: Calculate Start, End, Serial on sorted rows
-                // Use dictionary to track running end per catch so serial NEVER breaks while catch is the same,
-                // even when processing lots individually or when records are non-contiguous.
+                // Track running end per catch for the current processing run (starts fresh per run; no cross-lot continuity)
                 var catchEndCounters = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-
-                // Pre-populate with max End from other lots' active box results (if any exist for this project)
-                if (nrData.Any())
-                {
-                    var currentNrDataIds = nrData.Select(n => n.Id).ToList();
-                    var currentLotEnvelopeIds = await _context.NewEnvelopeBreakingResults
-                        .Where(e => e.ProjectId == ProjectId && currentNrDataIds.Contains(e.NrDataId))
-                        .Select(e => e.Id)
-                        .ToListAsync();
-
-                    var existingActiveEnds = await (from b in _context.BoxBreakingResults
-                                                    join e in _context.NewEnvelopeBreakingResults on b.EnvelopeBreakingResultId equals e.Id
-                                                    join n in _context.NrData1 on e.NrDataId equals n.Id
-                                                    where b.ProjectId == ProjectId && b.Status && b.End > 0 && !currentLotEnvelopeIds.Contains(e.Id)
-                                                    group b by n.CatchNo into g
-                                                    select new { CatchNo = g.Key, MaxEnd = g.Max(x => x.End) })
-                                                    .ToListAsync();
-
-                    foreach (var item in existingActiveEnds)
-                    {
-                        if (string.IsNullOrWhiteSpace(item.CatchNo)) continue;
-                        string norm = GetNormalizedCatchNo(item.CatchNo);
-                        if (!catchEndCounters.ContainsKey(norm) || catchEndCounters[norm] < item.MaxEnd)
-                        {
-                            catchEndCounters[norm] = item.MaxEnd;
-                        }
-                    }
-                }
 
                 foreach (var row in sortedList)
                 {

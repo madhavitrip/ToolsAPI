@@ -586,7 +586,7 @@ namespace Tools.Controllers
         }
 
         [HttpGet("Reports/Exists")]
-        public IActionResult CheckReportExists(int projectId, string fileName, int? uploadId = null)
+        public async Task<IActionResult> CheckReportExists(int projectId, string fileName, int? uploadId = null)
         {
             var rootFolder = FileStorageHelper.GetProjectFolder(projectId);
 
@@ -637,6 +637,25 @@ namespace Tools.Controllers
                 }
             }
 
+            // Check ExcelReports table to respect soft-deleted/inactive reports
+            var baseNameWithoutExt = Path.GetFileNameWithoutExtension(fileName);
+            var matchingDbReports = await _context.ExcelReports
+                .Where(r => r.ProjectId == projectId && r.FilePath != null && (r.FilePath.Contains(finalFileName) || r.FilePath.Contains(baseNameWithoutExt)))
+                .ToListAsync();
+
+            if (matchingDbReports.Any())
+            {
+                var exactReport = matchingDbReports.FirstOrDefault(r => r.FilePath!.EndsWith("/" + finalFileName, StringComparison.OrdinalIgnoreCase) || r.FilePath!.EndsWith("\\" + finalFileName, StringComparison.OrdinalIgnoreCase) || r.FilePath.Equals(finalFileName, StringComparison.OrdinalIgnoreCase));
+                if (exactReport != null && !exactReport.Status)
+                {
+                    return Ok(new { exists = false, fileName = finalFileName });
+                }
+                if (matchingDbReports.All(r => !r.Status))
+                {
+                    return Ok(new { exists = false, fileName = finalFileName });
+                }
+            }
+
             var filePath = Path.Combine(rootFolder, finalFileName);
             bool fileExists = System.IO.File.Exists(filePath);
             if (!fileExists)
@@ -652,10 +671,16 @@ namespace Tools.Controllers
         }
 
         [HttpGet("Reports/AllVersions")]
-        public IActionResult GetAllReportVersions(int projectId)
+        public async Task<IActionResult> GetAllReportVersions(int projectId)
         {
             var rootFolder = FileStorageHelper.GetProjectFolder(projectId);
             var results = new Dictionary<string, List<object>>();
+
+            var inactiveReports = await _context.ExcelReports
+                .Where(r => r.ProjectId == projectId && !r.Status && r.FilePath != null)
+                .Select(r => Path.GetFileName(r.FilePath!))
+                .ToListAsync();
+            var inactiveFileSet = new HashSet<string>(inactiveReports, StringComparer.OrdinalIgnoreCase);
 
             var baseNames = new Dictionary<string, string>
             {
@@ -686,6 +711,7 @@ namespace Tools.Controllers
                     foreach (var file in Directory.GetFiles(rootFolder))
                     {
                         var name = Path.GetFileName(file);
+                        if (inactiveFileSet.Contains(name)) continue;
                         var match = pattern.Match(name);
                         if (match.Success)
                         {
@@ -732,6 +758,7 @@ namespace Tools.Controllers
                     foreach (var file in Directory.GetFiles(rootFolder))
                     {
                         var name = Path.GetFileName(file);
+                        if (inactiveFileSet.Contains(name)) continue;
                         var match = pattern.Match(name);
                         if (match.Success)
                         {
@@ -887,6 +914,12 @@ namespace Tools.Controllers
                 if (!Directory.Exists(rootFolder))
                     return NotFound("No reports found for this project.");
 
+                var inactiveReports = await _context.ExcelReports
+                    .Where(r => r.ProjectId == projectId && !r.Status && r.FilePath != null)
+                    .Select(r => Path.GetFileName(r.FilePath!))
+                    .ToListAsync();
+                var inactiveFileSet = new HashSet<string>(inactiveReports, StringComparer.OrdinalIgnoreCase);
+
                 var baseNames = new Dictionary<string, string>
                 {
                     { "duplicate",         "DuplicateTool.xlsx" },
@@ -923,7 +956,7 @@ namespace Tools.Controllers
                         .OrderByDescending(x => x.version)
                         .FirstOrDefault();
 
-                    if (matches != null)
+                    if (matches != null && !inactiveFileSet.Contains(matches.name))
                         latestFiles.Add(matches.path);
                 }
 
@@ -948,7 +981,10 @@ namespace Tools.Controllers
                     .ToList();
 
                 foreach (var box in boxGroups)
-                    latestFiles.Add(box.path);
+                {
+                    if (!inactiveFileSet.Contains(box.name))
+                        latestFiles.Add(box.path);
+                }
 
                 if (!latestFiles.Any())
                     return NotFound("No report files found for this project.");
@@ -1840,12 +1876,14 @@ namespace Tools.Controllers
             }
 
             var folderPath = FileStorageHelper.GetProjectFolder(ProjectId);
-            var fileName = uploadId.HasValue ? $"EnvelopeSummary_v{uploadId}.xlsx" : ReportVersionHelper.GetNextVersionFileName(folderPath, "EnvelopeSummary.xlsx");
+            var (fileName, reportVer) = uploadId.HasValue
+                ? ($"EnvelopeSummary_v{uploadId}.xlsx", uploadId.Value)
+                : await ReportVersionHelper.GetNextVersionAsync(_context, ProjectId, folderPath, "EnvelopeSummary.xlsx");
             var filePath = Path.Combine(folderPath, fileName);
             package.SaveAs(new FileInfo(filePath));
 
             await ToolsAPI.Helpers.ExcelReportHelper.RecordExcelReportAsync(
-                _context, ProjectId, 4, uploadId ?? 1, lotNo.HasValue && lotNo.Value > 0 ? lotNo : null, filePath, true, LogHelper.GetTriggeredBy(User, Request)
+                _context, ProjectId, 4, reportVer, lotNo.HasValue && lotNo.Value > 0 ? lotNo : null, filePath, true, LogHelper.GetTriggeredBy(User, Request)
             );
 
             await _loggerService.LogEventAsync("EnvelopeSummary report created", "EnvelopeSummary", LogHelper.GetTriggeredBy(User), ProjectId);
@@ -2080,12 +2118,14 @@ namespace Tools.Controllers
             }
 
             var folderPath = FileStorageHelper.GetProjectFolder(ProjectId);
-            var fileName = uploadId.HasValue ? $"CatchSummary_v{uploadId}.xlsx" : ReportVersionHelper.GetNextVersionFileName(folderPath, "CatchSummary.xlsx");
+            var (fileName, reportVer) = uploadId.HasValue
+                ? ($"CatchSummary_v{uploadId}.xlsx", uploadId.Value)
+                : await ReportVersionHelper.GetNextVersionAsync(_context, ProjectId, folderPath, "CatchSummary.xlsx");
             var filePath = Path.Combine(folderPath, fileName);
             package.SaveAs(new FileInfo(filePath));
 
             await ToolsAPI.Helpers.ExcelReportHelper.RecordExcelReportAsync(
-                _context, ProjectId, 7, uploadId ?? 1, lotNo.HasValue && lotNo.Value > 0 ? lotNo : null, filePath, true, LogHelper.GetTriggeredBy(User, Request)
+                _context, ProjectId, 7, reportVer, lotNo.HasValue && lotNo.Value > 0 ? lotNo : null, filePath, true, LogHelper.GetTriggeredBy(User, Request)
             );
 
             await _loggerService.LogEventAsync("CatchSummary report created", "CatchSummary", LogHelper.GetTriggeredBy(User), ProjectId);

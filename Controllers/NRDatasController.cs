@@ -16,6 +16,7 @@ using System.Threading.Tasks;
 using Tools.Models;
 using Tools.Services;
 using Tools.Middleware;
+using ToolsAPI.Helpers;
 using System.Globalization;
 
 namespace Tools.Controllers
@@ -5895,6 +5896,7 @@ namespace Tools.Controllers
         [RequirePermission(ModuleCodes.UploadedData, PermissionAction.Delete)]
         public async Task<IActionResult> DeleteNRData(int id)
         {
+            using var transaction = await _context.Database.BeginTransactionAsync();
             try
             {
                 var nRData = await _context.NRDatas.FindAsync(id);
@@ -5917,10 +5919,46 @@ namespace Tools.Controllers
                             {
                                 return BadRequest($"Lot {centerLot} has exceeded its dispatch date and is read-only. Deletion is not allowed.");
                             }
+
                             center.Status = false;
                             _context.CenterList.Update(center);
+
+                            var breakages = await _context.NewEnvelopeBreakages
+                                .Where(b => b.CenterListId == center.Id && b.Status)
+                                .ToListAsync();
+                            foreach (var b in breakages)
+                            {
+                                b.Status = false;
+                                _context.NewEnvelopeBreakages.Update(b);
+                            }
+
+                            var breakingResults = await _context.NewEnvelopeBreakingResults
+                                .Where(r => r.CenterListId == center.Id && r.Status)
+                                .ToListAsync();
+                            foreach (var r in breakingResults)
+                            {
+                                r.Status = false;
+                                _context.NewEnvelopeBreakingResults.Update(r);
+                            }
+
+                            var breakingResultIds = breakingResults.Select(r => r.Id).ToList();
+                            if (breakingResultIds.Any())
+                            {
+                                var boxResults = await _context.BoxBreakingResults
+                                    .Where(b => b.EnvelopeBreakingResultId != null && breakingResultIds.Contains((int)b.EnvelopeBreakingResultId) && b.Status)
+                                    .ToListAsync();
+                            foreach (var b in boxResults)
+                            {
+                                b.Status = false;
+                                _context.BoxBreakingResults.Update(b);
+                            }
+                            }
+
+                            await ExcelReportHelper.InvalidateReportsAsync(_context, center.ProjectId, centerLot > 0 ? centerLot : (int?)null);
+
                             await _context.SaveChangesAsync();
-                            await _loggerService.LogEventAsync($"Soft deleted CenterList of {id}", "CenterList", LogHelper.GetTriggeredBy(User), center.ProjectId);
+                            await transaction.CommitAsync();
+                            await _loggerService.LogEventAsync($"Soft deleted CenterList of {id} and downstream records", "CenterList", LogHelper.GetTriggeredBy(User), center.ProjectId);
                             return NoContent();
                         }
                         return NotFound();
@@ -5938,14 +5976,52 @@ namespace Tools.Controllers
                     var centers = await _context.CenterList
                         .Where(c => c.NRDataId == nr1Data.Id && c.Status)
                         .ToListAsync();
+                    var centerIds = centers.Select(c => c.Id).ToList();
                     foreach (var c in centers)
                     {
                         c.Status = false;
                         _context.CenterList.Update(c);
                     }
 
+                    var newEnvBreakages = await _context.NewEnvelopeBreakages
+                        .Where(n => (n.NrDataId == nr1Data.Id || centerIds.Contains(n.CenterListId)) && n.Status)
+                        .ToListAsync();
+                    foreach (var b in newEnvBreakages)
+                    {
+                        b.Status = false;
+                        _context.NewEnvelopeBreakages.Update(b);
+                    }
+
+                    var newEnvBreakingResults = await _context.NewEnvelopeBreakingResults
+                        .Where(n => (n.NrDataId == nr1Data.Id || centerIds.Contains(n.CenterListId)) && n.Status)
+                        .ToListAsync();
+                    foreach (var r in newEnvBreakingResults)
+                    {
+                        r.Status = false;
+                        _context.NewEnvelopeBreakingResults.Update(r);
+                    }
+
+                    var envBreakingResultIds = newEnvBreakingResults
+                        .Select(e => e.Id)
+                        .ToList();
+
+                    if (envBreakingResultIds.Any())
+                    {
+                        var boxBreakingResults = await _context.BoxBreakingResults
+                            .Where(b => b.EnvelopeBreakingResultId != null && envBreakingResultIds.Contains((int)b.EnvelopeBreakingResultId) && b.Status)
+                            .ToListAsync();
+                        foreach (var b in boxBreakingResults)
+                        {
+                            b.Status = false;
+                            _context.BoxBreakingResults.Update(b);
+                        }
+                    }
+
+                    await ExcelReportHelper.InvalidateReportsAsync(_context, pId, nr1Data.LotNo > 0 ? nr1Data.LotNo : (int?)null);
+
                     await _context.SaveChangesAsync();
-                    await _loggerService.LogEventAsync($"Soft deleted NrData1 of {id} and referencing CenterList", "NrData1", LogHelper.GetTriggeredBy(User), pId);
+                    await transaction.CommitAsync();
+                    await _loggerService.LogEventAsync($"Soft deleted NrData1 of {id} and downstream records", "NrData1", LogHelper.GetTriggeredBy(User), pId);
                     return NoContent();
                 }
 
@@ -5959,7 +6035,6 @@ namespace Tools.Controllers
                 var lotNo = nRData.LotNo;
 
                 _context.NRDatas.Remove(nRData);
-                await _context.SaveChangesAsync();
 
                 // Reset other records of same CatchNo to step 4
                 if (!string.IsNullOrWhiteSpace(catchNo))
@@ -6000,13 +6075,17 @@ namespace Tools.Controllers
                         .ExecuteUpdateAsync(s => s.SetProperty(x => x.Steps, resetStep));
                 }
 
+                await ExcelReportHelper.InvalidateReportsAsync(_context, projectId, lotNo > 0 ? lotNo : (int?)null);
+
                 await _context.SaveChangesAsync();
+                await transaction.CommitAsync();
 
                 await _loggerService.LogEventAsync($"Deleted NRdata of {id}", "NRData", LogHelper.GetTriggeredBy(User), projectId);
                 return NoContent();
             }
             catch (Exception ex)
             {
+                await transaction.RollbackAsync();
                 await _loggerService.LogErrorAsync("Error deleting Nrdata", ex.Message, nameof(NRDatasController));
                 return StatusCode(500, "Internal Server Error");
             }
@@ -6017,6 +6096,7 @@ namespace Tools.Controllers
         [RequireSpecialAction(SpecialActionCodes.DeleteAllNrData, ModuleCodes.UploadedData, PermissionAction.Delete)]
         public async Task<IActionResult> DeleteNR(int ProjectId, [FromQuery] int? lotNo = null)
         {
+            using var transaction = await _context.Database.BeginTransactionAsync();
             try
             {
                 var isNewModel = await _context.NrData1.AnyAsync(p => p.ProjectId == ProjectId);
@@ -6067,11 +6147,55 @@ namespace Tools.Controllers
                     var centerList = await _context.CenterList
                         .Where(c => c.ProjectId == ProjectId && nrDataIds.Contains(c.NRDataId) && c.Status)
                         .ToListAsync();
+                    var centerIds = centerList.Select(c => c.Id).ToList();
 
                     foreach (var c in centerList)
                     {
                         c.Status = false;
                         _context.CenterList.Update(c);
+                    }
+
+                    var newEnvBreakages = await _context.NewEnvelopeBreakages
+                        .Where(b => (nrDataIds.Contains(b.NrDataId) || centerIds.Contains(b.CenterListId)) && b.Status)
+                        .ToListAsync();
+                    foreach (var b in newEnvBreakages)
+                    {
+                        b.Status = false;
+                        _context.NewEnvelopeBreakages.Update(b);
+                    }
+
+                    var newEnvBreakingResults = await _context.NewEnvelopeBreakingResults
+                        .Where(r => (nrDataIds.Contains(r.NrDataId) || centerIds.Contains(r.CenterListId)) && r.Status)
+                        .ToListAsync();
+                    foreach (var r in newEnvBreakingResults)
+                    {
+                        r.Status = false;
+                        _context.NewEnvelopeBreakingResults.Update(r);
+                    }
+
+                    var newResultIds = newEnvBreakingResults.Select(r => r.Id).ToList();
+                    if (newResultIds.Any())
+                    {
+                        var boxResultsNew = await _context.BoxBreakingResults
+                            .Where(b => b.EnvelopeBreakingResultId != null && newResultIds.Contains((int)b.EnvelopeBreakingResultId) && b.Status)
+                            .ToListAsync();
+                        foreach (var b in boxResultsNew)
+                        {
+                            b.Status = false;
+                            _context.BoxBreakingResults.Update(b);
+                        }
+                    }
+
+                    if (!lotNo.HasValue)
+                    {
+                        var remainingBoxResults = await _context.BoxBreakingResults
+                            .Where(b => b.ProjectId == ProjectId && b.Status)
+                            .ToListAsync();
+                        foreach (var b in remainingBoxResults)
+                        {
+                            b.Status = false;
+                            _context.BoxBreakingResults.Update(b);
+                        }
                     }
                 }
                 else
@@ -6103,7 +6227,7 @@ namespace Tools.Controllers
                 var envelopeBreaking = new List<EnvelopeBreakage>();
                 var extra = new List<ExtraEnvelopes>();
 
-                if (!lotNo.HasValue)
+                if (!isNewModel && !lotNo.HasValue)
                 {
                     envelopeResults = await _context.EnvelopeBreakingResults
                         .Where(e => e.ProjectId == ProjectId)
@@ -6128,28 +6252,16 @@ namespace Tools.Controllers
                     return NotFound($"No records found for ProjectId {ProjectId}");
                 }
 
-                // OPTIONAL:
-                // Remove this block if you want a complete soft delete
-                if (!lotNo.HasValue)
-                {
-                    var reportPath = Path.Combine(
-                        Directory.GetCurrentDirectory(),
-                        "wwwroot",
-                        ProjectId.ToString());
+                // Soft delete ExcelReports without deleting physical files
+                await ExcelReportHelper.InvalidateReportsAsync(_context, ProjectId, lotNo.HasValue && lotNo.Value > 0 ? lotNo.Value : (int?)null);
 
-                    if (Directory.Exists(reportPath))
-                    {
-                        Directory.Delete(reportPath, true);
-                    }
-                }
-
-                // Soft delete EnvelopeBreakingResults
+                // Soft delete legacy EnvelopeBreakingResults
                 foreach (var item in envelopeResults)
                 {
                     item.Status = false;
                 }
 
-                // Soft delete BoxBreakingResults
+                // Soft delete legacy BoxBreakingResults
                 foreach (var item in boxResults)
                 {
                     item.Status = false;
@@ -6158,7 +6270,7 @@ namespace Tools.Controllers
                 // Soft delete ConflictingFields
                 foreach (var item in conflictList)
                 {
-                    item.Status = false; // Change to false if Status is bool
+                    item.Status = false;
                 }
                 foreach(var item in extra)
                 {
@@ -6169,6 +6281,7 @@ namespace Tools.Controllers
                     _context.EnvelopeBreakingResults.RemoveRange(envelopeResults);
                 }
                 await _context.SaveChangesAsync();
+                await transaction.CommitAsync();
 
                 int userId = 0;
                 int.TryParse(User.Identity?.Name, out userId);
@@ -6184,7 +6297,7 @@ namespace Tools.Controllers
                 {
                     message = "Project records marked as inactive successfully.",
                     projectId = ProjectId,
-                    nrDataUpdated = nrDataList.Count,
+                    nrDataUpdated = nrDataList.Count + nrData1List.Count,
                     conflictsUpdated = conflictList.Count,
                     envelopeResultsUpdated = envelopeResults.Count,
                     boxResultsUpdated = boxResults.Count
@@ -6192,6 +6305,7 @@ namespace Tools.Controllers
             }
             catch (Exception ex)
             {
+                await transaction.RollbackAsync();
                 return StatusCode(500, new
                 {
                     message = "An error occurred while deleting project data.",
@@ -7286,14 +7400,104 @@ namespace Tools.Controllers
                 var isNewModel = await _context.NrData1.AnyAsync(p => p.ProjectId == projectId);
                 if (isNewModel)
                 {
-                    var nr1List = await _context.NrData1
+                    using var transaction = await _context.Database.BeginTransactionAsync();
+                    try
+                    {
+                        var nr1List = await _context.NrData1
+                            .Where(d => d.ProjectId == projectId && d.CatchNo == catchNo)
+                            .ToListAsync();
+
+                        if (!nr1List.Any())
+                            return NotFound($"Catch number {catchNo} not found for project {projectId}");
+
+                        foreach (var item in nr1List)
+                        {
+                            if (await _dispatchService.IsLotDispatchedAsync(projectId, item.LotNo))
+                            {
+                                return BadRequest($"Lot {item.LotNo} has exceeded its dispatch date and is read-only. Deleting catch {catchNo} is not allowed.");
+                            }
+                        }
+
+                        var nr1Ids = nr1List.Select(n => n.Id).ToList();
+
+                        // Soft delete NrData1
+                        foreach (var item in nr1List)
+                        {
+                            item.Status = false;
+                            _context.NrData1.Update(item);
+                        }
+
+                        // Soft delete referencing CenterList
+                        var centers = await _context.CenterList
+                            .Where(c => c.ProjectId == projectId && nr1Ids.Contains(c.NRDataId) && c.Status)
+                            .ToListAsync();
+                        var centerIds = centers.Select(c => c.Id).ToList();
+
+                        foreach (var c in centers)
+                        {
+                            c.Status = false;
+                            _context.CenterList.Update(c);
+                        }
+
+                        var newEnvBreakages = await _context.NewEnvelopeBreakages
+                            .Where(b => (nr1Ids.Contains(b.NrDataId) || centerIds.Contains(b.CenterListId)) && b.Status)
+                            .ToListAsync();
+                        foreach (var b in newEnvBreakages)
+                        {
+                            b.Status = false;
+                            _context.NewEnvelopeBreakages.Update(b);
+                        }
+
+                        var newEnvResults = await _context.NewEnvelopeBreakingResults
+                            .Where(e => (nr1Ids.Contains(e.NrDataId) || centerIds.Contains(e.CenterListId)) && e.Status)
+                            .ToListAsync();
+                        foreach (var r in newEnvResults)
+                        {
+                            r.Status = false;
+                            _context.NewEnvelopeBreakingResults.Update(r);
+                        }
+
+                        var newEnvResultIds = newEnvResults.Select(r => r.Id).ToList();
+                        if (newEnvResultIds.Any())
+                        {
+                            var boxResults = await _context.BoxBreakingResults
+                                .Where(b => b.EnvelopeBreakingResultId != null && newEnvResultIds.Contains((int)b.EnvelopeBreakingResultId) && b.Status)
+                                .ToListAsync();
+                            foreach (var b in boxResults)
+                            {
+                                b.Status = false;
+                                _context.BoxBreakingResults.Update(b);
+                            }
+                        }
+
+                        var affectedLots = nr1List.Select(n => n.LotNo).Where(l => l > 0).Distinct().ToList();
+                        await ExcelReportHelper.InvalidateReportsForLotsAsync(_context, projectId, affectedLots);
+
+                        await _context.SaveChangesAsync();
+                        await transaction.CommitAsync();
+                        await _loggerService.LogEventAsync($"Soft deleted CatchNo {catchNo} in NrData1 and downstream records", "NrData1", LogHelper.GetTriggeredBy(User), projectId);
+                        return Ok(new { message = $"Catch number {catchNo} soft deleted successfully in NrData1 and downstream records." });
+                    }
+                    catch (Exception ex)
+                    {
+                        await transaction.RollbackAsync();
+                        await _loggerService.LogErrorAsync("Error deleting CatchNo in NrData1", ex.Message, nameof(NRDatasController));
+                        return StatusCode(500, "Internal Server Error");
+                    }
+                }
+
+                using var legacyTransaction = await _context.Database.BeginTransactionAsync();
+                try
+                {
+                    // 🔹 Get NRData
+                    var allNrDataForCatch = await _context.NRDatas
                         .Where(d => d.ProjectId == projectId && d.CatchNo == catchNo)
                         .ToListAsync();
 
-                    if (!nr1List.Any())
+                    if (!allNrDataForCatch.Any())
                         return NotFound($"Catch number {catchNo} not found for project {projectId}");
 
-                    foreach (var item in nr1List)
+                    foreach (var item in allNrDataForCatch)
                     {
                         if (await _dispatchService.IsLotDispatchedAsync(projectId, item.LotNo))
                         {
@@ -7301,148 +7505,102 @@ namespace Tools.Controllers
                         }
                     }
 
-                    var nr1Ids = nr1List.Select(n => n.Id).ToList();
+                    // 🔹 Active step check
+                    var activeSteps = Tools.Models.PipelineNavigator.GetEligiblePickupSteps(
+                        Tools.Models.PipelineNavigator.STEP_AWAITING_BOX
+                    );
 
-                    // Soft delete NrData1
-                    foreach (var item in nr1List)
+                    var activeRecords = allNrDataForCatch
+                        .Where(n => activeSteps.Contains(n.Steps))
+                        .ToList();
+
+                    if (activeRecords.Any())
                     {
-                        item.Status = false;
-                        _context.NrData1.Update(item);
+                        return BadRequest(new
+                        {
+                            error = "Cannot delete catch in active processing",
+                            message = $"Catch {catchNo} has {activeRecords.Count} record(s) in active processing stages.",
+                            recordDetails = activeRecords.Select(r => new
+                            {
+                                id = r.Id,
+                                step = r.Steps,
+                                lot = r.LotNo
+                            })
+                        });
                     }
 
-                    // Soft delete referencing CenterList
-                    var centers = await _context.CenterList
-                        .Where(c => c.ProjectId == projectId && nr1Ids.Contains(c.NRDataId) && c.Status)
+                    // 🔹 Soft delete NRData
+                    foreach (var nrData in allNrDataForCatch)
+                    {
+                        nrData.Status = false;
+                    }
+                    var extra = await _context.ExtrasEnvelope.Where(e => e.ProjectId == projectId && e.CatchNo == catchNo).ToListAsync();
+                    _context.ExtrasEnvelope.RemoveRange(extra);
+                    // 🔹 Delete results for THIS catch
+                    var envelopeResults = await _context.EnvelopeBreakingResults
+                        .Where(e => e.ProjectId == projectId && e.CatchNo == catchNo)
                         .ToListAsync();
 
-                    foreach (var c in centers)
-                    {
-                        c.Status = false;
-                        _context.CenterList.Update(c);
-                    }
+                    _context.EnvelopeBreakingResults.RemoveRange(envelopeResults);
 
-                    //var extra = await _context.ExtrasEnvelope.Where(e => e.ProjectId == projectId && e.CatchNo == catchNo).ToListAsync();
-                    //foreach (var ex in extra)
-                    //{
-                    //    ex.Status = 0;
-                    //    _context.ExtrasEnvelope.Update(ex);
-                    //}
-
-                    var newEnvResults = await _context.NewEnvelopeBreakingResults
-                        .Where(e => e.ProjectId == projectId && nr1Ids.Contains(e.NrDataId))
+                    // 🔹 Delete ALL box results for the project (Scenario 4)
+                    var allBoxResults = await _context.BoxBreakingResults
+                        .Where(b => b.ProjectId == projectId)
                         .ToListAsync();
-                    foreach (var r in newEnvResults)
+
+                    _context.BoxBreakingResults.RemoveRange(allBoxResults);
+
+                    // 🔹 Reset other catches lot-wise to step 6 / STEP_AWAITING_BOX (only box breaking will run again)
+                    var affectedLotNos = allNrDataForCatch
+                        .Select(x => x.LotNo)
+                        .Where(l => l > 0)
+                        .Distinct()
+                        .ToList();
+
+                    var otherCatchesInLots = await _context.NRDatas
+                        .Where(d => d.ProjectId == projectId &&
+                                    d.CatchNo != catchNo &&
+                                    d.Status == true &&
+                                    d.LotNo >= 0 &&
+                                    affectedLotNos.Contains(d.LotNo))
+                        .ToListAsync();
+
+                    foreach (var nrData in otherCatchesInLots)
                     {
-                        r.Status = false;
-                        _context.NewEnvelopeBreakingResults.Update(r);
+                        if (nrData.Steps > Tools.Models.PipelineNavigator.STEP_AWAITING_ENV)
+                        {
+                            nrData.Steps = Tools.Models.PipelineNavigator.STEP_AWAITING_ENV;
+                        }
                     }
+
+                    await ExcelReportHelper.InvalidateReportsForLotsAsync(_context, projectId, affectedLotNos);
 
                     await _context.SaveChangesAsync();
-                    await _loggerService.LogEventAsync($"Soft deleted CatchNo {catchNo} in NrData1 and CenterList", "NrData1", LogHelper.GetTriggeredBy(User), projectId);
-                    return Ok(new { message = $"Catch number {catchNo} soft deleted successfully in NrData1 and CenterList." });
-                }
+                    await legacyTransaction.CommitAsync();
 
-                // 🔹 Get NRData
-                var allNrDataForCatch = await _context.NRDatas
-                    .Where(d => d.ProjectId == projectId && d.CatchNo == catchNo)
-                    .ToListAsync();
+                    await _loggerService.LogEventAsync(
+                        $"Deleted catch number {catchNo} from project {projectId}. Soft deleted {allNrDataForCatch.Count} NRData records. Reset steps for {otherCatchesInLots.Count} other catches in affected lots to Box Breaking. Deleted all box breaking results and {envelopeResults.Count} envelope results.",
+                        "NRData",
+                        LogHelper.GetTriggeredBy(User),
+                        projectId
+                    );
 
-                if (!allNrDataForCatch.Any())
-                    return NotFound($"Catch number {catchNo} not found for project {projectId}");
-
-                foreach (var item in allNrDataForCatch)
-                {
-                    if (await _dispatchService.IsLotDispatchedAsync(projectId, item.LotNo))
+                    return Ok(new
                     {
-                        return BadRequest($"Lot {item.LotNo} has exceeded its dispatch date and is read-only. Deleting catch {catchNo} is not allowed.");
-                    }
-                }
-
-                // 🔹 Active step check
-                var activeSteps = Tools.Models.PipelineNavigator.GetEligiblePickupSteps(
-                    Tools.Models.PipelineNavigator.STEP_AWAITING_BOX
-                );
-
-                var activeRecords = allNrDataForCatch
-                    .Where(n => activeSteps.Contains(n.Steps))
-                    .ToList();
-
-                if (activeRecords.Any())
-                {
-                    return BadRequest(new
-                    {
-                        error = "Cannot delete catch in active processing",
-                        message = $"Catch {catchNo} has {activeRecords.Count} record(s) in active processing stages.",
-                        recordDetails = activeRecords.Select(r => new
-                        {
-                            id = r.Id,
-                            step = r.Steps,
-                            lot = r.LotNo
-                        })
+                        message = $"Catch number {catchNo} deleted successfully",
+                        catchDeleted = allNrDataForCatch.Count,
+                        otherCatchesReset = otherCatchesInLots.Count,
+                        envelopeResultsDeleted = envelopeResults.Count,
+                        boxResultsDeleted = allBoxResults.Count,
+                        action = "Please re-run box breaking process"
                     });
                 }
-
-                // 🔹 Soft delete NRData
-                foreach (var nrData in allNrDataForCatch)
+                catch (Exception ex)
                 {
-                    nrData.Status = false;
+                    await legacyTransaction.RollbackAsync();
+                    await _loggerService.LogErrorAsync("Error deactivating catch number in NRDatas", ex.Message, nameof(NRDatasController));
+                    return StatusCode(500, "Internal Server Error");
                 }
-                var extra = await _context.ExtrasEnvelope.Where(e => e.ProjectId == projectId && e.CatchNo == catchNo).ToListAsync();
-                _context.ExtrasEnvelope.RemoveRange(extra);
-                // 🔹 Delete results for THIS catch
-                var envelopeResults = await _context.EnvelopeBreakingResults
-                    .Where(e => e.ProjectId == projectId && e.CatchNo == catchNo)
-                    .ToListAsync();
-
-                _context.EnvelopeBreakingResults.RemoveRange(envelopeResults);
-
-                // 🔹 Delete ALL box results for the project (Scenario 4)
-                var allBoxResults = await _context.BoxBreakingResults
-                    .Where(b => b.ProjectId == projectId)
-                    .ToListAsync();
-
-                _context.BoxBreakingResults.RemoveRange(allBoxResults);
-
-                // 🔹 Reset other catches lot-wise to step 6 / STEP_AWAITING_BOX (only box breaking will run again)
-                var affectedLotNos = allNrDataForCatch
-                    .Select(x => x.LotNo)
-                    .Distinct()
-                    .ToList();
-
-                var otherCatchesInLots = await _context.NRDatas
-                    .Where(d => d.ProjectId == projectId &&
-                                d.CatchNo != catchNo &&
-                                d.Status == true &&
-                                d.LotNo >= 0 &&
-                                affectedLotNos.Contains(d.LotNo))
-                    .ToListAsync();
-
-                foreach (var nrData in otherCatchesInLots)
-                {
-                    if (nrData.Steps > Tools.Models.PipelineNavigator.STEP_AWAITING_ENV)
-                    {
-                        nrData.Steps = Tools.Models.PipelineNavigator.STEP_AWAITING_ENV;
-                    }
-                }
-
-                await _context.SaveChangesAsync();
-
-                await _loggerService.LogEventAsync(
-                    $"Deleted catch number {catchNo} from project {projectId}. Soft deleted {allNrDataForCatch.Count} NRData records. Reset steps for {otherCatchesInLots.Count} other catches in affected lots to Box Breaking. Deleted all box breaking results and {envelopeResults.Count} envelope results.",
-                    "NRData",
-                    LogHelper.GetTriggeredBy(User),
-                    projectId
-                );
-
-                return Ok(new
-                {
-                    message = $"Catch number {catchNo} deleted successfully",
-                    catchDeleted = allNrDataForCatch.Count,
-                    otherCatchesReset = otherCatchesInLots.Count,
-                    envelopeResultsDeleted = envelopeResults.Count,
-                    boxResultsDeleted = allBoxResults.Count,
-                    action = "Please re-run box breaking process"
-                });
             }
             catch (Exception ex)
             {

@@ -35,12 +35,19 @@ namespace Tools.Controllers
         [RequirePermission(ModuleCodes.Reports, PermissionAction.View)]
         public async Task<ActionResult<IEnumerable<ExcelReport>>> GetReportsByProject(int projectId)
         {
-            var reports = await _context.ExcelReports
+            var allReports = await _context.ExcelReports
                 .Where(r => r.ProjectId == projectId)
                 .OrderByDescending(r => r.GeneratedAt)
                 .ToListAsync();
 
-            // Fallback: If no reports in table or to discover unrecorded excel files directly from disk
+            var inactivePaths = new HashSet<string>(
+                allReports.Where(r => !r.Status).Select(r => FileStorageHelper.GetRelativePath(r.FilePath ?? "")),
+                StringComparer.OrdinalIgnoreCase
+            );
+
+            var reports = allReports.Where(r => r.Status).ToList();
+
+            // Fallback: If no reports in table or to discover unrecorded excel files directly from disk (excluding inactive)
             var diskReports = FallbackScanExcelFiles(projectId);
             if (diskReports.Any())
             {
@@ -51,7 +58,7 @@ namespace Tools.Controllers
 
                 foreach (var diskReport in diskReports)
                 {
-                    if (!existingPaths.Contains(diskReport.FilePath))
+                    if (!existingPaths.Contains(diskReport.FilePath) && !inactivePaths.Contains(diskReport.FilePath))
                     {
                         reports.Add(diskReport);
                     }
@@ -102,12 +109,19 @@ namespace Tools.Controllers
         [RequirePermission(ModuleCodes.Reports, PermissionAction.View)]
         public async Task<ActionResult<IEnumerable<ExcelReport>>> GetReportsByModule(int moduleId, int projectId)
         {
-            var reports = await _context.ExcelReports
+            var allReports = await _context.ExcelReports
                 .Where(r => r.ProjectId == projectId)
                 .OrderByDescending(r => r.GeneratedAt)
                 .ToListAsync();
 
-            // Fallback: Fetch excel directly from storage directory for this project
+            var inactivePaths = new HashSet<string>(
+                allReports.Where(r => !r.Status).Select(r => FileStorageHelper.GetRelativePath(r.FilePath ?? "")),
+                StringComparer.OrdinalIgnoreCase
+            );
+
+            var reports = allReports.Where(r => r.Status).ToList();
+
+            // Fallback: Fetch excel directly from storage directory for this project (excluding inactive)
             var diskReports = FallbackScanExcelFiles(projectId);
             if (diskReports.Any())
             {
@@ -118,7 +132,7 @@ namespace Tools.Controllers
 
                 foreach (var diskReport in diskReports)
                 {
-                    if (!existingPaths.Contains(diskReport.FilePath))
+                    if (!existingPaths.Contains(diskReport.FilePath) && !inactivePaths.Contains(diskReport.FilePath))
                     {
                         reports.Add(diskReport);
                     }
@@ -215,6 +229,10 @@ namespace Tools.Controllers
             if (id > 0)
             {
                 report = await _context.ExcelReports.FindAsync(id);
+                if (report != null && !report.Status)
+                {
+                    return NotFound("Report is inactive or deleted.");
+                }
                 if (report != null && !string.IsNullOrWhiteSpace(report.FilePath))
                 {
                     fullPath = FileStorageHelper.GetAbsolutePath(report.FilePath);
@@ -224,6 +242,10 @@ namespace Tools.Controllers
             // Fallback if record not found in DB or file doesn't exist at DB path
             if (string.IsNullOrEmpty(fullPath) || !System.IO.File.Exists(fullPath))
             {
+                if (report != null && !report.Status)
+                {
+                    return NotFound("Report is inactive or deleted.");
+                }
                 fullPath = FindFallbackExcelFileByIdOrPath(id, report?.FilePath, report?.ProjectId);
             }
 
@@ -268,6 +290,14 @@ namespace Tools.Controllers
         {
             if (string.IsNullOrWhiteSpace(filePath))
                 return BadRequest("filePath parameter is required.");
+
+            var relPath = FileStorageHelper.GetRelativePath(filePath);
+            var inactiveReport = await _context.ExcelReports
+                .FirstOrDefaultAsync(r => (r.FilePath == filePath || r.FilePath == relPath) && !r.Status);
+            if (inactiveReport != null)
+            {
+                return NotFound("Report is inactive or deleted.");
+            }
 
             var fullPath = FileStorageHelper.GetAbsolutePath(filePath);
             if (string.IsNullOrEmpty(fullPath) || !System.IO.File.Exists(fullPath))

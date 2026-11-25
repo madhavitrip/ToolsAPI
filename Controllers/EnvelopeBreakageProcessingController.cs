@@ -1567,7 +1567,7 @@ namespace Tools.Controllers
                     : nrDataDict.Values.Where(r => r.LotNo > 0).Select(r => r.LotNo).Distinct().OrderBy(l => l).ToList();
                 var lotStr = distinctLots.Any() ? string.Join("_", distinctLots) : "All";
 
-                var fileName = ReportVersionHelper.GetNextVersionFileName(reportPath, $"EnvelopeBreaking_{lotStr}.xlsx");
+                var (fileName, reportVer) = await ReportVersionHelper.GetNextVersionAsync(_context, ProjectId, reportPath, $"EnvelopeBreaking_{lotStr}.xlsx");
                 var filePath = Path.Combine(reportPath, fileName);
 
                 ExcelPackage.License.SetNonCommercialPersonal("Tools");
@@ -1609,7 +1609,7 @@ namespace Tools.Controllers
                     _context,
                     ProjectId,
                     4, // Module 4 (Envelope Breaking)
-                    1,
+                    reportVer,
                     lotNo,
                     filePath,
                     true,
@@ -1644,25 +1644,24 @@ namespace Tools.Controllers
 
                 if (isNewModel)
                 {
-                    var queryNew = _context.NewEnvelopeBreakingResults.Where(x => x.ProjectId == ProjectId && x.Status == true);
-
-                    if (uploadId.HasValue)
+                    var nrQuery = _context.NrData1.Where(n => n.ProjectId == ProjectId && n.Status == true);
+                    if (lotNo.HasValue)
                     {
-                        var nrDatas = await _context.NrData1.Where(n => n.ProjectId == ProjectId && n.Status == true).ToListAsync();
-                        var validNrDataIds = nrDatas
-                            .Select(n => n.Id)
-                            .ToList();
-
-                        queryNew = queryNew.Where(x => validNrDataIds.Contains(x.NrDataId));
+                        nrQuery = nrQuery.Where(n => n.LotNo == lotNo.Value);
                     }
-                    else
+                    var activeNrDatas = await nrQuery.ToListAsync();
+                    var activeNrDataIds = activeNrDatas.Select(n => n.Id).ToList();
+
+                    var queryNew = _context.NewEnvelopeBreakingResults
+                        .Where(x => x.ProjectId == ProjectId && x.Status == true && activeNrDataIds.Contains(x.NrDataId));
+
+                    if (!uploadId.HasValue)
                     {
                         queryNew = queryNew.Where(x => x.BookletSerial != null || x.OmrSerial != null);
                     }
 
                     var dataNew = await queryNew.OrderBy(x => x.Id).ToListAsync();
-                    var nrDataIds = dataNew.Select(x => x.NrDataId).Distinct().ToList();
-                    var nrDatasMap = await _context.NrData1.Where(n => nrDataIds.Contains(n.Id)).ToDictionaryAsync(n => n.Id);
+                    var nrDatasMap = activeNrDatas.ToDictionary(n => n.Id);
 
                     grouped = dataNew
                         .GroupBy(x => nrDatasMap.ContainsKey(x.NrDataId) ? nrDatasMap[x.NrDataId].CatchNo : "Unknown")
@@ -2658,23 +2657,6 @@ namespace Tools.Controllers
                     .Select(f => f.Name)
                     .ToList();
 
-                // Clean up any lingering orphaned rows in NewEnvelopeBreakingResults directly in DB
-                try
-                {
-                    var orphanedIds = await _context.NewEnvelopeBreakingResults
-                        .Where(r => r.ProjectId == ProjectId && r.Status && !activeNrIds.Contains(r.NrDataId))
-                        .Select(r => r.Id)
-                        .ToListAsync();
-
-                    if (orphanedIds.Any())
-                    {
-                        await _context.NewEnvelopeBreakingResults
-                            .Where(r => orphanedIds.Contains(r.Id))
-                            .ExecuteUpdateAsync(s => s.SetProperty(r => r.Status, false));
-                    }
-                }
-                catch { }
-
                 var results = await _context.NewEnvelopeBreakingResults
                     .Where(r => r.ProjectId == ProjectId && r.Status && activeNrIds.Contains(r.NrDataId))
                     .OrderBy(r => r.Id)
@@ -3136,7 +3118,7 @@ namespace Tools.Controllers
                     : nrDataDict.Values.Where(r => r.LotNo > 0 || r.EnvLotNo > 0).Select(r => r.LotNo > 0 ? r.LotNo : r.EnvLotNo).Distinct().OrderBy(l => l).ToList();
                 var lotStr = distinctLots.Any() ? string.Join("_", distinctLots) : "All";
 
-                var fileName = ReportVersionHelper.GetNextVersionFileName(reportPath, $"EnvelopeBreaking_New_{lotStr}.xlsx");
+                var (fileName, reportVer) = await ReportVersionHelper.GetNextVersionAsync(_context, ProjectId, reportPath, $"EnvelopeBreaking_New_{lotStr}.xlsx");
                 var filePath = Path.Combine(reportPath, fileName);
 
                 ExcelPackage.License.SetNonCommercialPersonal("Tools");
@@ -3178,7 +3160,7 @@ namespace Tools.Controllers
                     _context,
                     ProjectId,
                     4, // Module 4 (Envelope Breaking)
-                    1,
+                    reportVer,
                     lotNo,
                     filePath,
                     true,
